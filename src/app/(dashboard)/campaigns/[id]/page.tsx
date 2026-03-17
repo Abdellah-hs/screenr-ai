@@ -31,20 +31,20 @@ export default async function CampaignDetailPage({
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="flex items-center gap-2 text-sm text-muted mb-4">
-        <Link href="/campaigns" className="hover:text-foreground transition-colors">
+      <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-4">
+        <Link href="/campaigns" className="hover:text-[#111827] transition-colors">
           Campaigns
         </Link>
         <span>/</span>
-        <span className="text-foreground">{campaign.title}</span>
+        <span className="text-[#111827]">{campaign.title}</span>
       </div>
 
       <div className="flex items-start justify-between mb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-foreground">{campaign.title}</h1>
+            <h1 className="text-2xl font-semibold text-[#111827]">{campaign.title}</h1>
             <span
-              className={`inline-flex px-2.5 py-0.5 text-xs font-medium rounded-full border ${
+              className={`inline-flex px-2.5 py-0.5 text-xs font-medium rounded border ${
                 statusColors[campaign.status ?? "draft"]
               }`}
             >
@@ -52,39 +52,42 @@ export default async function CampaignDetailPage({
             </span>
           </div>
           {campaign.department && (
-            <p className="text-sm text-muted mt-1">{campaign.department}</p>
+            <p className="text-sm text-[#6B7280] mt-1">{campaign.department}</p>
           )}
         </div>
-        <button className="px-4 py-2 text-sm font-medium text-muted border border-border rounded-lg hover:text-foreground hover:border-foreground/20 transition-colors">
+        <Link
+          href={`/campaigns/${campaign.id}/edit`}
+          className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors"
+        >
           Edit
-        </button>
+        </Link>
       </div>
 
       {/* Campaign Details */}
-      <div className="bg-card rounded-xl border border-border p-6 mb-6">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">
+      <div className="bg-white rounded-xl border border-[#E5E7EB] p-6 mb-6">
+        <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
           Details
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div>
-            <p className="text-xs text-muted mb-1">Positions</p>
-            <p className="text-sm font-medium text-foreground">{campaign.positions}</p>
+            <p className="text-xs text-[#6B7280] mb-1">Positions</p>
+            <p className="text-sm font-medium text-[#111827]">{campaign.positions}</p>
           </div>
           <div>
-            <p className="text-xs text-muted mb-1">Location</p>
-            <p className="text-sm font-medium text-foreground">{campaign.location || "Not specified"}</p>
+            <p className="text-xs text-[#6B7280] mb-1">Location</p>
+            <p className="text-sm font-medium text-[#111827]">{campaign.location || "Not specified"}</p>
           </div>
           <div>
-            <p className="text-xs text-muted mb-1">Deadline</p>
-            <p className="text-sm font-medium text-foreground">
+            <p className="text-xs text-[#6B7280] mb-1">Deadline</p>
+            <p className="text-sm font-medium text-[#111827]">
               {campaign.deadline
                 ? new Date(campaign.deadline).toLocaleDateString()
                 : "No deadline"}
             </p>
           </div>
           <div>
-            <p className="text-xs text-muted mb-1">Created</p>
-            <p className="text-sm font-medium text-foreground">
+            <p className="text-xs text-[#6B7280] mb-1">Created</p>
+            <p className="text-sm font-medium text-[#111827]">
               {campaign.created_at
                 ? new Date(campaign.created_at).toLocaleDateString()
                 : "—"}
@@ -93,26 +96,26 @@ export default async function CampaignDetailPage({
         </div>
 
         <div>
-          <p className="text-xs text-muted mb-2">Description</p>
-          <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">
+          <p className="text-xs text-[#6B7280] mb-2">Description</p>
+          <p className="text-sm text-[#111827] whitespace-pre-wrap leading-relaxed">
             {campaign.description}
           </p>
         </div>
       </div>
 
       {/* Pipeline Stages */}
-      <div className="bg-card rounded-xl border border-border p-6">
-        <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">
+      <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
+        <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
           Pipeline
         </h2>
         <div className="grid grid-cols-5 gap-3">
           {pipelineStages.map((stage) => (
             <div
               key={stage.name}
-              className="text-center p-4 bg-surface rounded-lg border border-border"
+              className="text-center p-4 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]"
             >
-              <p className="text-2xl font-bold text-foreground">{stage.count}</p>
-              <p className="text-xs text-muted mt-1">{stage.name}</p>
+              <p className="text-2xl font-semibold text-[#111827]">{stage.count}</p>
+              <p className="text-xs text-[#6B7280] mt-1">{stage.name}</p>
             </div>
           ))}
         </div>

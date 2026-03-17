@@ -1,27 +1,76 @@
 "use client";
 
-import { useState } from "react";
-import { createCampaign } from "@/lib/actions/campaigns";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
+import type { Campaign } from "@/lib/constants";
 
-export default function NewCampaignPage() {
+export default function EditCampaignPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const router = useRouter();
+  const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(formData: FormData) {
-    setError(null);
-    setLoading(true);
-
-    try {
-      await createCampaign(formData);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+  useEffect(() => {
+    async function load() {
+      const { id } = await params;
+      const data = await getCampaignById(id);
+      if (!data) {
+        router.replace("/campaigns");
+        return;
+      }
+      setCampaign(data);
       setLoading(false);
     }
+    load();
+  }, [params, router]);
+
+  async function handleSubmit(formData: FormData) {
+    if (!campaign) return;
+    setError(null);
+    setSaving(true);
+
+    try {
+      await updateCampaign(campaign.id, formData);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+      setSaving(false);
+    }
+  }
+
+  if (loading || !campaign) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-muted rounded w-1/3" />
+          <div className="h-64 bg-muted rounded" />
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold text-[#111827] mb-6">New Campaign</h1>
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-6">
+        <Link href="/campaigns" className="hover:text-[#111827] transition-colors">
+          Campaigns
+        </Link>
+        <span>/</span>
+        <Link href={`/campaigns/${campaign.id}`} className="hover:text-[#111827] transition-colors">
+          {campaign.title}
+        </Link>
+        <span>/</span>
+        <span className="text-[#111827]">Edit</span>
+      </div>
+
+      <h1 className="text-2xl font-semibold text-[#111827] mb-6">Edit Campaign</h1>
 
       <form action={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
         {error && (
@@ -39,8 +88,8 @@ export default function NewCampaignPage() {
             name="title"
             type="text"
             required
+            defaultValue={campaign.title}
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            placeholder="e.g. Senior Frontend Engineer"
           />
         </div>
 
@@ -53,8 +102,8 @@ export default function NewCampaignPage() {
             name="description"
             required
             rows={4}
+            defaultValue={campaign.description}
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors resize-y"
-            placeholder="Describe the role and requirements..."
           />
         </div>
 
@@ -67,6 +116,7 @@ export default function NewCampaignPage() {
               id="department"
               name="department"
               type="text"
+              defaultValue={campaign.department ?? ""}
               className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
               placeholder="e.g. Engineering"
             />
@@ -81,7 +131,7 @@ export default function NewCampaignPage() {
               name="positions"
               type="number"
               min={1}
-              defaultValue={1}
+              defaultValue={campaign.positions}
               className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             />
           </div>
@@ -95,7 +145,7 @@ export default function NewCampaignPage() {
             <select
               id="status"
               name="status"
-              defaultValue="draft"
+              defaultValue={campaign.status}
               className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             >
               <option value="draft">Draft</option>
@@ -113,6 +163,7 @@ export default function NewCampaignPage() {
               id="deadline"
               name="deadline"
               type="date"
+              defaultValue={campaign.deadline ?? ""}
               className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             />
           </div>
@@ -126,24 +177,25 @@ export default function NewCampaignPage() {
             id="location"
             name="location"
             type="text"
+            defaultValue={campaign.location ?? ""}
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. Remote, New York, NY"
           />
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">
-          <a
-            href="/campaigns"
+          <Link
+            href={`/campaigns/${campaign.id}`}
             className="px-4 py-2.5 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors"
           >
             Cancel
-          </a>
+          </Link>
           <button
             type="submit"
-            disabled={loading}
+            disabled={saving}
             className="px-6 py-2.5 bg-[#2563EB] text-white rounded-lg text-sm font-medium hover:bg-[#1D4ED8] transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
           >
-            {loading ? "Creating..." : "Create Campaign"}
+            {saving ? "Saving..." : "Save Changes"}
           </button>
         </div>
       </form>

@@ -132,7 +132,7 @@ export const PIPELINE_STAGES: { name: string; key: string }[] = [
 
 const MOCK_USER_ID = "user-001";
 
-export const MOCK_CAMPAIGNS: Campaign[] = [
+export let MOCK_CAMPAIGNS: Campaign[] = [
   {
     id: "camp-001",
     title: "Senior AI Engineer",
@@ -499,4 +499,15 @@ export function getCampaignByIdFromMock(id: string): Campaign | undefined {
 
 export function getActiveCampaignsFromMock(): Campaign[] {
   return MOCK_CAMPAIGNS.filter((c) => c.deleted_at === null);
+}
+
+export function updateCampaignInMock(id: string, updates: Partial<Campaign>) {
+  const index = MOCK_CAMPAIGNS.findIndex((c) => c.id === id);
+  if (index !== -1) {
+    MOCK_CAMPAIGNS[index] = { ...MOCK_CAMPAIGNS[index], ...updates };
+  }
+}
+
+export function createCampaignInMock(campaign: Campaign) {
+  MOCK_CAMPAIGNS = [campaign, ...MOCK_CAMPAIGNS];
 }
