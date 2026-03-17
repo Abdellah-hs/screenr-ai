@@ -35,15 +35,15 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-md p-8 space-y-6 bg-card rounded-xl border border-border shadow-lg">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-foreground">Welcome back</h1>
-          <p className="mt-2 text-sm text-muted">Sign in to Screenr AI</p>
+      <div className="w-full max-w-md card mx-4">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-heading font-bold text-foreground">Welcome back</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Sign in to Screenr AI</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="p-3 text-sm text-red-400 bg-red-400/10 rounded-lg border border-red-400/20">
+            <div className="p-3 text-sm text-red-500 bg-red-50 rounded-lg border border-red-200">
               {error}
             </div>
           )}
@@ -58,7 +58,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full px-3 py-2 bg-input border border-border rounded-lg text-foreground placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="input"
               placeholder="you@example.com"
             />
           </div>
@@ -74,7 +74,7 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full px-3 py-2 bg-input border border-border rounded-lg text-foreground placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+              className="input"
               placeholder="••••••••"
             />
           </div>
@@ -82,15 +82,15 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 px-4 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed mt-2"
           >
             {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
 
-        <p className="text-center text-sm text-muted">
+        <p className="mt-6 text-center text-sm text-muted-foreground">
           Don&apos;t have an account?{" "}
-          <Link href="/signup" className="text-primary hover:underline font-medium">
+          <Link href="/signup" className="text-primary hover:text-secondary transition-colors font-medium">
             Sign up
           </Link>
         </p>

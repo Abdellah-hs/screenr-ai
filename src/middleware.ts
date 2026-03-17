@@ -34,6 +34,8 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   // Protect /campaigns routes - redirect to /login if not authenticated
+  // BYPASS FOR LOCAL PREVIEW:
+  /*
   if (!user && request.nextUrl.pathname.startsWith("/campaigns")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
@@ -46,6 +48,7 @@ export async function middleware(request: NextRequest) {
     url.pathname = "/campaigns";
     return NextResponse.redirect(url);
   }
+  */
 
   return supabaseResponse;
 }

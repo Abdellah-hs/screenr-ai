@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# screenr-ai custom
+.agent/
+.agents/
+.claude/
+design-system/
+build.log
+build.txt
+out.txt
+screenr-ai-project-context.md
+skills.md

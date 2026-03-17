@@ -1,19 +1,14 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import {
+  MOCK_CAMPAIGNS,
+  getCampaignByIdFromMock,
+  getActiveCampaignsFromMock,
+  type Campaign,
+} from "@/lib/constants";
 
 export async function createCampaign(formData: FormData) {
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
   const title = formData.get("title") as string;
   const description = formData.get("description") as string;
   const department = (formData.get("department") as string) || null;
@@ -22,71 +17,15 @@ export async function createCampaign(formData: FormData) {
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
 
-  const { data, error } = await supabase
-    .from("campaigns")
-    .insert({
-      title,
-      description,
-      department,
-      positions,
-      status,
-      deadline,
-      location,
-      user_id: user.id,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  redirect(`/campaigns/${data.id}`);
+  // Mock: just log and redirect to list (no persistence yet)
+  console.log("[mock] createCampaign:", { title, description, department, positions, status, deadline, location });
+  redirect("/campaigns");
 }
 
-export async function getCampaigns() {
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data, error } = await supabase
-    .from("campaigns")
-    .select("*")
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return data;
+export async function getCampaigns(): Promise<Campaign[]> {
+  return getActiveCampaignsFromMock();
 }
 
-export async function getCampaignById(id: string) {
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data, error } = await supabase
-    .from("campaigns")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  if (error) {
-    return null;
-  }
-
-  return data;
+export async function getCampaignById(id: string): Promise<Campaign | null> {
+  return getCampaignByIdFromMock(id) ?? null;
 }
