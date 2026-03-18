@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
 import ScreeningCriteriaDisplay from "@/components/campaigns/screening-criteria-display";
 import RubricDisplay from "@/components/campaigns/rubric-display";
+import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 
 const statusColors: Record<string, string> = {
   draft: "bg-gray-500/10 text-gray-400 border-gray-500/20",
@@ -57,12 +58,15 @@ export default async function CampaignDetailPage({
             <p className="text-sm text-[#6B7280] mt-1">{campaign.department}</p>
           )}
         </div>
-        <Link
-          href={`/campaigns/${campaign.id}/edit`}
-          className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors"
-        >
-          Edit
-        </Link>
+        <div className="flex items-center gap-2">
+          <CloneCampaignButton campaignId={campaign.id} />
+          <Link
+            href={`/campaigns/${campaign.id}/edit`}
+            className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200"
+          >
+            Edit
+          </Link>
+        </div>
       </div>
 
       {/* Campaign Details */}

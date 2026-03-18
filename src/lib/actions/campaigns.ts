@@ -125,3 +125,45 @@ export async function updateCampaign(id: string, formData: FormData) {
 export async function getCampaignById(id: string): Promise<Campaign | null> {
   return getCampaignByIdFromMock(id) ?? null;
 }
+
+export async function cloneCampaign(id: string) {
+  const source = getCampaignByIdFromMock(id);
+  if (!source) throw new Error("Campaign not found");
+
+  const newId = `camp-${Math.random().toString(36).substr(2, 9)}`;
+  const now = new Date().toISOString();
+
+  const cloned: Campaign = {
+    ...source,
+    id: newId,
+    title: `${source.title} (Copy)`,
+    status: "draft",
+    screening_criteria: source.screening_criteria.map((c) => ({
+      ...c,
+      id: `sc-${Math.random().toString(36).substr(2, 9)}`,
+    })),
+    rubrics: source.rubrics.map((r) => ({
+      ...r,
+      id: `rub-${Math.random().toString(36).substr(2, 9)}`,
+      campaign_id: newId,
+      dimensions: r.dimensions.map((d) => ({
+        ...d,
+        id: `dim-${Math.random().toString(36).substr(2, 9)}`,
+      })),
+    })),
+    reviewers: [],
+    pipeline: [
+      { name: "Applied", key: "applied", count: 0 },
+      { name: "Screening", key: "screening", count: 0 },
+      { name: "Interview", key: "interview", count: 0 },
+      { name: "Offer", key: "offer", count: 0 },
+      { name: "Hired", key: "hired", count: 0 },
+    ],
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
+
+  createCampaignInMock(cloned);
+  redirect(`/campaigns/${newId}`);
+}
