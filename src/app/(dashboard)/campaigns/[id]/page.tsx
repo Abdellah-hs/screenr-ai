@@ -101,6 +101,23 @@ export default async function CampaignDetailPage({
           </div>
         </div>
 
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+          <div>
+            <p className="text-xs text-[#6B7280] mb-1">Automation Mode</p>
+            <p className="text-sm font-medium text-[#111827]">
+              {campaign.automation_mode === "fully_auto" ? "Fully Automatic" : "Human-in-the-Loop"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-[#6B7280] mb-1">Screening Threshold</p>
+            <p className="text-sm font-medium text-[#111827]">{campaign.screening_threshold}%</p>
+          </div>
+          <div>
+            <p className="text-xs text-[#6B7280] mb-1">Interview Persona</p>
+            <p className="text-sm font-medium text-[#111827] capitalize">{campaign.interview_persona}</p>
+          </div>
+        </div>
+
         <div>
           <p className="text-xs text-[#6B7280] mb-2">Description</p>
           <p className="text-sm text-[#111827] whitespace-pre-wrap leading-relaxed">

@@ -7,6 +7,8 @@ import {
   updateCampaignInMock,
   createCampaignInMock,
   type CampaignStatus,
+  type AutomationMode,
+  type InterviewPersona,
   type Campaign,
   type ScreeningCriterion,
   type EvaluationRubric,
@@ -20,6 +22,9 @@ export async function createCampaign(formData: FormData) {
   const status = (formData.get("status") as CampaignStatus) || "draft";
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
+  const automationMode = (formData.get("automation_mode") as AutomationMode) || "human_in_loop";
+  const screeningThreshold = parseInt(formData.get("screening_threshold") as string) || 70;
+  const interviewPersona = (formData.get("interview_persona") as InterviewPersona) || "neutral";
 
   // Parse screening criteria and rubrics from JSON hidden inputs
   const screeningCriteriaJson = formData.get("screening_criteria_json") as string;
@@ -51,9 +56,9 @@ export async function createCampaign(formData: FormData) {
     deadline,
     location,
     timezone: "UTC",
-    automation_mode: "human_in_loop",
-    screening_threshold: 70,
-    interview_persona: "neutral",
+    automation_mode: automationMode,
+    screening_threshold: screeningThreshold,
+    interview_persona: interviewPersona,
     screening_criteria: screeningCriteria,
     rubrics,
     reviewers: [],
@@ -87,6 +92,9 @@ export async function updateCampaign(id: string, formData: FormData) {
   const status = (formData.get("status") as CampaignStatus) || "draft";
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
+  const automationMode = (formData.get("automation_mode") as AutomationMode) || "human_in_loop";
+  const screeningThreshold = parseInt(formData.get("screening_threshold") as string) || 70;
+  const interviewPersona = (formData.get("interview_persona") as InterviewPersona) || "neutral";
 
   // Parse screening criteria and rubrics from JSON hidden inputs
   const screeningCriteriaJson = formData.get("screening_criteria_json") as string;
@@ -114,6 +122,9 @@ export async function updateCampaign(id: string, formData: FormData) {
     status,
     deadline,
     location,
+    automation_mode: automationMode,
+    screening_threshold: screeningThreshold,
+    interview_persona: interviewPersona,
     ...(screeningCriteria !== undefined && { screening_criteria: screeningCriteria }),
     ...(rubrics !== undefined && { rubrics }),
     updated_at: new Date().toISOString(),
