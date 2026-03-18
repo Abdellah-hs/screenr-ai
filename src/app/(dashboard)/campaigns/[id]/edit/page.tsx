@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
 import type { Campaign } from "@/lib/constants";
+import ScreeningCriteriaEditor from "@/components/campaigns/screening-criteria-editor";
+import RubricEditor from "@/components/campaigns/rubric-editor";
 
 export default function EditCampaignPage({
   params,
@@ -46,7 +48,7 @@ export default function EditCampaignPage({
 
   if (loading || !campaign) {
     return (
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-3xl mx-auto">
         <div className="animate-pulse space-y-4">
           <div className="h-8 bg-muted rounded w-1/3" />
           <div className="h-64 bg-muted rounded" />
@@ -56,7 +58,7 @@ export default function EditCampaignPage({
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-6">
         <Link href="/campaigns" className="hover:text-[#111827] transition-colors">
@@ -181,6 +183,16 @@ export default function EditCampaignPage({
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. Remote, New York, NY"
           />
+        </div>
+
+        {/* Screening Criteria */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <ScreeningCriteriaEditor initialCriteria={campaign.screening_criteria} />
+        </div>
+
+        {/* Evaluation Rubrics */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <RubricEditor initialRubrics={campaign.rubrics} campaignId={campaign.id} />
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">

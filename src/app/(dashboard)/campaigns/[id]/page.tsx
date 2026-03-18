@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
+import ScreeningCriteriaDisplay from "@/components/campaigns/screening-criteria-display";
+import RubricDisplay from "@/components/campaigns/rubric-display";
 
 const statusColors: Record<string, string> = {
   draft: "bg-gray-500/10 text-gray-400 border-gray-500/20",
@@ -102,6 +104,20 @@ export default async function CampaignDetailPage({
           </p>
         </div>
       </div>
+
+      {/* Screening Criteria */}
+      {campaign.screening_criteria.length > 0 && (
+        <div className="mb-6">
+          <ScreeningCriteriaDisplay criteria={campaign.screening_criteria} />
+        </div>
+      )}
+
+      {/* Evaluation Rubrics */}
+      {campaign.rubrics.length > 0 && (
+        <div className="mb-6">
+          <RubricDisplay rubrics={campaign.rubrics} />
+        </div>
+      )}
 
       {/* Pipeline Stages */}
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">

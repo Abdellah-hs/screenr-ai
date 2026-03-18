@@ -8,6 +8,8 @@ import {
   createCampaignInMock,
   type CampaignStatus,
   type Campaign,
+  type ScreeningCriterion,
+  type EvaluationRubric,
 } from "@/lib/constants";
 
 export async function createCampaign(formData: FormData) {
@@ -19,8 +21,28 @@ export async function createCampaign(formData: FormData) {
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
 
+  // Parse screening criteria and rubrics from JSON hidden inputs
+  const screeningCriteriaJson = formData.get("screening_criteria_json") as string;
+  const rubicsJson = formData.get("rubrics_json") as string;
+
+  let screeningCriteria: ScreeningCriterion[] = [];
+  let rubrics: EvaluationRubric[] = [];
+
+  try {
+    if (screeningCriteriaJson) screeningCriteria = JSON.parse(screeningCriteriaJson);
+  } catch { /* keep empty */ }
+
+  try {
+    if (rubicsJson) rubrics = JSON.parse(rubicsJson);
+  } catch { /* keep empty */ }
+
+  const campaignId = `camp-${Math.random().toString(36).substr(2, 9)}`;
+
+  // Assign campaign_id to rubrics
+  rubrics = rubrics.map((r) => ({ ...r, campaign_id: campaignId }));
+
   const newCampaign: Campaign = {
-    id: `camp-${Math.random().toString(36).substr(2, 9)}`,
+    id: campaignId,
     title,
     description,
     department,
@@ -32,8 +54,8 @@ export async function createCampaign(formData: FormData) {
     automation_mode: "human_in_loop",
     screening_threshold: 70,
     interview_persona: "neutral",
-    screening_criteria: [],
-    rubrics: [],
+    screening_criteria: screeningCriteria,
+    rubrics,
     reviewers: [],
     sla_timers: [],
     pipeline: [
@@ -66,6 +88,24 @@ export async function updateCampaign(id: string, formData: FormData) {
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
 
+  // Parse screening criteria and rubrics from JSON hidden inputs
+  const screeningCriteriaJson = formData.get("screening_criteria_json") as string;
+  const rubicsJson = formData.get("rubrics_json") as string;
+
+  let screeningCriteria: ScreeningCriterion[] | undefined;
+  let rubrics: EvaluationRubric[] | undefined;
+
+  try {
+    if (screeningCriteriaJson) screeningCriteria = JSON.parse(screeningCriteriaJson);
+  } catch { /* keep undefined */ }
+
+  try {
+    if (rubicsJson) {
+      rubrics = JSON.parse(rubicsJson);
+      rubrics = rubrics!.map((r) => ({ ...r, campaign_id: id }));
+    }
+  } catch { /* keep undefined */ }
+
   updateCampaignInMock(id, {
     title,
     description,
@@ -74,6 +114,8 @@ export async function updateCampaign(id: string, formData: FormData) {
     status,
     deadline,
     location,
+    ...(screeningCriteria !== undefined && { screening_criteria: screeningCriteria }),
+    ...(rubrics !== undefined && { rubrics }),
     updated_at: new Date().toISOString(),
   });
 
