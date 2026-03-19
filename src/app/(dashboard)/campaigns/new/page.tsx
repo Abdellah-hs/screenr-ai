@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createCampaign } from "@/lib/actions/campaigns";
 import ScreeningCriteriaEditor from "@/components/campaigns/screening-criteria-editor";
 import RubricEditor from "@/components/campaigns/rubric-editor";
+import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 
 export default function NewCampaignPage() {
   const [error, setError] = useState<string | null>(null);
@@ -133,61 +134,7 @@ export default function NewCampaignPage() {
           />
         </div>
 
-        {/* AI Settings */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <p className="text-sm font-medium text-[#111827] mb-3">AI Settings</p>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label htmlFor="automation_mode" className="block text-sm font-medium text-[#111827] mb-1">
-                Automation Mode
-              </label>
-              <select
-                id="automation_mode"
-                name="automation_mode"
-                defaultValue="human_in_loop"
-                className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-              >
-                <option value="human_in_loop">Human-in-the-Loop</option>
-                <option value="fully_auto">Fully Automatic</option>
-              </select>
-              <p className="text-xs text-[#6B7280] mt-1">Controls how much AI acts autonomously</p>
-            </div>
-
-            <div>
-              <label htmlFor="screening_threshold" className="block text-sm font-medium text-[#111827] mb-1">
-                Screening Threshold
-              </label>
-              <input
-                id="screening_threshold"
-                name="screening_threshold"
-                type="number"
-                min={0}
-                max={100}
-                defaultValue={70}
-                className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-              />
-              <p className="text-xs text-[#6B7280] mt-1">Score 0-100; below = auto-reject</p>
-            </div>
-
-            <div>
-              <label htmlFor="interview_persona" className="block text-sm font-medium text-[#111827] mb-1">
-                Interview Persona
-              </label>
-              <select
-                id="interview_persona"
-                name="interview_persona"
-                defaultValue="neutral"
-                className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-              >
-                <option value="neutral">Neutral</option>
-                <option value="pressure">Pressure</option>
-                <option value="collaborative">Collaborative</option>
-                <option value="socratic">Socratic</option>
-              </select>
-              <p className="text-xs text-[#6B7280] mt-1">AI interviewer tone and style</p>
-            </div>
-          </div>
-        </div>
+        <AiSettingsFields />
 
         {/* Screening Criteria */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
