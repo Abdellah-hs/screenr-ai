@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
+import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import ScreeningCriteriaDisplay from "@/components/campaigns/screening-criteria-display";
 import RubricDisplay from "@/components/campaigns/rubric-display";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
+import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
+import type { CandidateStage } from "@/lib/constants";
 
 const statusColors: Record<string, string> = {
   draft: "bg-gray-500/10 text-gray-400 border-gray-500/20",
@@ -12,12 +15,12 @@ const statusColors: Record<string, string> = {
   closed: "bg-red-500/10 text-red-400 border-red-500/20",
 };
 
-const pipelineStages = [
-  { name: "Applied", count: 0 },
-  { name: "Screening", count: 0 },
-  { name: "Interview", count: 0 },
-  { name: "Offer", count: 0 },
-  { name: "Hired", count: 0 },
+const pipelineStageKeys: { name: string; key: CandidateStage }[] = [
+  { name: "Applied", key: "applied" },
+  { name: "Screening", key: "screening" },
+  { name: "Interview", key: "interview" },
+  { name: "Offer", key: "offer" },
+  { name: "Hired", key: "hired" },
 ];
 
 export default async function CampaignDetailPage({
@@ -26,10 +29,18 @@ export default async function CampaignDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const campaign = await getCampaignById(id);
+  const [campaign, candidates] = await Promise.all([
+    getCampaignById(id),
+    getCandidatesByCampaignId(id),
+  ]);
 
   if (!campaign) {
     notFound();
+  }
+
+  const stageCounts: Record<string, number> = {};
+  for (const c of candidates) {
+    stageCounts[c.stage] = (stageCounts[c.stage] || 0) + 1;
   }
 
   return (
@@ -105,7 +116,7 @@ export default async function CampaignDetailPage({
           <div>
             <p className="text-xs text-[#6B7280] mb-1">Automation Mode</p>
             <p className="text-sm font-medium text-[#111827]">
-              {campaign.automation_mode === "fully_auto" ? "Fully Automatic" : "Human-in-the-Loop"}
+              {AUTOMATION_MODES.find((m) => m.value === campaign.automation_mode)?.label ?? campaign.automation_mode}
             </p>
           </div>
           <div>
@@ -114,7 +125,9 @@ export default async function CampaignDetailPage({
           </div>
           <div>
             <p className="text-xs text-[#6B7280] mb-1">Interview Persona</p>
-            <p className="text-sm font-medium text-[#111827] capitalize">{campaign.interview_persona}</p>
+            <p className="text-sm font-medium text-[#111827]">
+              {INTERVIEW_PERSONAS.find((p) => p.value === campaign.interview_persona)?.label ?? campaign.interview_persona}
+            </p>
           </div>
         </div>
 
@@ -142,18 +155,29 @@ export default async function CampaignDetailPage({
 
       {/* Pipeline Stages */}
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-        <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
-          Pipeline
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
+            Pipeline
+          </h2>
+          <Link
+            href={`/campaigns/${id}/candidates`}
+            className="text-sm font-medium text-[#2563EB] hover:underline"
+          >
+            View all candidates ({candidates.length})
+          </Link>
+        </div>
         <div className="grid grid-cols-5 gap-3">
-          {pipelineStages.map((stage) => (
-            <div
-              key={stage.name}
-              className="text-center p-4 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]"
+          {pipelineStageKeys.map((stage) => (
+            <Link
+              key={stage.key}
+              href={`/campaigns/${id}/candidates`}
+              className="text-center p-4 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB] hover:border-[#2563EB] hover:bg-[#EFF6FF] transition-colors"
             >
-              <p className="text-2xl font-semibold text-[#111827]">{stage.count}</p>
+              <p className="text-2xl font-semibold text-[#111827]">
+                {stageCounts[stage.key] || 0}
+              </p>
               <p className="text-xs text-[#6B7280] mt-1">{stage.name}</p>
-            </div>
+            </Link>
           ))}
         </div>
       </div>

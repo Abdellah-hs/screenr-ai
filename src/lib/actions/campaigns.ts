@@ -23,7 +23,8 @@ export async function createCampaign(formData: FormData) {
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
   const automationMode = (formData.get("automation_mode") as AutomationMode) || "human_in_loop";
-  const screeningThreshold = parseInt(formData.get("screening_threshold") as string) || 70;
+  const rawThreshold = parseInt(formData.get("screening_threshold") as string);
+  const screeningThreshold = Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold));
   const interviewPersona = (formData.get("interview_persona") as InterviewPersona) || "neutral";
 
   // Parse screening criteria and rubrics from JSON hidden inputs
@@ -93,7 +94,8 @@ export async function updateCampaign(id: string, formData: FormData) {
   const deadline = (formData.get("deadline") as string) || null;
   const location = (formData.get("location") as string) || null;
   const automationMode = (formData.get("automation_mode") as AutomationMode) || "human_in_loop";
-  const screeningThreshold = parseInt(formData.get("screening_threshold") as string) || 70;
+  const rawThreshold = parseInt(formData.get("screening_threshold") as string);
+  const screeningThreshold = Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold));
   const interviewPersona = (formData.get("interview_persona") as InterviewPersona) || "neutral";
 
   // Parse screening criteria and rubrics from JSON hidden inputs
