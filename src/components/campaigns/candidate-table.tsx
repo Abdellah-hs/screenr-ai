@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useTransition, useRef, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { updateCandidateStage } from "@/lib/actions/candidates";
+import { CANDIDATE_STAGE_TRANSITIONS, STAGE_LABELS } from "@/lib/constants";
 import type { Candidate, CandidateStage } from "@/lib/constants";
 
 const stageColors: Record<CandidateStage, string> = {
@@ -33,6 +36,74 @@ type SortField = "name" | "applied_at" | "score";
 function getLatestScore(candidate: Candidate) {
   if (candidate.scores.length === 0) return null;
   return candidate.scores[candidate.scores.length - 1];
+}
+
+function StageActionMenu({ candidateId, currentStage }: { candidateId: string; currentStage: CandidateStage }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const transitions = CANDIDATE_STAGE_TRANSITIONS[currentStage];
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  if (transitions.length === 0) return null;
+
+  function handleMove(stage: CandidateStage) {
+    setOpen(false);
+    startTransition(async () => {
+      await updateCandidateStage(candidateId, stage);
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        onClick={() => setOpen(!open)}
+        disabled={isPending}
+        className="p-1.5 rounded-lg text-[#9CA3AF] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition-all duration-200 cursor-pointer disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2563EB]"
+      >
+        {isPending ? (
+          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+        ) : (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+          </svg>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-[#E5E7EB] rounded-lg shadow-lg z-10 py-1">
+          {transitions.map((stage) => (
+            <button
+              key={stage}
+              onClick={() => handleMove(stage)}
+              className={`w-full text-left px-4 py-2 text-sm cursor-pointer transition-colors ${
+                stage === "rejected"
+                  ? "text-[#DC2626] hover:bg-[#FEF2F2]"
+                  : "text-[#111827] hover:bg-[#F9FAFB]"
+              }`}
+            >
+              {stage === "rejected" ? "Reject" : `Move to ${STAGE_LABELS[stage]}`}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function CandidateTable({
@@ -189,7 +260,9 @@ export default function CandidateTable({
                   <th scope="col" className="px-6 py-4">
                     Applied
                   </th>
-                  <th scope="col" className="px-6 py-4 text-center" />
+                  <th scope="col" className="px-6 py-4 text-right">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
@@ -259,25 +332,19 @@ export default function CandidateTable({
                           }
                         )}
                       </td>
-                      <td className="px-6 py-4 text-center">
-                        <Link
-                          href={`/campaigns/${campaignId}/candidates/${candidate.id}`}
-                          className="text-[#9CA3AF] hover:text-[#2563EB] transition-colors"
-                        >
-                          <svg
-                            className="w-5 h-5 mx-auto"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
+                      <td className="px-6 py-4">
+                        <div className="flex items-center justify-end gap-1">
+                          <Link
+                            href={`/campaigns/${campaignId}/candidates/${candidate.id}`}
+                            className="p-1.5 rounded-lg text-[#9CA3AF] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition-all duration-200 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2563EB]"
+                            title="View details"
                           >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M9 5l7 7-7 7"
-                            />
-                          </svg>
-                        </Link>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </Link>
+                          <StageActionMenu candidateId={candidate.id} currentStage={candidate.stage} />
+                        </div>
                       </td>
                     </tr>
                   );

@@ -2,7 +2,7 @@ import type { Candidate } from "./constants";
 
 // ─── Mock Candidates ────────────────────────────────────────────────────────
 
-export let MOCK_CANDIDATES: Candidate[] = [
+export const MOCK_CANDIDATES: Candidate[] = [
   // ── camp-001: Senior AI Engineer ──
   {
     id: "cand-001",

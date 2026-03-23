@@ -48,12 +48,20 @@ export default async function CandidatesPage({
             for {campaign.title}
           </p>
         </div>
-        <Link
-          href={`/campaigns/${id}`}
-          className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200"
-        >
-          Back to Campaign
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/campaigns/${id}/candidates/new`}
+            className="px-4 py-2 text-sm font-medium text-white bg-[#2563EB] rounded-lg cursor-pointer hover:bg-[#1D4ED8] transition-colors"
+          >
+            Add Candidate
+          </Link>
+          <Link
+            href={`/campaigns/${id}`}
+            className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200"
+          >
+            Back to Campaign
+          </Link>
+        </div>
       </div>
 
       <CandidateTable candidates={candidates} campaignId={id} />

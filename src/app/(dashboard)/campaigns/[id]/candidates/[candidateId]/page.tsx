@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
 import { getCandidateById } from "@/lib/actions/candidates";
+import StageTransitionButtons from "@/components/campaigns/stage-transition-buttons";
+import ScreenCandidateButton from "@/components/campaigns/screen-candidate-button";
 import type { CandidateStage, CandidateScore } from "@/lib/constants";
 
 const stageColors: Record<CandidateStage, string> = {
@@ -198,6 +200,17 @@ export default async function CandidateDetailPage({
         </Link>
       </div>
 
+      {/* Stage Transitions + AI Screening */}
+      <div className="flex items-start gap-4 mb-6">
+        <StageTransitionButtons candidateId={candidate.id} currentStage={candidate.stage} />
+        <ScreenCandidateButton
+          candidateId={candidate.id}
+          hasResumeText={!!candidate.resume_text}
+          hasResumeScore={candidate.scores.some((s) => s.stage === "resume")}
+          currentStage={candidate.stage}
+        />
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left column — Info + Resume */}
         <div className="lg:col-span-1 space-y-6">
@@ -276,6 +289,14 @@ export default async function CandidateDetailPage({
             <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
               Resume
             </h2>
+            {candidate.resume_url && (
+              <div className="mb-4 p-3 bg-[#F9FAFB] rounded-lg flex items-center gap-2">
+                <svg className="w-4 h-4 text-[#6B7280] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m.75 12l3 3m0 0l3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
+                <span className="text-xs text-[#6B7280]">Resume uploaded</span>
+              </div>
+            )}
             <div className="space-y-4">
               <div>
                 <p className="text-xs text-[#6B7280] mb-1">Education</p>
