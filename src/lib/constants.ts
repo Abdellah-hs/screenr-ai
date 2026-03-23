@@ -163,6 +163,8 @@ export interface Candidate {
     experience_years: number;
     education: string;
   };
+  resume_url?: string | null;
+  resume_text?: string | null;
   applied_at: string;
   updated_at: string;
 }
@@ -200,20 +202,22 @@ export const TIER_LABELS: Record<ScreeningTier, string> = {
 
 export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "offer", "hired"];
 
-// ─── Re-exports from mock data modules ──────────────────────────────────────
-// Split into separate files so HMR only reprocesses the file you edit.
+/** Valid candidate stage transitions — key can move to any value in the array */
+export const CANDIDATE_STAGE_TRANSITIONS: Record<CandidateStage, CandidateStage[]> = {
+  applied: ["screening", "rejected"],
+  screening: ["interview", "rejected"],
+  interview: ["offer", "rejected"],
+  offer: ["hired", "rejected"],
+  hired: [],
+  rejected: ["applied"],
+};
 
-export {
-  MOCK_CAMPAIGNS,
-  getCampaignByIdFromMock,
-  getActiveCampaignsFromMock,
-  updateCampaignInMock,
-  createCampaignInMock,
-} from "./mock-campaigns";
+export const STAGE_LABELS: Record<CandidateStage, string> = {
+  applied: "Applied",
+  screening: "Screening",
+  interview: "Interview",
+  offer: "Offer",
+  hired: "Hired",
+  rejected: "Rejected",
+};
 
-export {
-  MOCK_CANDIDATES,
-  getCandidatesByCampaign,
-  getCandidateByIdFromMock,
-  updateCandidateInMock,
-} from "./mock-candidates";

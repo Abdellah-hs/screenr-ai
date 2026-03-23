@@ -36,14 +36,22 @@ export type Database = {
     Tables: {
       campaigns: {
         Row: {
+          automation_mode: string
           created_at: string | null
           deadline: string | null
+          deleted_at: string | null
           department: string | null
           description: string
           id: string
+          interview_persona: string
           location: string | null
+          pipeline: Json
           positions: number | null
-          screening_criteria: Json | null
+          reviewers: Json
+          rubrics: Json
+          screening_criteria: Json
+          screening_threshold: number
+          sla_timers: Json
           status: string | null
           timezone: string | null
           title: string
@@ -51,14 +59,22 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          automation_mode?: string
           created_at?: string | null
           deadline?: string | null
+          deleted_at?: string | null
           department?: string | null
           description: string
           id?: string
+          interview_persona?: string
           location?: string | null
+          pipeline?: Json
           positions?: number | null
-          screening_criteria?: Json | null
+          reviewers?: Json
+          rubrics?: Json
+          screening_criteria?: Json
+          screening_threshold?: number
+          sla_timers?: Json
           status?: string | null
           timezone?: string | null
           title: string
@@ -66,14 +82,22 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          automation_mode?: string
           created_at?: string | null
           deadline?: string | null
+          deleted_at?: string | null
           department?: string | null
           description?: string
           id?: string
+          interview_persona?: string
           location?: string | null
+          pipeline?: Json
           positions?: number | null
-          screening_criteria?: Json | null
+          reviewers?: Json
+          rubrics?: Json
+          screening_criteria?: Json
+          screening_threshold?: number
+          sla_timers?: Json
           status?: string | null
           timezone?: string | null
           title?: string
@@ -86,6 +110,113 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      candidates: {
+        Row: {
+          applied_at: string | null
+          campaign_id: string
+          current_company: string | null
+          current_title: string | null
+          email: string
+          id: string
+          name: string
+          phone: string | null
+          resume: Json
+          resume_text: string | null
+          resume_url: string | null
+          stage: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          applied_at?: string | null
+          campaign_id: string
+          current_company?: string | null
+          current_title?: string | null
+          email: string
+          id?: string
+          name: string
+          phone?: string | null
+          resume?: Json
+          resume_text?: string | null
+          resume_url?: string | null
+          stage?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          applied_at?: string | null
+          campaign_id?: string
+          current_company?: string | null
+          current_title?: string | null
+          email?: string
+          id?: string
+          name?: string
+          phone?: string | null
+          resume?: Json
+          resume_text?: string | null
+          resume_url?: string | null
+          stage?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidates_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidates_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      candidate_scores: {
+        Row: {
+          ai_summary: string
+          candidate_id: string
+          factors: Json
+          id: string
+          overall: number
+          scored_at: string | null
+          stage: string
+          tier: string | null
+        }
+        Insert: {
+          ai_summary?: string
+          candidate_id: string
+          factors?: Json
+          id?: string
+          overall: number
+          scored_at?: string | null
+          stage: string
+          tier?: string | null
+        }
+        Update: {
+          ai_summary?: string
+          candidate_id?: string
+          factors?: Json
+          id?: string
+          overall?: number
+          scored_at?: string | null
+          stage?: string
+          tier?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidate_scores_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
             referencedColumns: ["id"]
           },
         ]
