@@ -12,6 +12,8 @@ import {
   type Campaign,
   type ScreeningCriterion,
   type EvaluationRubric,
+  type CampaignReviewer,
+  type SlaTimer,
 } from "@/lib/constants";
 
 export async function createCampaign(formData: FormData) {
@@ -30,9 +32,13 @@ export async function createCampaign(formData: FormData) {
   // Parse screening criteria and rubrics from JSON hidden inputs
   const screeningCriteriaJson = formData.get("screening_criteria_json") as string;
   const rubicsJson = formData.get("rubrics_json") as string;
+  const slaTimersJson = formData.get("sla_timers_json") as string;
+  const reviewersJson = formData.get("reviewers_json") as string;
 
   let screeningCriteria: ScreeningCriterion[] = [];
   let rubrics: EvaluationRubric[] = [];
+  let slaTimers: SlaTimer[] = [];
+  let reviewers: CampaignReviewer[] = [];
 
   try {
     if (screeningCriteriaJson) screeningCriteria = JSON.parse(screeningCriteriaJson);
@@ -40,6 +46,14 @@ export async function createCampaign(formData: FormData) {
 
   try {
     if (rubicsJson) rubrics = JSON.parse(rubicsJson);
+  } catch { /* keep empty */ }
+
+  try {
+    if (slaTimersJson) slaTimers = JSON.parse(slaTimersJson);
+  } catch { /* keep empty */ }
+
+  try {
+    if (reviewersJson) reviewers = JSON.parse(reviewersJson);
   } catch { /* keep empty */ }
 
   const campaignId = `camp-${Math.random().toString(36).substr(2, 9)}`;
@@ -62,8 +76,8 @@ export async function createCampaign(formData: FormData) {
     interview_persona: interviewPersona,
     screening_criteria: screeningCriteria,
     rubrics,
-    reviewers: [],
-    sla_timers: [],
+    reviewers,
+    sla_timers: slaTimers,
     pipeline: [
       { name: "Applied", key: "applied", count: 0 },
       { name: "Screening", key: "screening", count: 0 },
@@ -101,9 +115,13 @@ export async function updateCampaign(id: string, formData: FormData) {
   // Parse screening criteria and rubrics from JSON hidden inputs
   const screeningCriteriaJson = formData.get("screening_criteria_json") as string;
   const rubicsJson = formData.get("rubrics_json") as string;
+  const slaTimersJson = formData.get("sla_timers_json") as string;
+  const reviewersJson = formData.get("reviewers_json") as string;
 
   let screeningCriteria: ScreeningCriterion[] | undefined;
   let rubrics: EvaluationRubric[] | undefined;
+  let slaTimers: SlaTimer[] | undefined;
+  let reviewers: CampaignReviewer[] | undefined;
 
   try {
     if (screeningCriteriaJson) screeningCriteria = JSON.parse(screeningCriteriaJson);
@@ -114,6 +132,14 @@ export async function updateCampaign(id: string, formData: FormData) {
       rubrics = JSON.parse(rubicsJson);
       rubrics = rubrics!.map((r) => ({ ...r, campaign_id: id }));
     }
+  } catch { /* keep undefined */ }
+
+  try {
+    if (slaTimersJson) slaTimers = JSON.parse(slaTimersJson);
+  } catch { /* keep undefined */ }
+
+  try {
+    if (reviewersJson) reviewers = JSON.parse(reviewersJson);
   } catch { /* keep undefined */ }
 
   updateCampaignInMock(id, {
@@ -129,6 +155,8 @@ export async function updateCampaign(id: string, formData: FormData) {
     interview_persona: interviewPersona,
     ...(screeningCriteria !== undefined && { screening_criteria: screeningCriteria }),
     ...(rubrics !== undefined && { rubrics }),
+    ...(slaTimers !== undefined && { sla_timers: slaTimers }),
+    ...(reviewers !== undefined && { reviewers }),
     updated_at: new Date().toISOString(),
   });
 

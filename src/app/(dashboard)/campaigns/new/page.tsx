@@ -5,6 +5,8 @@ import { createCampaign } from "@/lib/actions/campaigns";
 import ScreeningCriteriaEditor from "@/components/campaigns/screening-criteria-editor";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
+import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
+import TeamReviewersEditor from "@/components/campaigns/team-reviewers-editor";
 
 export default function NewCampaignPage() {
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +146,16 @@ export default function NewCampaignPage() {
         {/* Evaluation Rubrics */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor />
+        </div>
+
+        {/* Team Reviewers */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <TeamReviewersEditor />
+        </div>
+
+        {/* SLA Timers */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <SlaTimersEditor />
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">
