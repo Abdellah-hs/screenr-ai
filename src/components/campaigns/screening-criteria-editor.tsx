@@ -13,6 +13,7 @@ export default function ScreeningCriteriaEditor({
 }: ScreeningCriteriaEditorProps) {
   const [criteria, setCriteria] = useState<ScreeningCriterion[]>(initialCriteria);
   const [generating, startGenerate] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   const totalWeight = criteria.reduce((sum, c) => sum + c.weight, 0);
   const weightOk = totalWeight >= 0.95 && totalWeight <= 1.05;
@@ -50,9 +51,14 @@ export default function ScreeningCriteriaEditor({
       return;
     }
 
+    setError(null);
     startGenerate(async () => {
-      const suggestions = await generateScreeningCriteria(description);
-      setCriteria(suggestions);
+      try {
+        const suggestions = await generateScreeningCriteria(description);
+        setCriteria(suggestions);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to generate criteria");
+      }
     });
   }
 
@@ -100,7 +106,13 @@ export default function ScreeningCriteriaEditor({
         </div>
       </div>
 
-      {criteria.length === 0 && (
+      {error && (
+        <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg border border-red-200">
+          {error}
+        </div>
+      )}
+
+      {criteria.length === 0 && !error && (
         <p className="text-sm text-[#6B7280]">
           No screening criteria yet. Add your own or click <strong>Auto-Generate</strong> to let AI suggest criteria from the job description.
         </p>

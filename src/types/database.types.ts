@@ -1,4 +1,4 @@
-export type Json =
+﻿export type Json =
   | string
   | number
   | boolean
@@ -7,6 +7,11 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.4"
+  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -34,58 +39,311 @@ export type Database = {
   }
   public: {
     Tables: {
-      campaigns: {
+      campaign_audit_log: {
         Row: {
-          created_at: string | null
-          deadline: string | null
-          department: string | null
-          description: string
+          action: string
+          campaign_id: string
+          created_at: string
+          entity_id: string | null
+          entity_type: string
           id: string
-          location: string | null
-          positions: number | null
-          screening_criteria: Json | null
-          status: string | null
-          timezone: string | null
-          title: string
-          updated_at: string | null
+          new_data: Json | null
+          old_data: Json | null
           user_id: string | null
         }
         Insert: {
-          created_at?: string | null
-          deadline?: string | null
-          department?: string | null
-          description: string
+          action: string
+          campaign_id: string
+          created_at?: string
+          entity_id?: string | null
+          entity_type: string
           id?: string
-          location?: string | null
-          positions?: number | null
-          screening_criteria?: Json | null
-          status?: string | null
-          timezone?: string | null
-          title: string
-          updated_at?: string | null
+          new_data?: Json | null
+          old_data?: Json | null
           user_id?: string | null
         }
         Update: {
-          created_at?: string | null
-          deadline?: string | null
-          department?: string | null
-          description?: string
+          action?: string
+          campaign_id?: string
+          created_at?: string
+          entity_id?: string | null
+          entity_type?: string
           id?: string
-          location?: string | null
-          positions?: number | null
-          screening_criteria?: Json | null
-          status?: string | null
-          timezone?: string | null
-          title?: string
-          updated_at?: string | null
+          new_data?: Json | null
+          old_data?: Json | null
           user_id?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "campaigns_user_id_fkey"
-            columns: ["user_id"]
+            foreignKeyName: "campaign_audit_log_campaign_id_fkey"
+            columns: ["campaign_id"]
             isOneToOne: false
-            referencedRelation: "users"
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaign_reviewers: {
+        Row: {
+          assigned_at: string
+          campaign_id: string
+          id: string
+          role: Database["public"]["Enums"]["reviewer_role_enum"]
+          user_id: string
+        }
+        Insert: {
+          assigned_at?: string
+          campaign_id: string
+          id?: string
+          role?: Database["public"]["Enums"]["reviewer_role_enum"]
+          user_id: string
+        }
+        Update: {
+          assigned_at?: string
+          campaign_id?: string
+          id?: string
+          role?: Database["public"]["Enums"]["reviewer_role_enum"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_reviewers_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      campaigns: {
+        Row: {
+          automation_mode: Database["public"]["Enums"]["automation_mode_enum"]
+          created_at: string
+          deadline: string | null
+          deleted_at: string | null
+          department: string | null
+          description: string
+          id: string
+          interview_persona: Database["public"]["Enums"]["interview_persona_enum"]
+          location: string | null
+          positions: number
+          screening_criteria: Json
+          screening_threshold: number
+          status: Database["public"]["Enums"]["campaign_status_enum"]
+          timezone: string | null
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
+          created_at?: string
+          deadline?: string | null
+          deleted_at?: string | null
+          department?: string | null
+          description?: string
+          id?: string
+          interview_persona?: Database["public"]["Enums"]["interview_persona_enum"]
+          location?: string | null
+          positions?: number
+          screening_criteria?: Json
+          screening_threshold?: number
+          status?: Database["public"]["Enums"]["campaign_status_enum"]
+          timezone?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
+          created_at?: string
+          deadline?: string | null
+          deleted_at?: string | null
+          department?: string | null
+          description?: string
+          id?: string
+          interview_persona?: Database["public"]["Enums"]["interview_persona_enum"]
+          location?: string | null
+          positions?: number
+          screening_criteria?: Json
+          screening_threshold?: number
+          status?: Database["public"]["Enums"]["campaign_status_enum"]
+          timezone?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      evaluation_rubrics: {
+        Row: {
+          archived_at: string | null
+          campaign_id: string
+          created_at: string
+          id: string
+          is_active: boolean
+          stage: Database["public"]["Enums"]["pipeline_stage_enum"]
+          version: number
+        }
+        Insert: {
+          archived_at?: string | null
+          campaign_id: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          stage: Database["public"]["Enums"]["pipeline_stage_enum"]
+          version?: number
+        }
+        Update: {
+          archived_at?: string | null
+          campaign_id?: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          stage?: Database["public"]["Enums"]["pipeline_stage_enum"]
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "evaluation_rubrics_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rubric_dimensions: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          id: string
+          is_mandatory: boolean
+          max_score: number
+          min_score: number
+          name: string
+          rubric_id: string
+          sort_order: number
+          updated_at: string
+          weight: number
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          is_mandatory?: boolean
+          max_score?: number
+          min_score?: number
+          name: string
+          rubric_id: string
+          sort_order?: number
+          updated_at?: string
+          weight?: number
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          is_mandatory?: boolean
+          max_score?: number
+          min_score?: number
+          name?: string
+          rubric_id?: string
+          sort_order?: number
+          updated_at?: string
+          weight?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rubric_dimensions_rubric_id_fkey"
+            columns: ["rubric_id"]
+            isOneToOne: false
+            referencedRelation: "evaluation_rubrics"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      screening_criteria: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          deleted_at: string | null
+          id: string
+          is_mandatory: boolean
+          label: string
+          sort_order: number
+          updated_at: string
+          weight: number
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          is_mandatory?: boolean
+          label: string
+          sort_order?: number
+          updated_at?: string
+          weight?: number
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          is_mandatory?: boolean
+          label?: string
+          sort_order?: number
+          updated_at?: string
+          weight?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "screening_criteria_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sla_timers: {
+        Row: {
+          alert_threshold_hours: number
+          campaign_id: string
+          created_at: string
+          escalation_threshold_hours: number
+          id: string
+          stage: string
+          time_limit_hours: number
+          updated_at: string
+        }
+        Insert: {
+          alert_threshold_hours: number
+          campaign_id: string
+          created_at?: string
+          escalation_threshold_hours: number
+          id?: string
+          stage: string
+          time_limit_hours: number
+          updated_at?: string
+        }
+        Update: {
+          alert_threshold_hours?: number
+          campaign_id?: string
+          created_at?: string
+          escalation_threshold_hours?: number
+          id?: string
+          stage?: string
+          time_limit_hours?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sla_timers_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
             referencedColumns: ["id"]
           },
         ]
@@ -98,7 +356,20 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      automation_mode_enum: "fully_auto" | "human_in_loop"
+      campaign_status_enum:
+        | "draft"
+        | "active"
+        | "paused"
+        | "closed"
+        | "archived"
+      interview_persona_enum:
+        | "neutral"
+        | "pressure"
+        | "collaborative"
+        | "socratic"
+      pipeline_stage_enum: "resume" | "screening_q" | "interview"
+      reviewer_role_enum: "lead" | "reviewer" | "observer"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -228,6 +499,17 @@ export const Constants = {
     Enums: {},
   },
   public: {
-    Enums: {},
+    Enums: {
+      automation_mode_enum: ["fully_auto", "human_in_loop"],
+      campaign_status_enum: ["draft", "active", "paused", "closed", "archived"],
+      interview_persona_enum: [
+        "neutral",
+        "pressure",
+        "collaborative",
+        "socratic",
+      ],
+      pipeline_stage_enum: ["resume", "screening_q", "interview"],
+      reviewer_role_enum: ["lead", "reviewer", "observer"],
+    },
   },
 } as const
