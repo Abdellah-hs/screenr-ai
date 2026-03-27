@@ -133,7 +133,7 @@ supabase gen types typescript     # Generate TypeScript types from database sche
 ```
 NEXT_PUBLIC_SUPABASE_URL      # Supabase project URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY # Supabase anonymous key
-OPENAI_API_KEY                # For AI features
+OPENAI_API_KEY                # OpenAI API key for AI generation (screening criteria, rubrics)
 ```
 
 ## Documentation

@@ -56,6 +56,7 @@ export default function RubricEditor({
 
   const [activeTab, setActiveTab] = useState<PipelineStage>("resume");
   const [generating, startGenerate] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
   const activeRubric = rubrics.find((r) => r.stage === activeTab);
   const dimensions = activeRubric?.dimensions ?? [];
@@ -101,9 +102,14 @@ export default function RubricEditor({
       return;
     }
 
+    setError(null);
     startGenerate(async () => {
-      const generated = await generateRubricDimensions(description, campaignId);
-      setRubrics(generated);
+      try {
+        const generated = await generateRubricDimensions(description, campaignId);
+        setRubrics(generated);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to generate rubrics");
+      }
     });
   }
 
@@ -137,6 +143,12 @@ export default function RubricEditor({
           )}
         </button>
       </div>
+
+      {error && (
+        <div className="p-3 text-sm text-red-600 bg-red-50 rounded-lg border border-red-200">
+          {error}
+        </div>
+      )}
 
       {/* Stage Tabs */}
       <div className="flex gap-1 p-1 bg-[#F0F9FF] rounded-lg">

@@ -19,7 +19,7 @@ export default function SignupPage() {
     setLoading(true);
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
     });
@@ -30,10 +30,15 @@ export default function SignupPage() {
       return;
     }
 
-    setSuccess(true);
-    setLoading(false);
+    // If email confirmation is enabled, the session will be null
+    // Show the "check your email" message instead of redirecting
+    if (!data.session) {
+      setSuccess(true);
+      setLoading(false);
+      return;
+    }
 
-    // If email confirmation is disabled, redirect immediately
+    // Email confirmation disabled — user is authenticated, redirect
     router.push("/campaigns");
     router.refresh();
   }
