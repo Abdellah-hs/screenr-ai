@@ -5,6 +5,7 @@ import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import ScreeningCriteriaDisplay from "@/components/campaigns/screening-criteria-display";
 import RubricDisplay from "@/components/campaigns/rubric-display";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
+import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
 import type { CandidateStage } from "@/lib/constants";
 
@@ -40,7 +41,10 @@ export default async function CampaignDetailPage({
 
   const stageCounts: Record<string, number> = {};
   for (const c of candidates) {
-    stageCounts[c.stage] = (stageCounts[c.stage] || 0) + 1;
+    if ('status' in c) {
+      const statusStr = String(c.status);
+      stageCounts[statusStr] = (stageCounts[statusStr] || 0) + 1;
+    }
   }
 
   return (
@@ -156,9 +160,12 @@ export default async function CampaignDetailPage({
       {/* Pipeline Stages */}
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
-            Pipeline
-          </h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
+              Pipeline
+            </h2>
+            <GmailSyncButton campaignId={id} />
+          </div>
           <Link
             href={`/campaigns/${id}/candidates`}
             className="text-sm font-medium text-[#2563EB] hover:underline"
