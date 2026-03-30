@@ -17,7 +17,7 @@ const STAGES: { key: PipelineStage; label: string }[] = [
 
 function createEmptyRubric(stage: PipelineStage, campaignId: string): EvaluationRubric {
   return {
-    id: `rub-${Math.random().toString(36).substr(2, 9)}`,
+    id: `rub-${Math.random().toString(36).slice(2, 11)}`,
     campaign_id: campaignId,
     stage,
     version: 1,
@@ -30,7 +30,7 @@ function createEmptyRubric(stage: PipelineStage, campaignId: string): Evaluation
 
 function createEmptyDimension(): RubricDimension {
   return {
-    id: `dim-${Math.random().toString(36).substr(2, 9)}`,
+    id: `dim-${Math.random().toString(36).slice(2, 11)}`,
     name: "",
     weight: 0,
     is_mandatory: false,
@@ -226,27 +226,22 @@ export default function RubricEditor({
                 className="w-20 px-2 py-1.5 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 text-center"
               />
             </div>
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs text-[#6B7280] whitespace-nowrap">Score</label>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-[#6B7280] whitespace-nowrap">Pass ≥</label>
               <input
-                type="number"
+                type="range"
+                min={0}
+                max={100}
+                step={1}
                 value={dim.min_score}
                 onChange={(e) =>
-                  updateDimension(dim.id, "min_score", parseInt(e.target.value) || 0)
+                  updateDimension(dim.id, "min_score", parseInt(e.target.value))
                 }
-                className="w-14 px-2 py-1.5 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 text-center"
-                placeholder="0"
+                className="w-24 accent-[#0369A1] cursor-pointer"
               />
-              <span className="text-xs text-[#6B7280]">-</span>
-              <input
-                type="number"
-                value={dim.max_score}
-                onChange={(e) =>
-                  updateDimension(dim.id, "max_score", parseInt(e.target.value) || 0)
-                }
-                className="w-14 px-2 py-1.5 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 text-center"
-                placeholder="100"
-              />
+              <span className="text-xs font-semibold text-[#0C4A6E] w-10 text-center">
+                {dim.min_score}/100
+              </span>
             </div>
             <label className="flex items-center gap-1.5 cursor-pointer">
               <input
