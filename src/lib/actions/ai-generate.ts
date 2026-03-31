@@ -2,6 +2,9 @@
 
 import OpenAI from "openai";
 import type { ScreeningCriterion, EvaluationRubric } from "@/lib/constants";
+import { createClient } from "@/lib/supabase/server";
+import { aiDescriptionSchema } from "@/lib/validations";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -15,6 +18,17 @@ function generateId(prefix: string): string {
 export async function generateScreeningCriteria(
   description: string
 ): Promise<ScreeningCriterion[]> {
+  // Auth guard
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  // Rate limit: 10 AI generations per 5 minutes per user
+  checkRateLimit(user.id, { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 });
+
+  // Validate input
+  const validatedDescription = aiDescriptionSchema.parse(description);
+
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -44,7 +58,7 @@ Rules:
       },
       {
         role: "user",
-        content: `Generate screening criteria for this role:\n\n${description}`,
+        content: `Generate screening criteria for this role:\n\n${validatedDescription}`,
       },
     ],
   });
@@ -77,6 +91,17 @@ export async function generateRubricDimensions(
   description: string,
   campaignId: string
 ): Promise<EvaluationRubric[]> {
+  // Auth guard
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  // Rate limit: 10 AI generations per 5 minutes per user
+  checkRateLimit(user.id, { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 });
+
+  // Validate input
+  const validatedDescription = aiDescriptionSchema.parse(description);
+
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -116,7 +141,7 @@ Rules:
       },
       {
         role: "user",
-        content: `Generate rubric dimensions for this role:\n\n${description}`,
+        content: `Generate rubric dimensions for this role:\n\n${validatedDescription}`,
       },
     ],
   });
