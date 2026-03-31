@@ -1,6 +1,3 @@
-"use server";
-
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type {
   CampaignStatus,
@@ -14,9 +11,6 @@ import type {
   SlaTimer,
   PipelineStageCount,
 } from "@/lib/constants";
-import { parseCampaignFormData, uuidSchema } from "@/lib/validations";
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_PIPELINE: PipelineStageCount[] = [
   { name: "Applied", key: "applied", count: 0 },
@@ -26,10 +20,6 @@ const DEFAULT_PIPELINE: PipelineStageCount[] = [
   { name: "Hired", key: "hired", count: 0 },
 ];
 
-/**
- * Assemble a Campaign object from database rows.
- * The campaigns table stores core fields; related data comes from joined tables.
- */
 function assembleCampaign(
   row: Record<string, unknown>,
   screeningCriteria: ScreeningCriterion[],
@@ -62,9 +52,17 @@ function assembleCampaign(
   };
 }
 
-// ─── GET all campaigns ───────────────────────────────────────────────────────
+function groupBy<T extends Record<string, unknown>>(arr: T[], key: string): Record<string, T[]> {
+  return arr.reduce((acc, item) => {
+    const k = item[key] as string;
+    if (!acc[k]) acc[k] = [];
+    acc[k].push(item);
+    return acc;
+  }, {} as Record<string, T[]>);
+}
 
-export async function getCampaigns(): Promise<Campaign[]> {
+// ─── GET all campaigns
+export async function fetchAllCampaigns(): Promise<Campaign[]> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return [];
@@ -77,8 +75,7 @@ export async function getCampaigns(): Promise<Campaign[]> {
 
   if (error || !rows) return [];
 
-  // Fetch related data for all campaigns in batch
-  const campaignIds = rows.map((r) => r.id);
+  const campaignIds = rows.map((r: any) => r.id);
 
   const [criteriaRes, rubricsRes, dimensionsRes, reviewersRes, slaRes] =
     await Promise.all([
@@ -95,57 +92,56 @@ export async function getCampaigns(): Promise<Campaign[]> {
   const reviewersByC = groupBy(reviewersRes.data || [], "campaign_id");
   const slaByC = groupBy(slaRes.data || [], "campaign_id");
 
-  return rows.map((row) => {
+  return rows.map((row: any) => {
     const rubrics = (rubricsByC[row.id] || []).map((r) => ({
-      id: r.id,
-      campaign_id: r.campaign_id,
+      id: r.id as string,
+      campaign_id: r.campaign_id as string,
       stage: r.stage as "resume" | "screening_q" | "interview",
-      version: r.version,
-      is_active: r.is_active,
-      dimensions: (dimensionsByR[r.id] || []).map((d) => ({
-        id: d.id,
-        name: d.name,
-        weight: d.weight,
-        is_mandatory: d.is_mandatory,
-        min_score: d.min_score,
-        max_score: d.max_score,
-        sort_order: d.sort_order,
+      version: r.version as number,
+      is_active: r.is_active as boolean,
+      dimensions: (dimensionsByR[r.id as string] || []).map((d) => ({
+        id: d.id as string,
+        name: d.name as string,
+        weight: d.weight as number,
+        is_mandatory: d.is_mandatory as boolean,
+        min_score: d.min_score as number,
+        max_score: d.max_score as number,
+        sort_order: d.sort_order as number,
       })),
-      created_at: r.created_at,
-      archived_at: r.archived_at,
+      created_at: r.created_at as string,
+      archived_at: r.archived_at as string | null,
     }));
 
     const reviewers = (reviewersByC[row.id] || []).map((r) => ({
-      id: r.id,
-      user_id: r.user_id,
+      id: r.id as string,
+      user_id: r.user_id as string,
       name: "",
       email: "",
       avatar_url: null,
       role: r.role as "lead" | "reviewer" | "observer",
-      assigned_at: r.assigned_at,
+      assigned_at: r.assigned_at as string,
     }));
 
     const slaTimers = (slaByC[row.id] || []).map((s) => ({
       stage: s.stage as SlaTimer["stage"],
-      time_limit_hours: s.time_limit_hours,
-      alert_threshold_hours: s.alert_threshold_hours,
-      escalation_threshold_hours: s.escalation_threshold_hours,
+      time_limit_hours: s.time_limit_hours as number,
+      alert_threshold_hours: s.alert_threshold_hours as number,
+      escalation_threshold_hours: s.escalation_threshold_hours as number,
     }));
 
     const criteria = (criteriaByC[row.id] || []).map((c) => ({
-      id: c.id,
-      label: c.label,
-      weight: c.weight,
-      is_mandatory: c.is_mandatory,
+      id: c.id as string,
+      label: c.label as string,
+      weight: c.weight as number,
+      is_mandatory: c.is_mandatory as boolean,
     }));
 
     return assembleCampaign(row, criteria, rubrics, reviewers, slaTimers);
   });
 }
 
-// ─── GET single campaign ─────────────────────────────────────────────────────
-
-export async function getCampaignById(id: string): Promise<Campaign | null> {
+// ─── GET single campaign
+export async function fetchCampaignById(id: string): Promise<Campaign | null> {
   const supabase = await createClient();
 
   // Auth guard
@@ -169,34 +165,33 @@ export async function getCampaignById(id: string): Promise<Campaign | null> {
     supabase.from("sla_timers").select("*").eq("campaign_id", id),
   ]);
 
-  // Fetch dimensions for active rubrics
-  const rubricIds = (rubricsRes.data || []).map((r) => r.id);
+  const rubricIds = (rubricsRes.data || []).map((r: any) => r.id);
   const dimensionsRes = rubricIds.length > 0
     ? await supabase.from("rubric_dimensions").select("*").in("rubric_id", rubricIds).is("deleted_at", null)
     : { data: [] };
 
   const dimensionsByR = groupBy(dimensionsRes.data || [], "rubric_id");
 
-  const rubrics: EvaluationRubric[] = (rubricsRes.data || []).map((r) => ({
+  const rubrics: EvaluationRubric[] = (rubricsRes.data || []).map((r: any) => ({
     id: r.id,
     campaign_id: r.campaign_id,
     stage: r.stage as "resume" | "screening_q" | "interview",
     version: r.version,
     is_active: r.is_active,
     dimensions: (dimensionsByR[r.id] || []).map((d) => ({
-      id: d.id,
-      name: d.name,
-      weight: d.weight,
-      is_mandatory: d.is_mandatory,
-      min_score: d.min_score,
-      max_score: d.max_score,
-      sort_order: d.sort_order,
+      id: d.id as string,
+      name: d.name as string,
+      weight: d.weight as number,
+      is_mandatory: d.is_mandatory as boolean,
+      min_score: d.min_score as number,
+      max_score: d.max_score as number,
+      sort_order: d.sort_order as number,
     })),
     created_at: r.created_at,
     archived_at: r.archived_at,
   }));
 
-  const reviewers: CampaignReviewer[] = (reviewersRes.data || []).map((r) => ({
+  const reviewers: CampaignReviewer[] = (reviewersRes.data || []).map((r: any) => ({
     id: r.id,
     user_id: r.user_id,
     name: "",
@@ -206,14 +201,14 @@ export async function getCampaignById(id: string): Promise<Campaign | null> {
     assigned_at: r.assigned_at,
   }));
 
-  const slaTimers: SlaTimer[] = (slaRes.data || []).map((s) => ({
+  const slaTimers: SlaTimer[] = (slaRes.data || []).map((s: any) => ({
     stage: s.stage as SlaTimer["stage"],
     time_limit_hours: s.time_limit_hours,
     alert_threshold_hours: s.alert_threshold_hours,
     escalation_threshold_hours: s.escalation_threshold_hours,
   }));
 
-  const criteria: ScreeningCriterion[] = (criteriaRes.data || []).map((c) => ({
+  const criteria: ScreeningCriterion[] = (criteriaRes.data || []).map((c: any) => ({
     id: c.id,
     label: c.label,
     weight: c.weight,
@@ -223,37 +218,21 @@ export async function getCampaignById(id: string): Promise<Campaign | null> {
   return assembleCampaign(row, criteria, rubrics, reviewers, slaTimers);
 }
 
-// ─── CREATE campaign ─────────────────────────────────────────────────────────
-
-export async function createCampaign(formData: FormData) {
+// ─── Mutation Helpers
+export async function insertCampaignTx(
+  payload: any,
+  screeningCriteria: any[],
+  rubrics: any[],
+  slaTimers: any[],
+  reviewers: any[],
+  userId: string
+): Promise<string> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  // Validate all inputs
-  const {
-    title, description, department, positions, status, deadline, location,
-    automation_mode: automationMode, screening_threshold: screeningThreshold,
-    interview_persona: interviewPersona,
-    screeningCriteria, rubrics, slaTimers, reviewers
-  } = parseCampaignFormData(formData);
 
   // 1. Insert campaign
   const { data: campaign, error } = await supabase
     .from("campaigns")
-    .insert({
-      title,
-      description,
-      department,
-      positions,
-      status,
-      deadline: deadline ? new Date(deadline).toISOString() : null,
-      location,
-      automation_mode: automationMode,
-      screening_threshold: screeningThreshold,
-      interview_persona: interviewPersona,
-      user_id: user.id,
-    })
+    .insert({ ...payload, user_id: userId })
     .select()
     .single();
 
@@ -287,7 +266,7 @@ export async function createCampaign(formData: FormData) {
 
     if (insertedRubric && rubric.dimensions?.length > 0) {
       await supabase.from("rubric_dimensions").insert(
-        rubric.dimensions.map((d) => ({
+        rubric.dimensions.map((d: RubricDimension) => ({
           rubric_id: insertedRubric.id,
           name: d.name,
           weight: d.weight,
@@ -313,12 +292,12 @@ export async function createCampaign(formData: FormData) {
     );
   }
 
-  // 5. Insert reviewers (using logged-in user as placeholder reviewer)
+  // 5. Insert reviewers
   if (reviewers.length > 0) {
     await supabase.from("campaign_reviewers").insert(
       reviewers.map((r) => ({
         campaign_id: campaign.id,
-        user_id: r.user_id || user.id,
+        user_id: r.user_id || userId,
         role: r.role,
       }))
     );
@@ -327,115 +306,87 @@ export async function createCampaign(formData: FormData) {
   // 6. Write audit log entry
   await supabase.from("campaign_audit_log").insert({
     campaign_id: campaign.id,
-    user_id: user.id,
+    user_id: userId,
     action: "campaign_created",
     entity_type: "campaign",
     entity_id: campaign.id,
-    new_data: { title, status },
+    new_data: { title: payload.title, status: payload.status },
   });
 
-  redirect(`/campaigns/${campaign.id}`);
+  return campaign.id;
 }
 
-// ─── UPDATE campaign ─────────────────────────────────────────────────────────
-
-export async function updateCampaign(id: string, formData: FormData) {
+export async function updateCampaignTx(id: string, payload: any, screeningCriteriaJson: string | null, slaTimersJson: string | null, userId: string): Promise<void> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
 
   // Ownership check
-  const { data: existing } = await supabase
+  const { data: ownerCheck } = await supabase
     .from("campaigns")
     .select("id")
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .single();
-  if (!existing) throw new Error("Campaign not found or access denied");
+  if (!ownerCheck) throw new Error("Campaign not found or access denied");
 
-  // Validate all inputs
-  const {
-    title, description, department, positions, status, deadline, location,
-    automation_mode: automationMode, screening_threshold: screeningThreshold,
-    interview_persona: interviewPersona,
-    screeningCriteria, slaTimers
-  } = parseCampaignFormData(formData);
-
-  // Fetch old data for audit log
   const { data: oldCampaign } = await supabase.from("campaigns").select("*").eq("id", id).single();
 
-  // Update campaign
   const { error } = await supabase
     .from("campaigns")
-    .update({
-      title,
-      description,
-      department,
-      positions,
-      status,
-      deadline: deadline ? new Date(deadline).toISOString() : null,
-      location,
-      automation_mode: automationMode,
-      screening_threshold: screeningThreshold,
-      interview_persona: interviewPersona,
-    })
+    .update(payload)
     .eq("id", id);
 
   if (error) throw new Error(error.message);
 
-  // Handle screening criteria — delete & re-insert (simple strategy)
-  await supabase.from("screening_criteria").delete().eq("campaign_id", id);
-  if (screeningCriteria.length > 0) {
-    await supabase.from("screening_criteria").insert(
-      screeningCriteria.map((c, i) => ({
-        campaign_id: id,
-        label: c.label,
-        weight: c.weight,
-        is_mandatory: c.is_mandatory,
-        sort_order: i,
-      }))
-    );
+  if (screeningCriteriaJson) {
+    try {
+      const criteria: ScreeningCriterion[] = JSON.parse(screeningCriteriaJson);
+      await supabase.from("screening_criteria").delete().eq("campaign_id", id);
+      if (criteria.length > 0) {
+        await supabase.from("screening_criteria").insert(
+          criteria.map((c, i) => ({
+            campaign_id: id,
+            label: c.label,
+            weight: c.weight,
+            is_mandatory: c.is_mandatory,
+            sort_order: i,
+          }))
+        );
+      }
+    } catch { /* ignore parse errors */ }
   }
 
-  // Handle SLA timers — delete & re-insert
-  await supabase.from("sla_timers").delete().eq("campaign_id", id);
-  if (slaTimers.length > 0) {
-    await supabase.from("sla_timers").insert(
-      slaTimers.map((s) => ({
-        campaign_id: id,
-        stage: s.stage,
-        time_limit_hours: s.time_limit_hours,
-        alert_threshold_hours: s.alert_threshold_hours,
-        escalation_threshold_hours: s.escalation_threshold_hours,
-      }))
-    );
+  if (slaTimersJson) {
+    try {
+      const timers: SlaTimer[] = JSON.parse(slaTimersJson);
+      await supabase.from("sla_timers").delete().eq("campaign_id", id);
+      if (timers.length > 0) {
+        await supabase.from("sla_timers").insert(
+          timers.map((s) => ({
+            campaign_id: id,
+            stage: s.stage,
+            time_limit_hours: s.time_limit_hours,
+            alert_threshold_hours: s.alert_threshold_hours,
+            escalation_threshold_hours: s.escalation_threshold_hours,
+          }))
+        );
+      }
+    } catch { /* ignore parse errors */ }
   }
 
-  // Write audit log
   await supabase.from("campaign_audit_log").insert({
     campaign_id: id,
-    user_id: user.id,
+    user_id: userId,
     action: "campaign_updated",
     entity_type: "campaign",
     entity_id: id,
     old_data: oldCampaign,
-    new_data: { title, status },
+    new_data: { title: payload.title, status: payload.status },
   });
-
-  redirect(`/campaigns/${id}`);
 }
 
-// ─── CLONE campaign ──────────────────────────────────────────────────────────
-
-export async function cloneCampaign(id: string) {
-  const source = await getCampaignById(id);
-  if (!source) throw new Error("Campaign not found");
-
+export async function cloneCampaignTx(id: string, source: Campaign, userId: string): Promise<string> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
 
-  // 1. Insert cloned campaign
   const { data: cloned, error } = await supabase
     .from("campaigns")
     .insert({
@@ -449,14 +400,13 @@ export async function cloneCampaign(id: string) {
       automation_mode: source.automation_mode,
       screening_threshold: source.screening_threshold,
       interview_persona: source.interview_persona,
-      user_id: user.id,
+      user_id: userId,
     })
     .select()
     .single();
 
   if (error || !cloned) throw new Error(error?.message || "Failed to clone campaign");
 
-  // 2. Clone screening criteria
   if (source.screening_criteria.length > 0) {
     await supabase.from("screening_criteria").insert(
       source.screening_criteria.map((c, i) => ({
@@ -469,7 +419,6 @@ export async function cloneCampaign(id: string) {
     );
   }
 
-  // 3. Clone rubrics + dimensions
   for (const rubric of source.rubrics) {
     const { data: newRubric } = await supabase
       .from("evaluation_rubrics")
@@ -497,7 +446,6 @@ export async function cloneCampaign(id: string) {
     }
   }
 
-  // 4. Clone SLA timers
   if (source.sla_timers.length > 0) {
     await supabase.from("sla_timers").insert(
       source.sla_timers.map((s) => ({
@@ -510,26 +458,14 @@ export async function cloneCampaign(id: string) {
     );
   }
 
-  // 5. Write audit log
   await supabase.from("campaign_audit_log").insert({
     campaign_id: cloned.id,
-    user_id: user.id,
+    user_id: userId,
     action: "campaign_cloned",
     entity_type: "campaign",
     entity_id: cloned.id,
     new_data: { source_campaign_id: id },
   });
 
-  redirect(`/campaigns/${cloned.id}`);
-}
-
-// ─── Utility ─────────────────────────────────────────────────────────────────
-
-function groupBy<T extends Record<string, unknown>>(arr: T[], key: string): Record<string, T[]> {
-  return arr.reduce((acc, item) => {
-    const k = item[key] as string;
-    if (!acc[k]) acc[k] = [];
-    acc[k].push(item);
-    return acc;
-  }, {} as Record<string, T[]>);
+  return cloned.id;
 }

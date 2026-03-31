@@ -1,0 +1,123 @@
+import { z } from "zod/v4";
+
+// ─── Campaign Validation ────────────────────────────────────────────────────
+
+const campaignStatusValues = ["draft", "active", "paused", "closed", "archived"] as const;
+const automationModeValues = ["fully_auto", "human_in_loop"] as const;
+const interviewPersonaValues = ["neutral", "pressure", "collaborative", "socratic"] as const;
+
+export const campaignFormSchema = z.object({
+  title: z.string().min(1, "Title is required").max(200, "Title too long"),
+  description: z.string().max(5000, "Description too long"),
+  department: z.string().max(100).nullable(),
+  positions: z.number().int().min(1).max(1000),
+  status: z.enum(campaignStatusValues),
+  deadline: z.string().nullable(),
+  location: z.string().max(200).nullable(),
+  automation_mode: z.enum(automationModeValues),
+  screening_threshold: z.number().int().min(0).max(100),
+  interview_persona: z.enum(interviewPersonaValues),
+});
+
+export const screeningCriterionSchema = z.object({
+  id: z.string().optional(),
+  label: z.string().min(1).max(200),
+  weight: z.number().min(0).max(1),
+  is_mandatory: z.boolean(),
+});
+
+export const slaTimerSchema = z.object({
+  stage: z.string().min(1).max(50),
+  time_limit_hours: z.number().int().min(1),
+  alert_threshold_hours: z.number().int().min(1),
+  escalation_threshold_hours: z.number().int().min(1),
+});
+
+export const rubricDimensionSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1).max(200),
+  weight: z.number().min(0).max(1),
+  is_mandatory: z.boolean(),
+  min_score: z.number().int().min(0),
+  max_score: z.number().int().min(1),
+  sort_order: z.number().int().min(0),
+});
+
+export const rubricSchema = z.object({
+  stage: z.enum(["resume", "screening_q", "interview"]),
+  dimensions: z.array(rubricDimensionSchema),
+});
+
+export const reviewerSchema = z.object({
+  user_id: z.string().optional(),
+  role: z.enum(["lead", "reviewer", "observer"]),
+});
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Parse and validate campaign form data. Throws on invalid input.
+ */
+export function parseCampaignFormData(formData: FormData) {
+  const rawPositions = parseInt(formData.get("positions") as string);
+  const rawThreshold = parseInt(formData.get("screening_threshold") as string);
+
+  const data = campaignFormSchema.parse({
+    title: formData.get("title") as string,
+    description: (formData.get("description") as string) || "",
+    department: (formData.get("department") as string) || null,
+    positions: Number.isNaN(rawPositions) ? 1 : rawPositions,
+    status: (formData.get("status") as string) || "draft",
+    deadline: (formData.get("deadline") as string) || null,
+    location: (formData.get("location") as string) || null,
+    automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
+    screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
+    interview_persona: (formData.get("interview_persona") as string) || "neutral",
+  });
+
+  // Parse related JSON data with validation
+  const screeningCriteria = safeParseJsonArray(
+    formData.get("screening_criteria_json") as string,
+    z.array(screeningCriterionSchema)
+  );
+
+  const rubrics = safeParseJsonArray(
+    formData.get("rubrics_json") as string,
+    z.array(rubricSchema)
+  );
+
+  const slaTimers = safeParseJsonArray(
+    formData.get("sla_timers_json") as string,
+    z.array(slaTimerSchema)
+  );
+
+  const reviewers = safeParseJsonArray(
+    formData.get("reviewers_json") as string,
+    z.array(reviewerSchema)
+  );
+
+  return { ...data, screeningCriteria, rubrics, slaTimers, reviewers };
+}
+
+function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
+  if (!json) return [] as unknown as T;
+  try {
+    const parsed = JSON.parse(json);
+    return schema.parse(parsed);
+  } catch {
+    return [] as unknown as T;
+  }
+}
+
+// ─── AI Generation Validation ───────────────────────────────────────────────
+
+export const aiDescriptionSchema = z.string().min(10, "Description too short for AI generation").max(10000, "Description too long");
+
+// ─── Candidate Stage Validation ─────────────────────────────────────────────
+
+const candidateStageValues = ["new", "applied", "screening", "screening_q", "interview", "manager_review", "offer", "rejected", "hired", "withdrawn"] as const;
+export const candidateStageSchema = z.enum(candidateStageValues);
+
+// ─── UUID Validation ────────────────────────────────────────────────────────
+
+export const uuidSchema = z.string().uuid("Invalid ID format");
