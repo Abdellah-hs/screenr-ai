@@ -28,7 +28,7 @@ import {
 export async function syncResumesFromGmail(campaignId: string) {
   try {
     const supabase = await createClient();
-    
+
     // Auth guard
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -54,14 +54,14 @@ export async function syncResumesFromGmail(campaignId: string) {
       const msgData = await getGmailMessage(msg.id);
       const parts = msgData.payload?.parts || [];
       const pdfParts = parts.filter((p: any) => p.mimeType === "application/pdf" && p.filename);
-      
+
       for (const part of pdfParts) {
         if (!part.body?.attachmentId) continue;
 
         // Fetch attachment data
         const fileBuffer = await getGmailAttachmentBuffer(msg.id, part.body.attachmentId);
         if (!fileBuffer) continue;
-        
+
         // 1. Upload to Supabase Storage
         const resumeUrl = await uploadResumeToStorage(campaignId, part.filename || "resume.pdf", fileBuffer);
 
@@ -101,7 +101,7 @@ export async function syncResumesFromGmail(campaignId: string) {
 export async function getCandidatesByCampaignId(campaignId: string) {
   const data = await fetchCandidatesByCampaignId(campaignId);
   if (!data) return [];
-  
+
   return data.map((app: any) => ({
     id: app.id, // we map application ID as candidate trace ID here
     campaign_id: app.campaign_id,
