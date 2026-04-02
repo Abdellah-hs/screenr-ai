@@ -200,20 +200,3 @@ export const TIER_LABELS: Record<ScreeningTier, string> = {
 
 export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "offer", "hired"];
 
-// ─── Re-exports from mock data modules ──────────────────────────────────────
-// Split into separate files so HMR only reprocesses the file you edit.
-
-export {
-  MOCK_CAMPAIGNS,
-  getCampaignByIdFromMock,
-  getActiveCampaignsFromMock,
-  updateCampaignInMock,
-  createCampaignInMock,
-} from "./mock-campaigns";
-
-export {
-  MOCK_CANDIDATES,
-  getCandidatesByCampaign,
-  getCandidateByIdFromMock,
-  updateCandidateInMock,
-} from "./mock-candidates";

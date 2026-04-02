@@ -19,8 +19,12 @@ import {
   fetchCandidatesByCampaignId,
   fetchCandidateById,
   updateApplicationStage,
-  getResumeSignedUrl
+  getResumeSignedUrl,
+  saveResumeScore,
+  advanceApplicationStatus
 } from "@/lib/data/candidates";
+import { scoreResumeAgainstCriteria } from "@/lib/actions/ai-generate";
+import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
 
 /**
  * Action to trigger syncing of resumes from a Gmail inbox
@@ -75,10 +79,23 @@ export async function syncResumesFromGmail(campaignId: string) {
         const candidateId = await upsertCandidate(structuredData);
 
         // 5. Create Application link
-        await createApplicationIfNotExists(candidateId, campaignId, resumeUrl, structuredData);
+        const applicationId = await createApplicationIfNotExists(candidateId, campaignId, resumeUrl, structuredData);
 
         // 6. Log to AI Audit Log
-        await logAiAudit(campaignId, candidateId, textContent, part.filename || "resume.pdf", structuredData);
+        await logAiAudit({
+          campaignId,
+          candidateId,
+          textContent,
+          filename: part.filename || "resume.pdf",
+          structuredData,
+        });
+
+        // 7. Score resume against campaign criteria (if campaign has criteria)
+        try {
+          await scoreAndAdvanceCandidate(applicationId, campaignId, structuredData);
+        } catch (scoreErr) {
+          console.error("Resume scoring failed (non-blocking):", scoreErr);
+        }
 
         processedCount++;
       }
@@ -96,6 +113,24 @@ export async function syncResumesFromGmail(campaignId: string) {
   }
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function buildScoresArray(row: any): any[] {
+  if (!row.resume_score) return [];
+  return [{
+    stage: "resume",
+    overall: Number(row.resume_score),
+    tier: row.screening_tier || undefined,
+    ai_summary: row.score_rationale || "Scored by AI",
+    factors: row.score_factors || [],
+    scored_at: row.scored_at || row.created_at,
+  }];
+}
+
+function normalizeStage(status: string): string {
+  return status === "new" ? "applied" : status;
+}
+
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
 
 export async function getCandidatesByCampaignId(campaignId: string) {
@@ -103,27 +138,19 @@ export async function getCandidatesByCampaignId(campaignId: string) {
   if (!data) return [];
 
   return data.map((app: any) => ({
-    id: app.id, // we map application ID as candidate trace ID here
+    id: app.id,
     campaign_id: app.campaign_id,
     name: `${app.candidates.first_name} ${app.candidates.last_name}`,
     email: app.candidates.email,
     phone: app.candidates.phone,
     current_title: app.parsed_data?.experience?.[0]?.title || null,
     current_company: app.parsed_data?.experience?.[0]?.company || null,
-    stage: app.status === "new" ? "applied" : app.status,
-    scores: [
-      // Mocking or mapping CandidateScore objects
-      ...(app.resume_score ? [{
-        stage: "resume",
-        overall: Number(app.resume_score),
-        ai_summary: "Parsed from resume",
-        factors: [],
-        scored_at: app.created_at
-      }] : [])
-    ] as any[],
+    stage: normalizeStage(app.status),
+    screening_tier: app.screening_tier || null,
+    scores: buildScoresArray(app),
     applied_at: app.created_at,
     resume_url: app.resume_url || "",
-    resume_path: app.resume_url || "" // storage path for signed URL generation
+    resume_path: app.resume_url || "",
   })) as any[];
 }
 
@@ -147,27 +174,19 @@ export async function getCandidateById(applicationId: string) {
     phone: candidateRecord.phone,
     current_title: parsed?.experience?.[0]?.title || null,
     current_company: parsed?.experience?.[0]?.company || null,
-    stage: data.status === "new" ? "applied" : data.status,
-    scores: [
-      ...(data.resume_score ? [{
-        stage: "resume",
-        overall: Number(data.resume_score),
-        ai_summary: "Parsed from resume",
-        factors: [],
-        scored_at: data.created_at
-      }] : [])
-    ],
+    stage: normalizeStage(data.status as string),
+    screening_tier: (data as any).screening_tier || null,
+    scores: buildScoresArray(data as any),
     applied_at: data.created_at,
     resume_url: resumeSignedUrl || "",
-    // Add missing resume object for UI
     resume: {
       skills: parsed?.skills || [],
       experience_years: parsed?.experience?.length || 0,
-      education: parsed?.education?.[0]?.institution || "Unknown"
+      education: parsed?.education?.[0]?.institution || "Unknown",
     },
     parsed_data: parsed,
     linkedin_url: candidateRecord.linkedin_url,
-    portfolio_url: candidateRecord.portfolio_url
+    portfolio_url: candidateRecord.portfolio_url,
   } as any;
 }
 
@@ -175,4 +194,66 @@ export async function updateCandidateStage(applicationId: string, stage: string)
   uuidSchema.parse(applicationId);
   candidateStageSchema.parse(stage);
   await updateApplicationStage(applicationId, stage);
+}
+
+// ─── Resume Scoring ─────────────────────────────────────────────────────────
+
+/**
+ * Internal helper: score a candidate's resume and optionally auto-advance.
+ * Used by both Gmail sync and manual scoring.
+ */
+async function scoreAndAdvanceCandidate(
+  applicationId: string,
+  campaignId: string,
+  parsedResume: Record<string, unknown>
+) {
+  const config = await fetchCampaignScoringConfig(campaignId);
+  if (!config || config.screening_criteria.length === 0) return;
+
+  const result = await scoreResumeAgainstCriteria(
+    parsedResume,
+    config.screening_criteria,
+    config.description
+  );
+
+  await saveResumeScore(
+    applicationId,
+    result.overall_score,
+    result.tier,
+    result.rationale,
+    result.factors
+  );
+
+  if (config.automation_mode === "fully_auto") {
+    if (result.overall_score >= config.screening_threshold) {
+      await advanceApplicationStatus(applicationId, "screening");
+    } else {
+      await advanceApplicationStatus(applicationId, "rejected");
+    }
+  }
+}
+
+/**
+ * Manually trigger resume scoring for an existing candidate.
+ * Used when a candidate was imported before criteria were set up,
+ * or to re-score after criteria changes.
+ */
+export async function scoreResume(applicationId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  checkRateLimit(user.id, { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 });
+
+  // Fetch the application with parsed data
+  const data = await fetchCandidateById(applicationId);
+  if (!data) throw new Error("Application not found");
+
+  const parsedResume = (data as any).parsed_data;
+  if (!parsedResume) throw new Error("No parsed resume data available for scoring");
+
+  await scoreAndAdvanceCandidate(applicationId, (data as any).campaign_id, parsedResume);
+
+  revalidatePath(`/campaigns/${(data as any).campaign_id}`);
+  return { success: true };
 }

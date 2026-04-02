@@ -42,9 +42,9 @@ Next.js App Router with a `(dashboard)` route group for authenticated pages:
 
 ### Data Layer
 
-Currently using **in-memory mock data** (`src/lib/mock-campaigns.ts`, `src/lib/mock-candidates.ts`) rather than live Supabase queries. The Supabase client infrastructure is wired up and ready.
+The application exclusively uses live **Supabase queries** for all data access.
 
-- **Server Actions** (`src/lib/actions/`) are the primary mutation pattern — they accept `FormData`, mutate state, and `redirect()`.
+- **Server Actions** (`src/lib/actions/`) are the primary mutation pattern — they accept `FormData`, call data layer services (`src/lib/data/`), mutate state, and `redirect()`.
 - **No API routes** are implemented yet (directory exists at `src/app/api/`).
 - Auto-generated Supabase types live in `src/types/database.types.ts`.
 
