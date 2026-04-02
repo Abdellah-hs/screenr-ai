@@ -78,9 +78,9 @@ export async function upsertCandidate(structuredData: any): Promise<string> {
   }
 }
 
-export async function createApplicationIfNotExists(candidateId: string, campaignId: string, resumeUrl: string, structuredData: any) {
+export async function createApplicationIfNotExists(candidateId: string, campaignId: string, resumeUrl: string, structuredData: any): Promise<string> {
   const supabase = await createClient();
-  
+
   const { data: existingApp } = await supabase
     .from("applications")
     .select("id")
@@ -88,28 +88,37 @@ export async function createApplicationIfNotExists(candidateId: string, campaign
     .eq("campaign_id", campaignId)
     .single();
 
-  if (!existingApp) {
-    await supabase.from("applications").insert({
-      candidate_id: candidateId,
-      campaign_id: campaignId,
-      status: "new",
-      resume_url: resumeUrl,
-      parsed_data: structuredData,
-    });
-  }
+  if (existingApp) return existingApp.id;
+
+  const { data: newApp, error } = await supabase.from("applications").insert({
+    candidate_id: candidateId,
+    campaign_id: campaignId,
+    status: "new",
+    resume_url: resumeUrl,
+    parsed_data: structuredData,
+  }).select("id").single();
+
+  if (error || !newApp) throw new Error("Failed to create application");
+  return newApp.id;
 }
 
-export async function logAiAudit(campaignId: string, candidateId: string, textContent: string, filename: string, structuredData: any) {
+export async function logAiAudit(params: {
+  campaignId: string;
+  candidateId: string;
+  textContent: string;
+  filename: string;
+  structuredData: any;
+}) {
   const supabase = await createClient();
-  
+
   await supabase.from("ai_audit_log").insert({
-    campaign_id: campaignId,
-    candidate_id: candidateId,
+    campaign_id: params.campaignId,
+    candidate_id: params.candidateId,
     stage: "resume_parsing",
     model: "gpt-4o-mini",
     prompt_version: "v1_structured_outputs",
-    input_snapshot: { text_length: textContent.length, filename },
-    raw_output: JSON.stringify(structuredData),
+    input_snapshot: { text_length: params.textContent.length, filename: params.filename },
+    raw_output: JSON.stringify(params.structuredData),
     action_taken: "parsed_and_created_profile",
   });
 }
@@ -133,15 +142,7 @@ export async function fetchCandidatesByCampaignId(campaignId: string) {
   const { data, error } = await supabase
     .from("applications")
     .select(`
-      id,
-      status,
-      resume_score,
-      screening_q_score,
-      interview_score,
-      parsed_data,
-      created_at,
-      resume_url,
-      campaign_id,
+      *,
       candidates (
         id,
         first_name,
@@ -158,7 +159,7 @@ export async function fetchCandidatesByCampaignId(campaignId: string) {
     console.error("Error fetching candidates:", error);
     return [];
   }
-  
+
   return data;
 }
 
@@ -172,15 +173,7 @@ export async function fetchCandidateById(applicationId: string) {
   const { data, error } = await supabase
     .from("applications")
     .select(`
-      id,
-      status,
-      resume_score,
-      screening_q_score,
-      interview_score,
-      parsed_data,
-      created_at,
-      resume_url,
-      campaign_id,
+      *,
       candidates (
         id,
         first_name,
@@ -201,6 +194,50 @@ export async function fetchCandidateById(applicationId: string) {
   }
   
   return data;
+}
+
+export async function saveResumeScore(
+  applicationId: string,
+  score: number,
+  tier: string,
+  rationale: string,
+  factors: { name: string; weight: number; score: number }[]
+) {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const { error } = await supabase
+    .from("applications")
+    .update({
+      resume_score: score,
+      screening_tier: tier,
+      score_rationale: rationale,
+      score_factors: factors,
+      scored_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as any)
+    .eq("id", applicationId);
+
+  if (error) throw error;
+}
+
+export async function advanceApplicationStatus(
+  applicationId: string,
+  newStatus: string
+) {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Unauthorized");
+
+  const { error } = await supabase
+    .from("applications")
+    .update({ status: newStatus as any, updated_at: new Date().toISOString() })
+    .eq("id", applicationId);
+
+  if (error) throw error;
 }
 
 export async function updateApplicationStage(applicationId: string, stage: string) {

@@ -47,4 +47,11 @@ export function checkRateLimit(userId: string, options: RateLimitOptions): void 
 
   entry.timestamps.push(now);
   store.set(userId, entry);
+
+  // Prevent memory leak: prune entries with no active timestamps
+  for (const [key, e] of store) {
+    if (key !== userId && e.timestamps.every((t) => now - t >= windowMs)) {
+      store.delete(key);
+    }
+  }
 }

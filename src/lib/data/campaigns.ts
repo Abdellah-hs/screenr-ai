@@ -218,6 +218,42 @@ export async function fetchCampaignById(id: string): Promise<Campaign | null> {
   return assembleCampaign(row, criteria, rubrics, reviewers, slaTimers);
 }
 
+// ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
+export async function fetchCampaignScoringConfig(campaignId: string) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: row } = await supabase
+    .from("campaigns")
+    .select("id, description, automation_mode, screening_threshold")
+    .eq("id", campaignId)
+    .eq("user_id", user.id)
+    .is("deleted_at", null)
+    .single();
+
+  if (!row) return null;
+
+  const { data: criteria } = await supabase
+    .from("screening_criteria")
+    .select("id, label, weight, is_mandatory")
+    .eq("campaign_id", campaignId)
+    .is("deleted_at", null);
+
+  return {
+    id: row.id as string,
+    description: row.description as string,
+    automation_mode: row.automation_mode as AutomationMode,
+    screening_threshold: row.screening_threshold as number,
+    screening_criteria: (criteria || []).map((c: any) => ({
+      id: c.id as string,
+      label: c.label as string,
+      weight: c.weight as number,
+      is_mandatory: c.is_mandatory as boolean,
+    })),
+  };
+}
+
 // ─── Mutation Helpers
 export async function insertCampaignTx(
   payload: any,
@@ -316,7 +352,13 @@ export async function insertCampaignTx(
   return campaign.id;
 }
 
-export async function updateCampaignTx(id: string, payload: any, screeningCriteriaJson: string | null, slaTimersJson: string | null, userId: string): Promise<void> {
+export async function updateCampaignTx(
+  id: string,
+  payload: any,
+  screeningCriteria: Omit<ScreeningCriterion, "id">[],
+  slaTimers: { stage: string; time_limit_hours: number; alert_threshold_hours: number; escalation_threshold_hours: number }[],
+  userId: string
+): Promise<void> {
   const supabase = await createClient();
 
   // Ownership check
@@ -337,40 +379,32 @@ export async function updateCampaignTx(id: string, payload: any, screeningCriter
 
   if (error) throw new Error(error.message);
 
-  if (screeningCriteriaJson) {
-    try {
-      const criteria: ScreeningCriterion[] = JSON.parse(screeningCriteriaJson);
-      await supabase.from("screening_criteria").delete().eq("campaign_id", id);
-      if (criteria.length > 0) {
-        await supabase.from("screening_criteria").insert(
-          criteria.map((c, i) => ({
-            campaign_id: id,
-            label: c.label,
-            weight: c.weight,
-            is_mandatory: c.is_mandatory,
-            sort_order: i,
-          }))
-        );
-      }
-    } catch { /* ignore parse errors */ }
+  // Handle screening criteria — delete & re-insert
+  await supabase.from("screening_criteria").delete().eq("campaign_id", id);
+  if (screeningCriteria.length > 0) {
+    await supabase.from("screening_criteria").insert(
+      screeningCriteria.map((c, i) => ({
+        campaign_id: id,
+        label: c.label,
+        weight: c.weight,
+        is_mandatory: c.is_mandatory,
+        sort_order: i,
+      }))
+    );
   }
 
-  if (slaTimersJson) {
-    try {
-      const timers: SlaTimer[] = JSON.parse(slaTimersJson);
-      await supabase.from("sla_timers").delete().eq("campaign_id", id);
-      if (timers.length > 0) {
-        await supabase.from("sla_timers").insert(
-          timers.map((s) => ({
-            campaign_id: id,
-            stage: s.stage,
-            time_limit_hours: s.time_limit_hours,
-            alert_threshold_hours: s.alert_threshold_hours,
-            escalation_threshold_hours: s.escalation_threshold_hours,
-          }))
-        );
-      }
-    } catch { /* ignore parse errors */ }
+  // Handle SLA timers — delete & re-insert
+  await supabase.from("sla_timers").delete().eq("campaign_id", id);
+  if (slaTimers.length > 0) {
+    await supabase.from("sla_timers").insert(
+      slaTimers.map((s) => ({
+        campaign_id: id,
+        stage: s.stage,
+        time_limit_hours: s.time_limit_hours,
+        alert_threshold_hours: s.alert_threshold_hours,
+        escalation_threshold_hours: s.escalation_threshold_hours,
+      }))
+    );
   }
 
   await supabase.from("campaign_audit_log").insert({
