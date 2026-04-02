@@ -36,7 +36,7 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
 
 export async function upsertCandidate(structuredData: any): Promise<string> {
   const supabase = await createClient();
-  
+
   const { data: existingCandidate } = await supabase
     .from("candidates")
     .select("id")
@@ -55,7 +55,7 @@ export async function upsertCandidate(structuredData: any): Promise<string> {
       location: structuredData.location || null,
       updated_at: new Date().toISOString()
     }).eq("id", candidateId);
-    
+
     return candidateId;
   } else {
     // Insert new
@@ -192,7 +192,7 @@ export async function fetchCandidateById(applicationId: string) {
     console.error("Error fetching candidate:", error);
     return null;
   }
-  
+
   return data;
 }
 
