@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
 import type { CandidateStage } from "@/lib/constants";
 
@@ -33,6 +33,14 @@ export function StageChanger({
   const [stage, setStage] = useState(currentStage);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+
+  // Keep local state in sync when the parent re-renders after a revalidate —
+  // e.g. a sibling component (ScreeningThread, pipeline buttons) advances the
+  // stage server-side, Next.js refetches the candidate, and this component
+  // gets a new currentStage prop. Without this, the old stage would stick.
+  useEffect(() => {
+    setStage(currentStage);
+  }, [currentStage]);
 
   function handleSelect(newStage: CandidateStage) {
     if (newStage === stage) {

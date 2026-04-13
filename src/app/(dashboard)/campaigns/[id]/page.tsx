@@ -2,10 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
 import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
+import { getScreeningQuestions } from "@/lib/actions/screening-questions";
 import ScreeningCriteriaDisplay from "@/components/campaigns/screening-criteria-display";
 import RubricDisplay from "@/components/campaigns/rubric-display";
+import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
+import { SendScreeningQuestionsBulkButton } from "@/components/candidates/send-screening-questions-button";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
 import type { CandidateStage } from "@/lib/constants";
 
@@ -30,9 +33,10 @@ export default async function CampaignDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [campaign, candidates] = await Promise.all([
+  const [campaign, candidates, screeningQuestions] = await Promise.all([
     getCampaignById(id),
     getCandidatesByCampaignId(id),
+    getScreeningQuestions(id),
   ]);
 
   if (!campaign) {
@@ -157,14 +161,32 @@ export default async function CampaignDetailPage({
         </div>
       )}
 
+      {/* Screening Questions */}
+      <div className="mb-6">
+        <ScreeningQuestionsEditor
+          campaignId={id}
+          initialQuestions={screeningQuestions.map((q) => ({
+            id: q.id,
+            prompt: q.prompt,
+            is_required: q.is_required,
+          }))}
+          canGenerate={(campaign.description?.trim().length ?? 0) >= 10}
+        />
+      </div>
+
       {/* Pipeline Stages */}
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="flex flex-wrap items-center gap-4">
             <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
               Pipeline
             </h2>
             <GmailSyncButton campaignId={id} />
+            <SendScreeningQuestionsBulkButton
+              campaignId={id}
+              disabled={screeningQuestions.length === 0}
+              disabledReason="Set up screening questions first"
+            />
           </div>
           <Link
             href={`/campaigns/${id}/candidates`}

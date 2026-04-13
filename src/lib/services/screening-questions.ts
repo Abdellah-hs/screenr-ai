@@ -1,0 +1,175 @@
+import OpenAI from "openai";
+import type { ScreeningCriterion } from "@/lib/constants";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export interface GeneratedScreeningQuestion {
+  prompt: string;
+  is_required: boolean;
+}
+
+export async function generateQuestionsForRole(params: {
+  jobDescription: string;
+  screeningCriteria: ScreeningCriterion[];
+  count?: number;
+}): Promise<GeneratedScreeningQuestion[]> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const { jobDescription, screeningCriteria, count = 5 } = params;
+
+  const criteriaList = screeningCriteria
+    .map((c) => `- ${c.label} (weight: ${c.weight}, mandatory: ${c.is_mandatory})`)
+    .join("\n");
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.5,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert HR hiring consultant. Generate targeted, open-ended screening questions a recruiter would email to a candidate who passed initial resume screening. The goal is to surface evidence the resume cannot — concrete examples, decision-making, motivation, and depth on the mandatory criteria.
+
+Return JSON in this exact format:
+{
+  "questions": [
+    { "prompt": "string", "is_required": boolean }
+  ]
+}
+
+Rules:
+- Produce exactly ${count} questions
+- Each prompt is a single clear question (no multi-part stacked questions)
+- Each prompt is 1-2 sentences, phrased in second person ("Tell us about...", "Describe a time when...")
+- Avoid yes/no questions — every question must invite a written narrative answer
+- Cover the mandatory screening criteria explicitly; touch the high-weight non-mandatory ones when possible
+- Mark at least half the questions as required (the ones tied to mandatory criteria)
+- Do not ask for information already on a typical resume (work history, job titles, dates)`,
+      },
+      {
+        role: "user",
+        content: `## Job Description
+${jobDescription}
+
+## Screening Criteria
+${criteriaList || "(no explicit criteria — use the job description to infer what to probe)"}`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("OpenAI returned an empty response for screening question generation");
+  }
+
+  const parsed = JSON.parse(content) as {
+    questions?: { prompt: string; is_required: boolean }[];
+  };
+
+  if (!parsed.questions?.length) {
+    throw new Error("OpenAI returned no screening questions");
+  }
+
+  return parsed.questions.map((q) => ({
+    prompt: String(q.prompt).trim(),
+    is_required: Boolean(q.is_required),
+  }));
+}
+
+export interface ScoredAnswer {
+  question_id: string;
+  score: number;
+  rationale: string;
+}
+
+export interface AnswerScoringResult {
+  overall_score: number;
+  overall_rationale: string;
+  answers: ScoredAnswer[];
+}
+
+export async function scoreAnswers(params: {
+  jobDescription: string;
+  questions: { id: string; prompt: string; is_required: boolean }[];
+  answers: { question_id: string; answer_text: string }[];
+}): Promise<AnswerScoringResult> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const { jobDescription, questions, answers } = params;
+
+  const qaPairs = questions
+    .map((q) => {
+      const match = answers.find((a) => a.question_id === q.id);
+      const answerText = match?.answer_text?.trim() || "(no answer provided)";
+      return `### Question [${q.id}]${q.is_required ? " (required)" : ""}
+${q.prompt}
+
+Answer:
+${answerText}`;
+    })
+    .join("\n\n");
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert ATS evaluator scoring written screening answers. Score each answer 0-100 based on:
+- Relevance and specificity (did the candidate answer the question?)
+- Concrete evidence (examples, metrics, outcomes)
+- Depth of reasoning
+- Alignment with the role
+
+Then compute an overall_score as the simple average of per-answer scores (0-100, rounded).
+
+If a required question is unanswered or answered generically ("(no answer provided)", filler text), score it below 30.
+
+Return JSON in this exact format:
+{
+  "overall_score": number,
+  "overall_rationale": "2-3 sentence summary of the candidate's screening answers",
+  "answers": [
+    { "question_id": "string", "score": number, "rationale": "1-2 sentence per-answer justification" }
+  ]
+}
+
+Rules:
+- answers array must have exactly one entry per input question, in the same order
+- question_id must match the input id verbatim
+- overall_rationale references specific answers, not generic fluff`,
+      },
+      {
+        role: "user",
+        content: `## Job Description
+${jobDescription}
+
+## Candidate Answers
+${qaPairs}`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("OpenAI returned an empty response for answer scoring");
+  }
+
+  const parsed = JSON.parse(content) as AnswerScoringResult;
+
+  const overall = Math.max(0, Math.min(100, Math.round(parsed.overall_score)));
+  return {
+    overall_score: overall,
+    overall_rationale: parsed.overall_rationale || "No rationale provided.",
+    answers: (parsed.answers || []).map((a) => ({
+      question_id: String(a.question_id),
+      score: Math.max(0, Math.min(100, Math.round(a.score))),
+      rationale: String(a.rationale || ""),
+    })),
+  };
+}

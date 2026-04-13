@@ -121,3 +121,26 @@ export const candidateStageSchema = z.enum(candidateStageValues);
 // ─── UUID Validation ────────────────────────────────────────────────────────
 
 export const uuidSchema = z.string().uuid("Invalid ID format");
+
+// ─── Screening Questions ────────────────────────────────────────────────────
+
+export const screeningQuestionSchema = z.object({
+  id: z.string().optional(),
+  prompt: z.string().min(10, "Question is too short").max(1000, "Question is too long"),
+  is_required: z.boolean(),
+});
+
+export const screeningQuestionsArraySchema = z
+  .array(screeningQuestionSchema)
+  .min(1, "At least one question is required")
+  .max(15, "Too many questions");
+
+export const screeningAnswerSchema = z.object({
+  question_id: uuidSchema,
+  answer_text: z.string().min(1, "Answer cannot be empty").max(5000, "Answer is too long"),
+});
+
+export const screeningAnswerSubmissionSchema = z.object({
+  token: z.string().min(10).max(2000),
+  answers: z.array(screeningAnswerSchema).min(1, "No answers submitted").max(15),
+});
