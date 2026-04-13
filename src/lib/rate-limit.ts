@@ -54,4 +54,10 @@ export function checkRateLimit(userId: string, options: RateLimitOptions): void 
       store.delete(key);
     }
   }
+
+  // Also drop the whole bucket if it's empty — otherwise the outer `stores`
+  // Map keeps growing every time a new bucket name is used and then drains.
+  if (store.size === 0) {
+    stores.delete(name);
+  }
 }

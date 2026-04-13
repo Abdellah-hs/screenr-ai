@@ -22,15 +22,16 @@ export async function fetchApplicationForScreeningSend(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
+  const selectWithCampaignAndCandidate = `
+    id,
+    campaign_id,
+    campaigns!inner ( id, title, user_id ),
+    candidates!inner ( first_name, last_name, email )
+  `;
   const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select(`
-      id,
-      campaign_id,
-      campaigns!inner ( id, title, user_id ),
-      candidates!inner ( first_name, last_name, email )
-    ` as any)
+    .select(selectWithCampaignAndCandidate as any)
     .eq("id", applicationId)
     .single();
 
@@ -74,16 +75,17 @@ export async function fetchApplicationsReadyForScreeningSend(
     .single();
   if (!campaign) return [];
 
+  const selectWithCandidate = `
+    id,
+    campaign_id,
+    status,
+    resume_score,
+    candidates!inner ( first_name, last_name, email )
+  `;
   const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select(`
-      id,
-      campaign_id,
-      status,
-      resume_score,
-      candidates!inner ( first_name, last_name, email )
-    ` as any)
+    .select(selectWithCandidate as any)
     .eq("campaign_id", campaignId)
     .in("status", ["new", "screening"])
     .not("resume_score", "is", null);
