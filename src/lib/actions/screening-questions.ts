@@ -8,7 +8,10 @@ import {
   uuidSchema,
   screeningQuestionsArraySchema,
 } from "@/lib/validations";
-import { generateQuestionsForRole } from "@/lib/services/screening-questions";
+import {
+  generateQuestionsForRole,
+  scoreAnswers,
+} from "@/lib/services/screening-questions";
 import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
 import { sendEmail } from "@/lib/services/email";
 import { buildScreeningQuestionsEmail } from "@/lib/services/email-templates/screening-questions";
@@ -19,7 +22,10 @@ import {
   upsertPendingScreeningResponse,
   fetchApplicationForScreeningSend,
   fetchApplicationsReadyForScreeningSend,
+  fetchScreeningResponseByApplicationId,
+  saveAnswerScores,
   type ScreeningQuestionRow,
+  type ScreeningResponseRow,
 } from "@/lib/data/screening-questions";
 
 async function requireCampaignOwner(campaignId: string) {
@@ -200,6 +206,99 @@ export async function sendScreeningQuestionsToCandidate(
   revalidatePath(`/campaigns/${app.campaign_id}`);
   revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
   return { sent: true };
+}
+
+// ─── Per-candidate Reads & Scoring ──────────────────────────────────────────
+
+export interface CandidateScreeningState {
+  questions: ScreeningQuestionRow[];
+  response: ScreeningResponseRow | null;
+}
+
+/**
+ * Bundled read for the candidate detail page: the campaign's question set
+ * and the candidate's response row (if any).
+ */
+export async function getCandidateScreeningState(
+  applicationId: string
+): Promise<CandidateScreeningState> {
+  uuidSchema.parse(applicationId);
+
+  const app = await fetchApplicationForScreeningSend(applicationId);
+  if (!app) throw new Error("Application not found or access denied");
+
+  const [questions, response] = await Promise.all([
+    fetchScreeningQuestionsByCampaignId(app.campaign_id),
+    fetchScreeningResponseByApplicationId(applicationId),
+  ]);
+
+  return { questions, response };
+}
+
+/**
+ * Score a candidate's screening answers with OpenAI. Must be a responded
+ * (but not yet scored) row, otherwise throws. Writes overall + per-answer
+ * scores back to the response row.
+ */
+export async function scoreScreeningAnswers(
+  applicationId: string
+): Promise<{ overall_score: number }> {
+  uuidSchema.parse(applicationId);
+
+  const app = await fetchApplicationForScreeningSend(applicationId);
+  if (!app) throw new Error("Application not found or access denied");
+  const user = await requireCampaignOwner(app.campaign_id);
+
+  checkRateLimit(user.id, {
+    name: "ai-generate",
+    maxRequests: 10,
+    windowMs: 5 * 60 * 1000,
+  });
+
+  const [response, questions, config] = await Promise.all([
+    fetchScreeningResponseByApplicationId(applicationId),
+    fetchScreeningQuestionsByCampaignId(app.campaign_id),
+    fetchCampaignScoringConfig(app.campaign_id),
+  ]);
+
+  if (!response) throw new Error("No screening response to score");
+  if (response.status === "scored") {
+    throw new Error("These answers have already been scored");
+  }
+  if (response.status !== "responded") {
+    throw new Error(
+      "This candidate hasn't submitted answers yet. You can only score once they respond."
+    );
+  }
+  if (!config?.description) {
+    throw new Error("Campaign is missing a job description — can't score without context.");
+  }
+
+  const answerInputs = (response.answers ?? []).map((a) => ({
+    question_id: a.question_id,
+    answer_text: a.answer_text ?? "",
+  }));
+
+  const result = await scoreAnswers({
+    jobDescription: config.description,
+    questions: questions.map((q) => ({
+      id: q.id,
+      prompt: q.prompt,
+      is_required: q.is_required,
+    })),
+    answers: answerInputs,
+  });
+
+  await saveAnswerScores(
+    applicationId,
+    { score: result.overall_score, rationale: result.overall_rationale },
+    result.answers
+  );
+
+  revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
+  revalidatePath(`/campaigns/${app.campaign_id}`);
+
+  return { overall_score: result.overall_score };
 }
 
 /**
