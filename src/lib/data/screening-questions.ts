@@ -1,5 +1,112 @@
 import { createClient } from "@/lib/supabase/server";
 
+export interface ApplicationForScreeningSend {
+  application_id: string;
+  campaign_id: string;
+  campaign_title: string;
+  candidate_name: string;
+  candidate_email: string;
+}
+
+/**
+ * Minimal join used by the "send screening questions" flow. Returns
+ * everything needed to write a response row, sign a token, and compose
+ * the candidate email — or null if the application doesn't belong to
+ * a campaign owned by the current user.
+ */
+export async function fetchApplicationForScreeningSend(
+  applicationId: string
+): Promise<ApplicationForScreeningSend | null> {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from("applications")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(`
+      id,
+      campaign_id,
+      campaigns!inner ( id, title, user_id ),
+      candidates!inner ( first_name, last_name, email )
+    ` as any)
+    .eq("id", applicationId)
+    .single();
+
+  if (error || !data) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = data as any;
+  if (row.campaigns?.user_id !== user.id) return null;
+  if (!row.candidates?.email) return null;
+
+  return {
+    application_id: row.id,
+    campaign_id: row.campaign_id,
+    campaign_title: row.campaigns.title,
+    candidate_name:
+      `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
+      row.candidates.email,
+    candidate_email: row.candidates.email,
+  };
+}
+
+/**
+ * All applications in a campaign that are ready to receive screening
+ * questions: they've been resume-scored, they're still in an early stage,
+ * and the candidate has an email. Used by the bulk-send button.
+ */
+export async function fetchApplicationsReadyForScreeningSend(
+  campaignId: string
+): Promise<ApplicationForScreeningSend[]> {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  // Ownership check
+  const { data: campaign } = await supabase
+    .from("campaigns")
+    .select("id, title")
+    .eq("id", campaignId)
+    .eq("user_id", user.id)
+    .single();
+  if (!campaign) return [];
+
+  const { data, error } = await supabase
+    .from("applications")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(`
+      id,
+      campaign_id,
+      status,
+      resume_score,
+      candidates!inner ( first_name, last_name, email )
+    ` as any)
+    .eq("campaign_id", campaignId)
+    .in("status", ["new", "screening"])
+    .not("resume_score", "is", null);
+
+  if (error || !data) return [];
+
+  const results: ApplicationForScreeningSend[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of data as any[]) {
+    if (!row.candidates?.email) continue;
+    results.push({
+      application_id: row.id,
+      campaign_id: row.campaign_id,
+      campaign_title: campaign.title,
+      candidate_name:
+        `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
+        row.candidates.email,
+      candidate_email: row.candidates.email,
+    });
+  }
+  return results;
+}
+
 export interface ScreeningQuestionRow {
   id: string;
   campaign_id: string;

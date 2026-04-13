@@ -8,6 +8,7 @@ import RubricDisplay from "@/components/campaigns/rubric-display";
 import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
+import { SendScreeningQuestionsBulkButton } from "@/components/candidates/send-screening-questions-button";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
 import type { CandidateStage } from "@/lib/constants";
 
@@ -175,12 +176,17 @@ export default async function CampaignDetailPage({
 
       {/* Pipeline Stages */}
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="flex flex-wrap items-center gap-4">
             <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
               Pipeline
             </h2>
             <GmailSyncButton campaignId={id} />
+            <SendScreeningQuestionsBulkButton
+              campaignId={id}
+              disabled={screeningQuestions.length === 0}
+              disabledReason="Set up screening questions first"
+            />
           </div>
           <Link
             href={`/campaigns/${id}/candidates`}
