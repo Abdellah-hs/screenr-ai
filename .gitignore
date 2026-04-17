@@ -45,7 +45,6 @@ next-env.d.ts
 .agents/
 .claude/
 .gemini/
-.github/workflows/
 design-system/
 build.log
 build.txt
