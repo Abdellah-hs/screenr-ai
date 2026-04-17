@@ -296,6 +296,31 @@ export async function upsertPendingScreeningResponse(
   return data as unknown as ScreeningResponseRow;
 }
 
+/**
+ * Flip a pending response row to `expired`. Called by the rule layer when
+ * `expires_at` has passed without the candidate submitting — the UI already
+ * handles the `expired` status but nothing else currently emits it.
+ */
+export async function markScreeningResponseExpired(
+  applicationId: string
+): Promise<void> {
+  const supabase = await createClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+
+  const { error } = await db
+    .from("screening_question_responses")
+    .update({ status: "expired" })
+    .eq("application_id", applicationId)
+    .eq("status", "sent");
+
+  if (error) {
+    throw new Error(
+      `Failed to mark screening response expired: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
 export async function saveCandidateAnswers(
   applicationId: string,
   answers: { question_id: string; prompt: string; answer_text: string }[]

@@ -202,7 +202,7 @@ Open violations to migrate:
 - Screening questions are implemented as text Q&A; PRD 3.4.3 requires video/audio recordings — see PRD-Critical Product Rules below.
 - `upsertCandidate` auto-merges on email; PRD requires flagging duplicates for HR review instead.
 - Interview scheduling, AI reference check, and final interview scheduling are not yet implemented as first-class stages — see PRD-Critical Product Rules.
-- Failure states (`screening_expired`, `interview_no_show`, `processing_failed`) from CLAUDE.md's state diagram are not yet in the enum. Add once the corresponding features exist.
+- `interview_no_show` and `processing_failed` exist in the enum but have no emission paths yet — add as interview scheduling and resume-parse error handling land.
 
 Completed:
 - `updateApplicationStage` and `advanceApplicationStatus` now delegate to `transitionApplication()` in `src/lib/data/transitions.ts` — no direct `status` writes remain.
@@ -211,6 +211,7 @@ Completed:
 - `candidate_stage_enum` expanded with the canonical set (`screening_review_pending`, `screening_approved`, `screening_sent`, `screening_completed`, `screening_scored`, `interview_scheduling`, `interview_scheduled`, `interview_completed`, `interview_scored`, `reference_check`, `final_interview_scheduling`, `archived`) in `supabase/migrations/20260418000000_expand_candidate_stage_enum.sql`. `APPLICATION_STATE_TRANSITIONS` in `src/lib/constants.ts` updated in lockstep.
 - HITL branch of `evaluateResumeScoringOutcome` now transitions to `screening_review_pending` (from `new`) instead of silently staying in `new`. Auto-mode uses `screening_approved`. `fetchApplicationsReadyForScreeningSend` accepts both the legacy `screening_q` and canonical `screening_approved` states.
 - Screening send/score flows now emit application transitions. `buildAndSendOne` (in `src/lib/actions/screening-questions.ts`) transitions to `screening_sent` after seeding the response row; `scoreScreeningAnswers` transitions `screening_sent → screening_completed` before the AI call and `screening_completed → screening_scored` (actor `ai`) after `saveAnswerScores`. Idempotent via the RPC's same-state guard.
+- Failure states added to `candidate_stage_enum` + `APPLICATION_STATE_TRANSITIONS` (`supabase/migrations/20260419000000_failure_states.sql`): `screening_expired`, `interview_no_show`, `processing_failed`. `getCandidateScreeningState` lazily emits `screening_expired` + flips the response row to `expired` when a recruiter opens a candidate past the response deadline (no cron yet — authed read is the trigger).
 
 When touching any code that changes application state, migrate it toward these rules rather than extending the old pattern.
 

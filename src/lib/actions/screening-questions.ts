@@ -23,6 +23,7 @@ import {
   fetchApplicationForScreeningSend,
   fetchApplicationsReadyForScreeningSend,
   fetchScreeningResponseByApplicationId,
+  markScreeningResponseExpired,
   saveAnswerScores,
   type ScreeningQuestionRow,
   type ScreeningResponseRow,
@@ -228,6 +229,10 @@ export interface CandidateScreeningState {
 /**
  * Bundled read for the candidate detail page: the campaign's question set
  * and the candidate's response row (if any).
+ *
+ * Also emits a lazy `screening_expired` transition + flips the response row
+ * to `expired` when the recruiter opens a candidate whose link lapsed without
+ * a submission. No cron yet — the authed recruiter read is the trigger.
  */
 export async function getCandidateScreeningState(
   applicationId: string
@@ -242,7 +247,23 @@ export async function getCandidateScreeningState(
     fetchScreeningResponseByApplicationId(applicationId),
   ]);
 
-  return { questions, response };
+  let liveResponse = response;
+  if (
+    response?.status === "sent" &&
+    response.expires_at &&
+    new Date(response.expires_at).getTime() < Date.now()
+  ) {
+    await markScreeningResponseExpired(applicationId);
+    await transitionApplication({
+      applicationId,
+      toState: "screening_expired",
+      actor: "system",
+      rationale: "Screening link expired before candidate response",
+    });
+    liveResponse = { ...response, status: "expired" };
+  }
+
+  return { questions, response: liveResponse };
 }
 
 /**
