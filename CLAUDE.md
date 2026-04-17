@@ -198,7 +198,7 @@ Separate concept from applications. Stores `{candidate_id, historical_scores, no
 
 Open violations to migrate:
 - Legacy states (`screening`, `screening_q`, `interview`) still exist in `candidate_stage_enum` and in `APPLICATION_STATE_TRANSITIONS`. They currently bridge into the canonical track — a future migration should re-map existing rows onto canonical names and drop the legacy values.
-- Sending screening questions does NOT transition the application through `screening_sent` → `screening_completed` → `screening_scored`. The response row has its own status lifecycle (`pending | sent | responded | scored`) but the application status stays put. Wire these transitions next.
+- The candidate-facing `submitScreeningAnswers` path does NOT transition the application (no recruiter auth on the public path, and `transition_application` requires `auth.uid()` to match the campaign owner). The recruiter's `scoreScreeningAnswers` catches up by transitioning `screening_sent → screening_completed → screening_scored` in one call. A token-scoped RPC would let candidate submit emit `screening_completed` directly; do this when the pipeline view needs the intermediate state.
 - Screening questions are implemented as text Q&A; PRD 3.4.3 requires video/audio recordings — see PRD-Critical Product Rules below.
 - `upsertCandidate` auto-merges on email; PRD requires flagging duplicates for HR review instead.
 - Interview scheduling, AI reference check, and final interview scheduling are not yet implemented as first-class stages — see PRD-Critical Product Rules.
@@ -210,6 +210,7 @@ Completed:
 - Resume scoring and transition are now split: `scoreApplicationResume()` produces evidence only; `evaluateResumeScoringOutcome()` is the rule layer that decides the transition (both in `src/lib/actions/candidates.ts`).
 - `candidate_stage_enum` expanded with the canonical set (`screening_review_pending`, `screening_approved`, `screening_sent`, `screening_completed`, `screening_scored`, `interview_scheduling`, `interview_scheduled`, `interview_completed`, `interview_scored`, `reference_check`, `final_interview_scheduling`, `archived`) in `supabase/migrations/20260418000000_expand_candidate_stage_enum.sql`. `APPLICATION_STATE_TRANSITIONS` in `src/lib/constants.ts` updated in lockstep.
 - HITL branch of `evaluateResumeScoringOutcome` now transitions to `screening_review_pending` (from `new`) instead of silently staying in `new`. Auto-mode uses `screening_approved`. `fetchApplicationsReadyForScreeningSend` accepts both the legacy `screening_q` and canonical `screening_approved` states.
+- Screening send/score flows now emit application transitions. `buildAndSendOne` (in `src/lib/actions/screening-questions.ts`) transitions to `screening_sent` after seeding the response row; `scoreScreeningAnswers` transitions `screening_sent → screening_completed` before the AI call and `screening_completed → screening_scored` (actor `ai`) after `saveAnswerScores`. Idempotent via the RPC's same-state guard.
 
 When touching any code that changes application state, migrate it toward these rules rather than extending the old pattern.
 

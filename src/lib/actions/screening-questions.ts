@@ -27,6 +27,7 @@ import {
   type ScreeningQuestionRow,
   type ScreeningResponseRow,
 } from "@/lib/data/screening-questions";
+import { transitionApplication } from "@/lib/data/transitions";
 
 async function requireCampaignOwner(campaignId: string) {
   uuidSchema.parse(campaignId);
@@ -134,6 +135,15 @@ async function buildAndSendOne(params: {
     questions.map((q) => ({ question_id: q.id, prompt: q.prompt })),
     expiresAt
   );
+
+  // Advance the application to screening_sent. Idempotent via the RPC's
+  // same-state guard, so retries after a failed email send don't double-log.
+  await transitionApplication({
+    applicationId,
+    toState: "screening_sent",
+    actor: "system",
+    rationale: "Screening questions emailed to candidate",
+  });
 
   const token = signResponseToken(applicationId, RESPONSE_TTL_MS);
   const respondUrl = `${origin}/respond/${encodeURIComponent(token)}`;
@@ -274,6 +284,16 @@ export async function scoreScreeningAnswers(
     throw new Error("Campaign is missing a job description — can't score without context.");
   }
 
+  // Acknowledge the candidate's submission at the application level. The
+  // public submit path can't transition (no recruiter auth), so we catch
+  // up here before the AI call. Idempotent via same-state guard.
+  await transitionApplication({
+    applicationId,
+    toState: "screening_completed",
+    actor: "system",
+    rationale: "Candidate submitted screening answers",
+  });
+
   const answerInputs = (response.answers ?? []).map((a) => ({
     question_id: a.question_id,
     answer_text: a.answer_text ?? "",
@@ -294,6 +314,13 @@ export async function scoreScreeningAnswers(
     { score: result.overall_score, rationale: result.overall_rationale },
     result.answers
   );
+
+  await transitionApplication({
+    applicationId,
+    toState: "screening_scored",
+    actor: "ai",
+    rationale: `Screening score ${result.overall_score}`,
+  });
 
   revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
   revalidatePath(`/campaigns/${app.campaign_id}`);

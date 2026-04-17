@@ -191,5 +191,11 @@ export async function submitScreeningAnswers(input: {
 
   await saveCandidateAnswers(application_id, answers);
 
+  // The application stays in screening_sent; the response row's "responded"
+  // status is the evidence the candidate submitted. transitionApplication()
+  // requires auth.uid() to match the campaign owner, which we don't have on
+  // this public path. The recruiter's scoreScreeningAnswers action advances
+  // screening_sent → screening_completed → screening_scored under their auth.
+
   return { ok: true };
 }
