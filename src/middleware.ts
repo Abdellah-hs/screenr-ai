@@ -34,7 +34,6 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isAuthPage = request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup";
-  const isPublicPage = request.nextUrl.pathname === "/";
   const isCampaignPage = request.nextUrl.pathname.startsWith("/campaigns");
 
   // Protect /campaigns routes - redirect to /login if not authenticated

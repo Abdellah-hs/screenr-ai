@@ -53,10 +53,32 @@ export async function sendEmail(params: SendEmailParams): Promise<string> {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 
-  const res = await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw },
-  });
-
-  return res.data.id ?? "";
+  try {
+    const res = await gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw },
+    });
+    return res.data.id ?? "";
+  } catch (err: unknown) {
+    // Surface a human-readable message for the common OAuth failure modes
+    // so recruiters see what to do instead of a raw "invalid_grant" string.
+    const e = err as { message?: string; response?: { data?: { error?: string } } };
+    const oauthError = e.response?.data?.error ?? e.message ?? "";
+    if (
+      oauthError.includes("invalid_grant") ||
+      oauthError.includes("Token has been expired or revoked")
+    ) {
+      throw new Error(
+        "Gmail authorization has expired. The recruiter needs to regenerate GOOGLE_REFRESH_TOKEN — see the screening-questions setup guide."
+      );
+    }
+    if (oauthError.includes("invalid_client")) {
+      throw new Error(
+        "Gmail OAuth client credentials are invalid. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local."
+      );
+    }
+    throw new Error(
+      `Failed to send email via Gmail: ${e.message ?? "unknown error"}`
+    );
+  }
 }

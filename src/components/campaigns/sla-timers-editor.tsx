@@ -25,7 +25,7 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
     setTimers(timers.filter((_, i) => i !== index));
   };
 
-  const updateTimer = (index: number, field: keyof SlaTimer, value: any) => {
+  const updateTimer = <K extends keyof SlaTimer>(index: number, field: K, value: SlaTimer[K]) => {
     const newTimers = [...timers];
     newTimers[index] = { ...newTimers[index], [field]: value };
     setTimers(newTimers);
@@ -76,7 +76,7 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
                   <label className="block text-xs text-[#374151] mb-1">Stage</label>
                   <select
                     value={timer.stage}
-                    onChange={(e) => updateTimer(index, "stage", e.target.value)}
+                    onChange={(e) => updateTimer(index, "stage", e.target.value as SlaTimer["stage"])}
                     className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
                   >
                     <option value={timer.stage}>

@@ -11,6 +11,31 @@ import type {
   SlaTimer,
   PipelineStageCount,
 } from "@/lib/constants";
+import type { Database } from "@/types/database.types";
+
+type CampaignInsert = Database["public"]["Tables"]["campaigns"]["Insert"];
+type CampaignUpdate = Database["public"]["Tables"]["campaigns"]["Update"];
+type ScreeningCriterionRow = Database["public"]["Tables"]["screening_criteria"]["Row"];
+type EvaluationRubricRow = Database["public"]["Tables"]["evaluation_rubrics"]["Row"];
+type RubricDimensionRow = Database["public"]["Tables"]["rubric_dimensions"]["Row"];
+type CampaignReviewerRow = Database["public"]["Tables"]["campaign_reviewers"]["Row"];
+type SlaTimerRow = Database["public"]["Tables"]["sla_timers"]["Row"];
+
+type RubricInput = {
+  stage: "resume" | "screening_q" | "interview";
+  dimensions?: Omit<RubricDimension, "id">[];
+};
+type ReviewerInput = {
+  user_id?: string;
+  role: "lead" | "reviewer" | "observer";
+};
+type SlaTimerInput = {
+  stage: string;
+  time_limit_hours: number;
+  alert_threshold_hours: number;
+  escalation_threshold_hours: number;
+};
+type ScreeningCriterionInput = Omit<ScreeningCriterion, "id">;
 
 const DEFAULT_PIPELINE: PipelineStageCount[] = [
   { name: "Applied", key: "applied", count: 0 },
@@ -75,7 +100,7 @@ export async function fetchAllCampaigns(): Promise<Campaign[]> {
 
   if (error || !rows) return [];
 
-  const campaignIds = rows.map((r: any) => r.id);
+  const campaignIds = rows.map((r) => r.id);
 
   const [criteriaRes, rubricsRes, dimensionsRes, reviewersRes, slaRes] =
     await Promise.all([
@@ -92,51 +117,51 @@ export async function fetchAllCampaigns(): Promise<Campaign[]> {
   const reviewersByC = groupBy(reviewersRes.data || [], "campaign_id");
   const slaByC = groupBy(slaRes.data || [], "campaign_id");
 
-  return rows.map((row: any) => {
-    const rubrics = (rubricsByC[row.id] || []).map((r) => ({
+  return rows.map((row) => {
+    const rubrics = ((rubricsByC[row.id] || []) as EvaluationRubricRow[]).map((r) => ({
       id: r.id as string,
       campaign_id: r.campaign_id as string,
       stage: r.stage as "resume" | "screening_q" | "interview",
       version: r.version as number,
       is_active: r.is_active as boolean,
-      dimensions: (dimensionsByR[r.id as string] || []).map((d) => ({
-        id: d.id as string,
-        name: d.name as string,
-        weight: d.weight as number,
-        is_mandatory: d.is_mandatory as boolean,
-        min_score: d.min_score as number,
-        max_score: d.max_score as number,
-        sort_order: d.sort_order as number,
+      dimensions: ((dimensionsByR[r.id as string] || []) as RubricDimensionRow[]).map((d) => ({
+        id: d.id,
+        name: d.name,
+        weight: d.weight,
+        is_mandatory: d.is_mandatory,
+        min_score: d.min_score,
+        max_score: d.max_score,
+        sort_order: d.sort_order,
       })),
-      created_at: r.created_at as string,
-      archived_at: r.archived_at as string | null,
+      created_at: r.created_at,
+      archived_at: r.archived_at,
     }));
 
-    const reviewers = (reviewersByC[row.id] || []).map((r) => ({
-      id: r.id as string,
-      user_id: r.user_id as string,
+    const reviewers = ((reviewersByC[row.id] || []) as CampaignReviewerRow[]).map((r) => ({
+      id: r.id,
+      user_id: r.user_id,
       name: "",
       email: "",
       avatar_url: null,
-      role: r.role as "lead" | "reviewer" | "observer",
-      assigned_at: r.assigned_at as string,
+      role: r.role,
+      assigned_at: r.assigned_at,
     }));
 
-    const slaTimers = (slaByC[row.id] || []).map((s) => ({
+    const slaTimers = ((slaByC[row.id] || []) as SlaTimerRow[]).map((s) => ({
       stage: s.stage as SlaTimer["stage"],
-      time_limit_hours: s.time_limit_hours as number,
-      alert_threshold_hours: s.alert_threshold_hours as number,
-      escalation_threshold_hours: s.escalation_threshold_hours as number,
+      time_limit_hours: s.time_limit_hours,
+      alert_threshold_hours: s.alert_threshold_hours,
+      escalation_threshold_hours: s.escalation_threshold_hours,
     }));
 
-    const criteria = (criteriaByC[row.id] || []).map((c) => ({
-      id: c.id as string,
-      label: c.label as string,
-      weight: c.weight as number,
-      is_mandatory: c.is_mandatory as boolean,
+    const criteria = ((criteriaByC[row.id] || []) as ScreeningCriterionRow[]).map((c) => ({
+      id: c.id,
+      label: c.label,
+      weight: c.weight,
+      is_mandatory: c.is_mandatory,
     }));
 
-    return assembleCampaign(row, criteria, rubrics, reviewers, slaTimers);
+    return assembleCampaign(row as unknown as Record<string, unknown>, criteria, rubrics, reviewers, slaTimers);
   });
 }
 
@@ -165,57 +190,57 @@ export async function fetchCampaignById(id: string): Promise<Campaign | null> {
     supabase.from("sla_timers").select("*").eq("campaign_id", id),
   ]);
 
-  const rubricIds = (rubricsRes.data || []).map((r: any) => r.id);
+  const rubricIds = (rubricsRes.data || []).map((r) => r.id);
   const dimensionsRes = rubricIds.length > 0
     ? await supabase.from("rubric_dimensions").select("*").in("rubric_id", rubricIds).is("deleted_at", null)
-    : { data: [] };
+    : { data: [] as RubricDimensionRow[] };
 
   const dimensionsByR = groupBy(dimensionsRes.data || [], "rubric_id");
 
-  const rubrics: EvaluationRubric[] = (rubricsRes.data || []).map((r: any) => ({
+  const rubrics: EvaluationRubric[] = (rubricsRes.data || []).map((r) => ({
     id: r.id,
     campaign_id: r.campaign_id,
     stage: r.stage as "resume" | "screening_q" | "interview",
     version: r.version,
     is_active: r.is_active,
-    dimensions: (dimensionsByR[r.id] || []).map((d) => ({
-      id: d.id as string,
-      name: d.name as string,
-      weight: d.weight as number,
-      is_mandatory: d.is_mandatory as boolean,
-      min_score: d.min_score as number,
-      max_score: d.max_score as number,
-      sort_order: d.sort_order as number,
+    dimensions: ((dimensionsByR[r.id] || []) as RubricDimensionRow[]).map((d) => ({
+      id: d.id,
+      name: d.name,
+      weight: d.weight,
+      is_mandatory: d.is_mandatory,
+      min_score: d.min_score,
+      max_score: d.max_score,
+      sort_order: d.sort_order,
     })),
     created_at: r.created_at,
     archived_at: r.archived_at,
   }));
 
-  const reviewers: CampaignReviewer[] = (reviewersRes.data || []).map((r: any) => ({
+  const reviewers: CampaignReviewer[] = (reviewersRes.data || []).map((r) => ({
     id: r.id,
     user_id: r.user_id,
     name: "",
     email: "",
     avatar_url: null,
-    role: r.role as "lead" | "reviewer" | "observer",
+    role: r.role,
     assigned_at: r.assigned_at,
   }));
 
-  const slaTimers: SlaTimer[] = (slaRes.data || []).map((s: any) => ({
+  const slaTimers: SlaTimer[] = (slaRes.data || []).map((s) => ({
     stage: s.stage as SlaTimer["stage"],
     time_limit_hours: s.time_limit_hours,
     alert_threshold_hours: s.alert_threshold_hours,
     escalation_threshold_hours: s.escalation_threshold_hours,
   }));
 
-  const criteria: ScreeningCriterion[] = (criteriaRes.data || []).map((c: any) => ({
+  const criteria: ScreeningCriterion[] = (criteriaRes.data || []).map((c) => ({
     id: c.id,
     label: c.label,
     weight: c.weight,
     is_mandatory: c.is_mandatory,
   }));
 
-  return assembleCampaign(row, criteria, rubrics, reviewers, slaTimers);
+  return assembleCampaign(row as unknown as Record<string, unknown>, criteria, rubrics, reviewers, slaTimers);
 }
 
 // ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
@@ -245,22 +270,22 @@ export async function fetchCampaignScoringConfig(campaignId: string) {
     description: row.description as string,
     automation_mode: row.automation_mode as AutomationMode,
     screening_threshold: row.screening_threshold as number,
-    screening_criteria: (criteria || []).map((c: any) => ({
-      id: c.id as string,
-      label: c.label as string,
-      weight: c.weight as number,
-      is_mandatory: c.is_mandatory as boolean,
+    screening_criteria: (criteria || []).map((c) => ({
+      id: c.id,
+      label: c.label,
+      weight: c.weight,
+      is_mandatory: c.is_mandatory,
     })),
   };
 }
 
 // ─── Mutation Helpers
 export async function insertCampaignTx(
-  payload: any,
-  screeningCriteria: any[],
-  rubrics: any[],
-  slaTimers: any[],
-  reviewers: any[],
+  payload: Omit<CampaignInsert, "user_id">,
+  screeningCriteria: ScreeningCriterionInput[],
+  rubrics: RubricInput[],
+  slaTimers: SlaTimerInput[],
+  reviewers: ReviewerInput[],
   userId: string
 ): Promise<string> {
   const supabase = await createClient();
@@ -300,9 +325,9 @@ export async function insertCampaignTx(
       .select()
       .single();
 
-    if (insertedRubric && rubric.dimensions?.length > 0) {
+    if (insertedRubric && rubric.dimensions && rubric.dimensions.length > 0) {
       await supabase.from("rubric_dimensions").insert(
-        rubric.dimensions.map((d: RubricDimension) => ({
+        rubric.dimensions.map((d) => ({
           rubric_id: insertedRubric.id,
           name: d.name,
           weight: d.weight,
@@ -354,7 +379,7 @@ export async function insertCampaignTx(
 
 export async function updateCampaignTx(
   id: string,
-  payload: any,
+  payload: CampaignUpdate,
   screeningCriteria: Omit<ScreeningCriterion, "id">[],
   slaTimers: { stage: string; time_limit_hours: number; alert_threshold_hours: number; escalation_threshold_hours: number }[],
   userId: string

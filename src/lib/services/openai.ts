@@ -4,10 +4,36 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+export type ResumeExperience = {
+  company: string;
+  title: string;
+  duration: string;
+  description: string;
+};
+
+export type ResumeEducation = {
+  institution: string;
+  degree: string;
+  graduation_year: string;
+};
+
+export type ParsedResumeData = {
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  location: string;
+  linkedin_url: string;
+  portfolio_url: string;
+  skills: string[];
+  experience: ResumeExperience[];
+  education: ResumeEducation[];
+};
+
 /**
  * Extracts structured candidate data from raw PDF text using OpenAI
  */
-export async function extractResumeData(pdfText: string) {
+export async function extractResumeData(pdfText: string): Promise<ParsedResumeData> {
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     messages: [
@@ -86,6 +112,6 @@ export async function extractResumeData(pdfText: string) {
 
   const content = response.choices[0].message.content;
   if (!content) throw new Error("Failed to parse resume with OpenAI");
-  
-  return JSON.parse(content);
+
+  return JSON.parse(content) as ParsedResumeData;
 }

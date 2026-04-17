@@ -66,7 +66,7 @@ export function StageChanger({
         disabled={isPending}
         className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md capitalize cursor-pointer transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1 ${stageColors[stage]} ${isPending ? "opacity-50" : ""}`}
       >
-        {isPending ? "Updating..." : stage}
+        {isPending ? "Updating..." : (stages.find((s) => s.value === stage)?.label ?? stage)}
         <svg
           className={`w-3 h-3 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
           fill="none"
