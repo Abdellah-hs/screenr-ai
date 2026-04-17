@@ -52,3 +52,7 @@ build.txt
 out.txt
 screenr-ai-project-context.md
 skills.md
+
+# generated docs (keep HTML source, skip binary output)
+docs/*.pdf
+compile_errors*.txt
