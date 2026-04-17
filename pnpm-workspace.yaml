@@ -1,4 +1,0 @@
-# Ignore native addon builds for faster installs (not needed at runtime in Next.js)
-ignoredBuiltDependencies:
-  - sharp
-  - unrs-resolver
