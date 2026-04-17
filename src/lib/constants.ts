@@ -200,3 +200,90 @@ export const TIER_LABELS: Record<ScreeningTier, string> = {
 
 export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "offer", "hired"];
 
+// ─── Application State Machine ──────────────────────────────────────────────
+// The DB enum `candidate_stage_enum` is the source of truth for an
+// application's pipeline state. All transitions MUST go through
+// `transitionApplication()` (see src/lib/data/transitions.ts) and are
+// validated against the map below. See CLAUDE.md → ATS State Machine Rules.
+
+export type ApplicationState =
+  // Entry
+  | "new"
+  // Legacy screening stages (kept for backward compat with existing rows;
+  // new flows should use the canonical names below).
+  | "screening"
+  | "screening_q"
+  | "interview"
+  // Canonical screening stages
+  | "screening_review_pending"
+  | "screening_approved"
+  | "screening_sent"
+  | "screening_completed"
+  | "screening_scored"
+  // Canonical interview stages
+  | "interview_scheduling"
+  | "interview_scheduled"
+  | "interview_completed"
+  | "interview_scored"
+  // Post-interview
+  | "reference_check"
+  | "manager_review"
+  | "final_interview_scheduling"
+  // Terminal
+  | "rejected"
+  | "hired"
+  | "withdrawn"
+  | "archived";
+
+/**
+ * Legal transitions per state. The key is the from_state; the array lists
+ * every legal to_state. Empty array = terminal state.
+ *
+ * Dual-track during the legacy→canonical migration: the old values
+ * (`screening`, `screening_q`, `interview`) remain legal so existing rows
+ * keep working, but their transitions bridge into the canonical track.
+ * New flows should emit canonical names directly.
+ */
+export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, ApplicationState[]> = {
+  // Entry — `new` can go to HITL review, straight to approved (auto), or legacy tracks.
+  new: [
+    "screening_review_pending",
+    "screening_approved",
+    "screening",
+    "screening_q",
+    "rejected",
+    "withdrawn",
+  ],
+
+  // Legacy screening bridges
+  screening: ["screening_q", "screening_sent", "rejected", "withdrawn"],
+  screening_q: ["screening_sent", "interview", "rejected", "withdrawn"],
+  interview: ["interview_scored", "manager_review", "rejected", "withdrawn"],
+
+  // Canonical screening track
+  screening_review_pending: ["screening_approved", "rejected", "withdrawn"],
+  screening_approved: ["screening_sent", "rejected", "withdrawn"],
+  screening_sent: ["screening_completed", "rejected", "withdrawn"],
+  screening_completed: ["screening_scored", "rejected", "withdrawn"],
+  screening_scored: ["interview_scheduling", "rejected", "withdrawn"],
+
+  // Canonical interview track
+  interview_scheduling: ["interview_scheduled", "rejected", "withdrawn"],
+  interview_scheduled: ["interview_completed", "rejected", "withdrawn"],
+  interview_completed: ["interview_scored", "rejected", "withdrawn"],
+  interview_scored: ["reference_check", "manager_review", "rejected", "withdrawn"],
+
+  // Post-interview
+  reference_check: ["manager_review", "rejected", "withdrawn"],
+  manager_review: ["final_interview_scheduling", "hired", "rejected", "withdrawn"],
+  final_interview_scheduling: ["hired", "rejected", "withdrawn"],
+
+  // Terminal — only `archived` is reachable from them (for housekeeping).
+  rejected: ["archived"],
+  hired: ["archived"],
+  withdrawn: ["archived"],
+  archived: [],
+};
+
+export type TransitionActor = "system" | "ai" | "recruiter";
+

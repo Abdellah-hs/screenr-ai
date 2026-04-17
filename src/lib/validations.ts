@@ -115,7 +115,10 @@ export const aiDescriptionSchema = z.string().min(10, "Description too short for
 
 // ─── Candidate Stage Validation ─────────────────────────────────────────────
 
-const candidateStageValues = ["new", "applied", "screening", "screening_q", "interview", "manager_review", "offer", "rejected", "hired", "withdrawn"] as const;
+// Must match the CandidateStage union in constants.ts exactly.
+// Note: the DB may store "new" as the initial status, but that is handled by
+// normalizeStage() in actions/candidates.ts and is never sent from the UI.
+const candidateStageValues = ["applied", "screening", "interview", "offer", "hired", "rejected"] as const;
 export const candidateStageSchema = z.enum(candidateStageValues);
 
 // ─── UUID Validation ────────────────────────────────────────────────────────
