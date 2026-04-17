@@ -45,10 +45,8 @@ export default async function CampaignDetailPage({
 
   const stageCounts: Record<string, number> = {};
   for (const c of candidates) {
-    if ('status' in c) {
-      const statusStr = String(c.status);
-      stageCounts[statusStr] = (stageCounts[statusStr] || 0) + 1;
-    }
+    const stageStr = String(c.stage);
+    stageCounts[stageStr] = (stageCounts[stageStr] || 0) + 1;
   }
 
   return (

@@ -87,7 +87,9 @@ export async function fetchApplicationsReadyForScreeningSend(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .select(selectWithCandidate as any)
     .eq("campaign_id", campaignId)
-    .in("status", ["new", "screening"])
+    // `screening_q` is legacy; `screening_approved` is the canonical post-
+    // resume-scoring state. Keep both so migrated rows keep flowing.
+    .in("status", ["screening_q", "screening_approved"])
     .not("resume_score", "is", null);
 
   if (error || !data) return [];
@@ -153,7 +155,10 @@ export async function fetchScreeningQuestionsByCampaignId(
     .order("sort_order", { ascending: true });
 
   if (error) {
-    console.error("Error fetching screening questions:", error);
+    console.error(
+      "Error fetching screening questions:",
+      JSON.stringify(error, null, 2)
+    );
     return [];
   }
   return (data || []) as unknown as ScreeningQuestionRow[];
@@ -173,7 +178,11 @@ export async function replaceScreeningQuestions(
     .from("screening_questions")
     .delete()
     .eq("campaign_id", campaignId);
-  if (deleteErr) throw deleteErr;
+  if (deleteErr) {
+    throw new Error(
+      `Failed to delete existing screening questions: ${deleteErr.message ?? JSON.stringify(deleteErr)}`
+    );
+  }
 
   if (questions.length === 0) return [];
 
@@ -189,7 +198,11 @@ export async function replaceScreeningQuestions(
     .insert(rows)
     .select();
 
-  if (error) throw error;
+  if (error) {
+    throw new Error(
+      `Failed to insert screening questions: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
   return (data || []) as unknown as ScreeningQuestionRow[];
 }
 
@@ -206,7 +219,10 @@ export async function fetchScreeningResponseByApplicationId(
     .maybeSingle();
 
   if (error) {
-    console.error("Error fetching screening response:", error);
+    console.error(
+      "Error fetching screening response:",
+      JSON.stringify(error, null, 2)
+    );
     return null;
   }
   return (data || null) as unknown as ScreeningResponseRow | null;
@@ -224,7 +240,10 @@ export async function fetchScreeningResponsesByCampaignId(
     .eq("applications.campaign_id", campaignId);
 
   if (error || !data) {
-    console.error("Error fetching screening responses:", error);
+    console.error(
+      "Error fetching screening responses:",
+      JSON.stringify(error, null, 2)
+    );
     return {};
   }
 
@@ -267,7 +286,13 @@ export async function upsertPendingScreeningResponse(
     .select()
     .single();
 
-  if (error || !data) throw error || new Error("Failed to upsert screening response");
+  if (error || !data) {
+    throw new Error(
+      `Failed to upsert screening response: ${
+        error?.message ?? (error ? JSON.stringify(error) : "no data returned")
+      }`
+    );
+  }
   return data as unknown as ScreeningResponseRow;
 }
 
@@ -296,7 +321,11 @@ export async function saveCandidateAnswers(
     })
     .eq("application_id", applicationId);
 
-  if (error) throw error;
+  if (error) {
+    throw new Error(
+      `Failed to save candidate answers: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
 }
 
 export async function saveAnswerScores(
@@ -330,5 +359,9 @@ export async function saveAnswerScores(
     })
     .eq("application_id", applicationId);
 
-  if (error) throw error;
+  if (error) {
+    throw new Error(
+      `Failed to save answer scores: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
 }

@@ -1,5 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { randomUUID } from "crypto";
+import type { ParsedResumeData } from "@/lib/services/openai";
+import type { Database, Json } from "@/types/database.types";
+import { transitionApplication } from "@/lib/data/transitions";
+import type { ApplicationState } from "@/lib/constants";
+
+type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
+type ScreeningTierEnum = Database["public"]["Enums"]["screening_tier_enum"];
 
 export async function uploadResumeToStorage(campaignId: string, filename: string, fileBuffer: Buffer): Promise<string> {
   const supabase = await createClient();
@@ -34,7 +41,7 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
   return data.signedUrl;
 }
 
-export async function upsertCandidate(structuredData: any): Promise<string> {
+export async function upsertCandidate(structuredData: ParsedResumeData): Promise<string> {
   const supabase = await createClient();
 
   const { data: existingCandidate } = await supabase
@@ -78,24 +85,62 @@ export async function upsertCandidate(structuredData: any): Promise<string> {
   }
 }
 
-export async function createApplicationIfNotExists(candidateId: string, campaignId: string, resumeUrl: string, structuredData: any): Promise<string> {
+export async function createApplicationIfNotExists(
+  candidateId: string,
+  campaignId: string,
+  resumeUrl: string,
+  structuredData: ParsedResumeData
+): Promise<string> {
   const supabase = await createClient();
 
   const { data: existingApp } = await supabase
     .from("applications")
-    .select("id")
+    .select("id, resume_url")
     .eq("candidate_id", candidateId)
     .eq("campaign_id", campaignId)
     .single();
 
-  if (existingApp) return existingApp.id;
+  if (existingApp) {
+    // Resubmission: latest CV wins. Overwrite resume_url + parsed_data,
+    // but leave recruiter-owned status/score fields alone — scoring re-runs
+    // afterwards and will refresh them if criteria are configured.
+    const { error: updateError } = await supabase
+      .from("applications")
+      .update({
+        resume_url: resumeUrl,
+        parsed_data: structuredData as unknown as Json,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existingApp.id);
+
+    if (updateError) {
+      throw new Error(`Failed to update application on resubmission: ${updateError.message}`);
+    }
+
+    // Breadcrumb so recruiters/auditors can trace the replacement.
+    await supabase.from("ai_audit_log").insert({
+      campaign_id: campaignId,
+      candidate_id: candidateId,
+      stage: "resume_resubmission",
+      model: "system",
+      prompt_version: "v1",
+      input_snapshot: {
+        previous_resume_url: existingApp.resume_url,
+        new_resume_url: resumeUrl,
+      },
+      raw_output: "",
+      action_taken: "resume_replaced",
+    });
+
+    return existingApp.id;
+  }
 
   const { data: newApp, error } = await supabase.from("applications").insert({
     candidate_id: candidateId,
     campaign_id: campaignId,
     status: "new",
     resume_url: resumeUrl,
-    parsed_data: structuredData,
+    parsed_data: structuredData as unknown as Json,
   }).select("id").single();
 
   if (error || !newApp) throw new Error("Failed to create application");
@@ -107,7 +152,7 @@ export async function logAiAudit(params: {
   candidateId: string;
   textContent: string;
   filename: string;
-  structuredData: any;
+  structuredData: ParsedResumeData;
 }) {
   const supabase = await createClient();
 
@@ -193,13 +238,23 @@ export async function fetchCandidateById(applicationId: string) {
     return null;
   }
 
+  // Ownership check: verify the application belongs to a campaign the user owns
+  const { data: campaign } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", data.campaign_id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (!campaign) throw new Error("Access denied");
+
   return data;
 }
 
 export async function saveResumeScore(
   applicationId: string,
   score: number,
-  tier: string,
+  tier: ScreeningTierEnum,
   rationale: string,
   factors: { name: string; weight: number; score: number }[]
 ) {
@@ -208,65 +263,59 @@ export async function saveResumeScore(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Unauthorized");
 
-  const { error } = await supabase
+  const { error, data } = await supabase
     .from("applications")
     .update({
       resume_score: score,
       screening_tier: tier,
       score_rationale: rationale,
-      score_factors: factors,
+      score_factors: factors as unknown as Json,
       scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    } as any)
-    .eq("id", applicationId);
+    })
+    .eq("id", applicationId)
+    .select("id");
 
-  if (error) throw error;
+  if (error) {
+    console.error("saveResumeScore failed:", error);
+    throw new Error(`Failed to save resume score: ${error.message}${error.details ? ` (${error.details})` : ""}`);
+  }
+  if (!data || data.length === 0) {
+    throw new Error("Failed to save resume score: application not found or access denied");
+  }
 }
 
+/**
+ * System-driven advancement (rule-based, e.g. resume scoring passes threshold).
+ * Delegates to transitionApplication() so validation + audit log stay consistent.
+ */
 export async function advanceApplicationStatus(
   applicationId: string,
-  newStatus: string
+  newStatus: CandidateStageEnum,
+  rationale?: string,
 ) {
-  const supabase = await createClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-
-  const { error } = await supabase
-    .from("applications")
-    .update({ status: newStatus as any, updated_at: new Date().toISOString() })
-    .eq("id", applicationId);
-
-  if (error) throw error;
+  await transitionApplication({
+    applicationId,
+    toState: newStatus as ApplicationState,
+    actor: "system",
+    rationale,
+  });
 }
 
-export async function updateApplicationStage(applicationId: string, stage: string) {
-  const supabase = await createClient();
-
-  // Auth guard
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-
-  // Ownership check: verify the application belongs to a campaign the user owns
-  const { data: app } = await supabase
-    .from("applications")
-    .select("campaign_id")
-    .eq("id", applicationId)
-    .single();
-  if (!app) throw new Error("Application not found");
-
-  const { data: campaign } = await supabase
-    .from("campaigns")
-    .select("id")
-    .eq("id", app.campaign_id)
-    .eq("user_id", user.id)
-    .single();
-  if (!campaign) throw new Error("Access denied");
-
-  const { error } = await supabase
-    .from("applications")
-    .update({ status: stage as any, updated_at: new Date().toISOString() })
-    .eq("id", applicationId);
-
-  if (error) throw error;
+/**
+ * Recruiter-driven stage change (manual override from the UI).
+ * Rationale is required per the ATS state-machine rules; we default to a
+ * generic label until the UI is updated to prompt for it.
+ */
+export async function updateApplicationStage(
+  applicationId: string,
+  stage: CandidateStageEnum,
+  rationale?: string,
+) {
+  await transitionApplication({
+    applicationId,
+    toState: stage as ApplicationState,
+    actor: "recruiter",
+    rationale: rationale?.trim() || "Manual stage change (rationale not provided)",
+  });
 }

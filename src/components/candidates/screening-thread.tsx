@@ -106,7 +106,7 @@ export default function ScreeningThread({
             {sending ? "Sending…" : "Send questions"}
           </button>
         )}
-        {status === "sent" && (
+        {(status === "sent" || status === "expired") && (
           <button
             type="button"
             onClick={handleSend}

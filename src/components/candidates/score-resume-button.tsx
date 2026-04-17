@@ -13,7 +13,16 @@ export function ScoreResumeButton({ applicationId }: { applicationId: string }) 
       try {
         await scoreResume(applicationId);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Scoring failed");
+        let msg = "Scoring failed";
+        if (err instanceof Error && err.message) {
+          msg = err.message;
+        } else if (typeof err === "string") {
+          msg = err;
+        } else if (err && typeof err === "object") {
+          const maybe = err as { message?: unknown };
+          if (typeof maybe.message === "string") msg = maybe.message;
+        }
+        setError(msg);
       }
     });
   }

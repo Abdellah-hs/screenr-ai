@@ -29,7 +29,7 @@ export default function TeamReviewersEditor({ initialReviewers = [] }: Props) {
     setReviewers(reviewers.filter((_, i) => i !== index));
   };
 
-  const updateReviewer = (index: number, field: keyof CampaignReviewer, value: any) => {
+  const updateReviewer = <K extends keyof CampaignReviewer>(index: number, field: K, value: CampaignReviewer[K]) => {
     const newReviewers = [...reviewers];
     newReviewers[index] = { ...newReviewers[index], [field]: value };
     setReviewers(newReviewers);

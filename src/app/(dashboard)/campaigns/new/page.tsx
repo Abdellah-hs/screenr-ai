@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { createCampaign } from "@/lib/actions/campaigns";
 import ScreeningCriteriaEditor from "@/components/campaigns/screening-criteria-editor";
 import RubricEditor from "@/components/campaigns/rubric-editor";
@@ -159,12 +160,12 @@ export default function NewCampaignPage() {
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">
-          <a
+          <Link
             href="/campaigns"
             className="px-4 py-2.5 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors"
           >
             Cancel
-          </a>
+          </Link>
           <button
             type="submit"
             disabled={loading}
