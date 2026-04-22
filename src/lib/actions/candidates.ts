@@ -22,10 +22,16 @@ import {
   updateApplicationStage,
   getResumeSignedUrl,
   saveResumeScore,
-  advanceApplicationStatus
 } from "@/lib/data/candidates";
 import { scoreResumeAgainstCriteria } from "@/lib/actions/ai-generate";
 import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
+
+// Rules
+import {
+  evaluateResumeScoringOutcome,
+  type CampaignScoringConfig,
+  type ResumeScoreResult,
+} from "@/lib/rules/resume-scoring";
 import type { Candidate, CandidateScore, CandidateStage, ScoreFactor, ScreeningTier } from "@/lib/constants";
 import type { Database } from "@/types/database.types";
 
@@ -233,11 +239,9 @@ export async function updateCandidateStage(
 
 // ─── Resume Scoring ─────────────────────────────────────────────────────────
 // Scoring and transition are intentionally split: the AI layer only produces
-// evidence; the rule layer reads that evidence and decides whether to
-// transition. See CLAUDE.md → ATS State Machine Rules.
-
-type CampaignScoringConfig = NonNullable<Awaited<ReturnType<typeof fetchCampaignScoringConfig>>>;
-type ResumeScoreResult = Awaited<ReturnType<typeof scoreResumeAgainstCriteria>>;
+// evidence; the rule layer (src/lib/rules/resume-scoring.ts) reads that
+// evidence and decides whether to transition. See CLAUDE.md → ATS State
+// Machine Rules.
 
 /**
  * AI layer — produces and persists resume-score evidence. Never transitions.
@@ -267,47 +271,6 @@ async function scoreApplicationResume(
   );
 
   return { result, config };
-}
-
-/**
- * Rule layer — reads persisted resume-score evidence and decides the next
- * transition. Never calls the AI. Keeping this separate from scoring is what
- * makes AI output "advisory, not authoritative" (CLAUDE.md → AI Usage Rules).
- *
- * Behaviour:
- *   - fully_auto:    pass threshold → `screening_approved`; else → `rejected`.
- *   - human_in_loop: any score        → `screening_review_pending` so a
- *                    recruiter reviews before the application advances.
- */
-async function evaluateResumeScoringOutcome(
-  applicationId: string,
-  result: ResumeScoreResult,
-  config: CampaignScoringConfig,
-): Promise<void> {
-  const scoreLine = `Resume score ${result.overall_score} vs threshold ${config.screening_threshold}`;
-
-  if (config.automation_mode === "human_in_loop") {
-    await advanceApplicationStatus(
-      applicationId,
-      "screening_review_pending",
-      `${scoreLine} — awaiting recruiter review (HITL mode)`,
-    );
-    return;
-  }
-
-  if (result.overall_score >= config.screening_threshold) {
-    await advanceApplicationStatus(
-      applicationId,
-      "screening_approved",
-      `${scoreLine} — passed`,
-    );
-  } else {
-    await advanceApplicationStatus(
-      applicationId,
-      "rejected",
-      `${scoreLine} — below threshold`,
-    );
-  }
 }
 
 /**
