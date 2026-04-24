@@ -11,6 +11,11 @@ import {
   saveCandidateAnswers,
   type ScreeningQuestionRow,
 } from "@/lib/data/screening-questions";
+import {
+  assertResponseIsOpen,
+  assertResponseNotResubmitted,
+  validateRequiredAnswersPresent,
+} from "@/lib/rules/screening-response";
 import { createClient } from "@/lib/supabase/server";
 
 async function getClientIp(): Promise<string> {
@@ -72,17 +77,7 @@ export async function loadResponseContext(
     );
   }
 
-  if (response.status === "scored") {
-    throw new Error(
-      "Your answers have already been submitted and reviewed. Thank you!"
-    );
-  }
-
-  if (response.status === "expired") {
-    throw new Error(
-      "This link has expired. Please contact the hiring team for a new one."
-    );
-  }
+  assertResponseIsOpen(response.status);
 
   const questions = await fetchScreeningQuestionsByCampaignId(appRow.campaign_id);
 
@@ -137,11 +132,7 @@ export async function submitScreeningAnswers(input: {
     );
   }
 
-  if (existing.status === "scored") {
-    throw new Error(
-      "Your answers have already been submitted. You cannot re-submit."
-    );
-  }
+  assertResponseNotResubmitted(existing.status);
 
   // Look up the application's campaign so we can reload the authoritative
   // question set (with is_required flags).
@@ -177,17 +168,7 @@ export async function submitScreeningAnswers(input: {
     };
   });
 
-  // Required-question check: every required question must have a non-empty
-  // answer (Zod already enforced non-empty on every answer in the array).
-  const answered = new Set(answers.map((a) => a.question_id));
-  const missingRequired = questions.filter(
-    (q) => q.is_required && !answered.has(q.id)
-  );
-  if (missingRequired.length > 0) {
-    throw new Error(
-      `Please answer every required question before submitting (${missingRequired.length} missing).`
-    );
-  }
+  validateRequiredAnswersPresent(questions, answers);
 
   await saveCandidateAnswers(application_id, answers);
 
