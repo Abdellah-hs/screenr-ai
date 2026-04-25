@@ -3,8 +3,10 @@ import {
   assertResponseIsOpen,
   assertResponseNotResubmitted,
   validateRequiredAnswersPresent,
+  evaluateScreeningScoringOutcome,
   ScreeningResponseError,
   type ScreeningResponseStatus,
+  type ScreeningScoringConfig,
 } from "./screening-response";
 
 const OPEN_STATUSES: ScreeningResponseStatus[] = ["pending", "sent", "responded"];
@@ -90,5 +92,109 @@ describe("validateRequiredAnswersPresent", () => {
     const questions = [q("q1", true)];
     const answers = [a("q1"), a("q-unknown")];
     expect(() => validateRequiredAnswersPresent(questions, answers)).not.toThrow();
+  });
+});
+
+describe("evaluateScreeningScoringOutcome", () => {
+  function makeConfig(
+    overrides: Partial<ScreeningScoringConfig> = {},
+  ): ScreeningScoringConfig {
+    return {
+      automation_mode: "fully_auto",
+      screening_threshold: 70,
+      ...overrides,
+    };
+  }
+
+  describe("first step is always screening_scored", () => {
+    it("records the AI scoring event in HITL mode", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 50 },
+        makeConfig({ automation_mode: "human_in_loop" }),
+      );
+
+      expect(decisions[0].toState).toBe("screening_scored");
+    });
+
+    it("records the AI scoring event in auto-pass mode", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 90 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions[0].toState).toBe("screening_scored");
+    });
+
+    it("records the AI scoring event in auto-fail mode", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 30 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions[0].toState).toBe("screening_scored");
+    });
+  });
+
+  describe("human_in_loop mode", () => {
+    it("rests at screening_scored regardless of score", () => {
+      const high = evaluateScreeningScoringOutcome(
+        { overall_score: 99 },
+        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 50 }),
+      );
+      const low = evaluateScreeningScoringOutcome(
+        { overall_score: 5 },
+        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 50 }),
+      );
+
+      expect(high).toHaveLength(1);
+      expect(low).toHaveLength(1);
+    });
+  });
+
+  describe("fully_auto mode", () => {
+    it("chains screening_scored → interview_scheduling when score ≥ threshold", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 85 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions).toHaveLength(2);
+      expect(decisions[1].toState).toBe("interview_scheduling");
+      expect(decisions[1].rationale).toContain("passed");
+    });
+
+    it("treats score equal to threshold as a pass (boundary)", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 70 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions[1].toState).toBe("interview_scheduling");
+    });
+
+    it("chains screening_scored → rejected when score < threshold", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 40 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions).toHaveLength(2);
+      expect(decisions[1].toState).toBe("rejected");
+      expect(decisions[1].rationale).toContain("below threshold");
+    });
+  });
+
+  describe("rationale shape", () => {
+    it("includes the overall score and threshold numerically on each step", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 63 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 75 }),
+      );
+
+      for (const d of decisions) {
+        expect(d.rationale).toContain("Screening score 63");
+        expect(d.rationale).toContain("threshold 75");
+      }
+    });
   });
 });

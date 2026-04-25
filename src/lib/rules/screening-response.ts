@@ -1,9 +1,22 @@
+import type { ApplicationState } from "@/lib/constants";
+
 export type ScreeningResponseStatus =
   | "pending"
   | "sent"
   | "responded"
   | "scored"
   | "expired";
+
+/**
+ * A deferred state-machine transition. The rule layer returns one of these;
+ * the caller is responsible for executing it via `transitionApplication`.
+ * Mirrors `TransitionDescriptor` in `./resume-scoring.ts` — kept local to
+ * each rules module so producers can't accidentally couple across decisions.
+ */
+export interface TransitionDescriptor {
+  toState: ApplicationState;
+  rationale: string;
+}
 
 /**
  * Thrown by rules in this module when a candidate-facing precondition
@@ -77,4 +90,63 @@ export function validateRequiredAnswersPresent(
       `Please answer every required question before submitting (${missingRequired.length} missing).`,
     );
   }
+}
+
+/**
+ * Config slice the rule needs. Declared inline (rather than imported from
+ * the data layer) so the rule's contract is self-describing and producers
+ * conform to it — see `src/lib/rules/README.md`.
+ */
+export interface ScreeningScoringConfig {
+  automation_mode: "fully_auto" | "human_in_loop";
+  screening_threshold: number;
+}
+
+/**
+ * Rule layer — reads persisted screening-score evidence + campaign config
+ * and returns the ordered transitions the action should apply. Pure: no AI
+ * call, no DB.
+ *
+ * Always passes through `screening_scored` first so the audit log records
+ * the AI scoring event before any downstream advancement. In auto mode it
+ * then chains a second transition to either `interview_scheduling` (pass)
+ * or `rejected` (fail). HITL mode rests at `screening_scored` for the
+ * recruiter to advance manually.
+ *
+ *   - human_in_loop:           [screening_scored]
+ *   - fully_auto + score ≥ thr: [screening_scored, interview_scheduling]
+ *   - fully_auto + score < thr: [screening_scored, rejected]
+ */
+export function evaluateScreeningScoringOutcome(
+  result: { overall_score: number },
+  config: ScreeningScoringConfig,
+): TransitionDescriptor[] {
+  const scoreLine = `Screening score ${result.overall_score} vs threshold ${config.screening_threshold}`;
+
+  const recordScored: TransitionDescriptor = {
+    toState: "screening_scored",
+    rationale: `${scoreLine} — recorded`,
+  };
+
+  if (config.automation_mode === "human_in_loop") {
+    return [recordScored];
+  }
+
+  if (result.overall_score >= config.screening_threshold) {
+    return [
+      recordScored,
+      {
+        toState: "interview_scheduling",
+        rationale: `${scoreLine} — passed, advancing to interview scheduling`,
+      },
+    ];
+  }
+
+  return [
+    recordScored,
+    {
+      toState: "rejected",
+      rationale: `${scoreLine} — below threshold`,
+    },
+  ];
 }

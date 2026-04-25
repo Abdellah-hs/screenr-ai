@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
   uuidSchema,
@@ -12,10 +11,13 @@ import {
   generateQuestionsForRole,
   scoreAnswers,
 } from "@/lib/services/screening-questions";
-import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
+import { fetchCampaignScoringConfig, verifyCampaignOwnership } from "@/lib/data/campaigns";
 import { sendEmail } from "@/lib/services/email";
 import { buildScreeningQuestionsEmail } from "@/lib/services/email-templates/screening-questions";
 import { signResponseToken } from "@/lib/auth/screening-token";
+import { requireUserId } from "@/lib/auth/guards";
+import { transitionApplication } from "@/lib/data/transitions";
+import { evaluateScreeningScoringOutcome } from "@/lib/rules/screening-response";
 import {
   fetchScreeningQuestionsByCampaignId,
   replaceScreeningQuestions,
@@ -28,22 +30,14 @@ import {
   type ScreeningResponseRow,
 } from "@/lib/data/screening-questions";
 
-async function requireCampaignOwner(campaignId: string) {
+async function requireCampaignOwner(campaignId: string): Promise<string> {
   uuidSchema.parse(campaignId);
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
+  const userId = await requireUserId();
 
-  const { data: campaign } = await supabase
-    .from("campaigns")
-    .select("id")
-    .eq("id", campaignId)
-    .eq("user_id", user.id)
-    .is("deleted_at", null)
-    .single();
-
-  if (!campaign) throw new Error("Campaign not found or access denied");
-  return user;
+  if (!(await verifyCampaignOwnership(campaignId, userId))) {
+    throw new Error("Campaign not found or access denied");
+  }
+  return userId;
 }
 
 export async function getScreeningQuestions(
@@ -60,10 +54,10 @@ export async function getScreeningQuestions(
 export async function generateScreeningQuestions(
   campaignId: string
 ): Promise<{ prompt: string; is_required: boolean }[]> {
-  const user = await requireCampaignOwner(campaignId);
+  const userId = await requireCampaignOwner(campaignId);
 
   // Reuse the AI generation bucket — same OpenAI quota concern applies.
-  checkRateLimit(user.id, {
+  checkRateLimit(userId, {
     name: "ai-generate",
     maxRequests: 10,
     windowMs: 5 * 60 * 1000,
@@ -154,6 +148,29 @@ async function buildAndSendOne(params: {
   });
 }
 
+/**
+ * Best-effort transition to `screening_sent` after a successful email send.
+ * The email is already durable, so a failed transition (illegal source state,
+ * RPC error) is logged rather than propagated — a recruiter can advance the
+ * state manually. Throwing here would risk the recruiter retrying the send
+ * and duplicating the candidate email.
+ */
+async function tryAdvanceToScreeningSent(applicationId: string): Promise<void> {
+  try {
+    await transitionApplication({
+      applicationId,
+      toState: "screening_sent",
+      actor: "system",
+      rationale: "Screening questions email delivered",
+    });
+  } catch (err) {
+    console.error(
+      `Failed to transition ${applicationId} → screening_sent:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 async function getOrigin(): Promise<string> {
   const h = await headers();
   const forwardedProto = h.get("x-forwarded-proto");
@@ -172,15 +189,11 @@ export async function sendScreeningQuestionsToCandidate(
 ): Promise<{ sent: true }> {
   uuidSchema.parse(applicationId);
 
-  const app = await fetchApplicationForScreeningSend(applicationId);
+  const userId = await requireUserId();
+  const app = await fetchApplicationForScreeningSend(applicationId, userId);
   if (!app) throw new Error("Application not found or access denied");
-  await requireCampaignOwner(app.campaign_id);
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-
-  checkRateLimit(user.id, {
+  checkRateLimit(userId, {
     name: "screening-send",
     maxRequests: 30,
     windowMs: 10 * 60 * 1000,
@@ -203,6 +216,8 @@ export async function sendScreeningQuestionsToCandidate(
     origin,
   });
 
+  await tryAdvanceToScreeningSent(app.application_id);
+
   revalidatePath(`/campaigns/${app.campaign_id}`);
   revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
   return { sent: true };
@@ -224,7 +239,8 @@ export async function getCandidateScreeningState(
 ): Promise<CandidateScreeningState> {
   uuidSchema.parse(applicationId);
 
-  const app = await fetchApplicationForScreeningSend(applicationId);
+  const userId = await requireUserId();
+  const app = await fetchApplicationForScreeningSend(applicationId, userId);
   if (!app) throw new Error("Application not found or access denied");
 
   const [questions, response] = await Promise.all([
@@ -245,11 +261,11 @@ export async function scoreScreeningAnswers(
 ): Promise<{ overall_score: number }> {
   uuidSchema.parse(applicationId);
 
-  const app = await fetchApplicationForScreeningSend(applicationId);
+  const userId = await requireUserId();
+  const app = await fetchApplicationForScreeningSend(applicationId, userId);
   if (!app) throw new Error("Application not found or access denied");
-  const user = await requireCampaignOwner(app.campaign_id);
 
-  checkRateLimit(user.id, {
+  checkRateLimit(userId, {
     name: "ai-generate",
     maxRequests: 10,
     windowMs: 5 * 60 * 1000,
@@ -295,6 +311,37 @@ export async function scoreScreeningAnswers(
     result.answers
   );
 
+  // Rule layer decides the chain of transitions from the persisted score
+  // evidence + campaign config. HITL stops at screening_scored; auto-mode
+  // chains through to interview_scheduling (pass) or rejected (fail).
+  // Best-effort: scores are durable; if a transition fails we stop the
+  // chain (subsequent steps would be illegal from a stuck state) and let
+  // the recruiter advance manually.
+  const decisions = evaluateScreeningScoringOutcome(
+    { overall_score: result.overall_score },
+    {
+      automation_mode: config.automation_mode,
+      screening_threshold: config.screening_threshold,
+    },
+  );
+
+  for (const decision of decisions) {
+    try {
+      await transitionApplication({
+        applicationId,
+        toState: decision.toState,
+        actor: "system",
+        rationale: decision.rationale,
+      });
+    } catch (err) {
+      console.error(
+        `Failed to transition ${applicationId} → ${decision.toState}:`,
+        err instanceof Error ? err.message : err,
+      );
+      break;
+    }
+  }
+
   revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
   revalidatePath(`/campaigns/${app.campaign_id}`);
 
@@ -309,9 +356,9 @@ export async function scoreScreeningAnswers(
 export async function sendScreeningQuestionsBulk(
   campaignId: string
 ): Promise<{ sent: number; failed: number; errors: string[] }> {
-  const user = await requireCampaignOwner(campaignId);
+  const userId = await requireCampaignOwner(campaignId);
 
-  checkRateLimit(user.id, {
+  checkRateLimit(userId, {
     name: "screening-send-bulk",
     maxRequests: 5,
     windowMs: 10 * 60 * 1000,
@@ -319,7 +366,7 @@ export async function sendScreeningQuestionsBulk(
 
   const [questions, applications] = await Promise.all([
     fetchScreeningQuestionsByCampaignId(campaignId),
-    fetchApplicationsReadyForScreeningSend(campaignId),
+    fetchApplicationsReadyForScreeningSend(campaignId, userId),
   ]);
 
   if (questions.length === 0) {
@@ -346,6 +393,7 @@ export async function sendScreeningQuestionsBulk(
         questions,
         origin,
       });
+      await tryAdvanceToScreeningSent(app.application_id);
       sent++;
     } catch (err) {
       failed++;
