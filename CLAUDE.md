@@ -46,11 +46,12 @@ Next.js App Router with a `(dashboard)` route group for authenticated pages:
 
 ### Layered Architecture
 
-A strict three-layer pattern is enforced for all data flow. Respect the boundaries — UI never touches Supabase directly, and data-layer functions never call services or AI.
+A strict layered pattern is enforced for all data flow. Respect the boundaries — UI never touches Supabase directly, and data-layer / rules-layer code never calls services or AI.
 
-1. **Server Actions** (`src/lib/actions/`) — entry point for mutations and reads from React. Accepts `FormData` or typed args, performs `auth.getUser()` guard, validates with Zod (`src/lib/validations.ts`), enforces rate limits (`src/lib/rate-limit.ts`), then delegates to the data layer and/or services. Ends with `redirect()` or `revalidatePath()`.
-2. **Data Layer** (`src/lib/data/`) — pure Supabase query/mutation functions (e.g. `insertCampaignTx`, `fetchCandidatesByCampaignId`). No auth checks, no validation — that is the action's job. Functions ending in `Tx` perform multi-table writes that should be treated as a logical transaction.
-3. **Services** (`src/lib/services/`) — third-party integrations: `openai.ts` (resume extraction, screening criteria/rubric generation, scoring), `gmail.ts` (inbox sync for resume ingestion), `pdf.ts` (PDF text extraction via `pdf-parse`).
+1. **Server Actions** (`src/lib/actions/`) — entry point for mutations and reads from React. Accepts `FormData` or typed args, performs `auth.getUser()` guard (or `requireUserId()` from `src/lib/auth/guards.ts`), validates with Zod (`src/lib/validations.ts`), enforces rate limits (`src/lib/rate-limit.ts`), then delegates to rules / data / services. Ends with `redirect()` or `revalidatePath()`.
+2. **Rules Layer** (`src/lib/rules/`) — **pure** decision functions. Reads already-validated evidence (e.g. an AI score, a response status, a list of required questions vs answers) and returns a decision — usually a `TransitionDescriptor` `{ toState, rationale }` or a guard that throws on bad state. The action executes the transition; the rule only decides. **MUST NOT** import from `@/lib/supabase/*`, `@/lib/actions/*`, or call `revalidatePath` / `redirect`. See `src/lib/rules/README.md` for the full contract. This is the layer that implements "Control > AI > Data" — AI produces evidence, rules decide.
+3. **Data Layer** (`src/lib/data/`) — pure Supabase query/mutation functions (e.g. `insertCampaignTx`, `fetchCandidatesByCampaignId`, `transitionApplication`). No auth checks, no validation — that is the action's job. Functions ending in `Tx` perform multi-table writes that should be treated as a logical transaction. **All `applications.status` writes go through `transitionApplication()` in `src/lib/data/transitions.ts`** — never `.update({ status: ... })` directly.
+4. **Services** (`src/lib/services/`) — third-party integrations: `openai.ts` (resume extraction, screening criteria/rubric generation, scoring), `gmail.ts` (inbox sync for resume ingestion), `pdf.ts` (PDF text extraction via `pdf-parse`), `email.ts`, `screening-questions.ts`, `email-templates/`.
 
 Auto-generated Supabase types live in `src/types/database.types.ts`. The `src/app/api/` directory exists but is currently empty — there are **no API routes**; everything goes through Server Actions.
 
@@ -61,7 +62,9 @@ Auto-generated Supabase types live in `src/types/database.types.ts`. The `src/ap
 
 ### Auth & Route Protection
 
-Supabase Auth via middleware (`src/middleware.ts`). Route protection **is enforced**: unauthenticated users hitting `/campaigns/*` are redirected to `/login`, and authenticated users on `/login` or `/signup` are redirected to `/campaigns`. Every Server Action additionally re-checks `supabase.auth.getUser()` and validates UUIDs with `uuidSchema` before doing any work — keep this pattern when adding new actions.
+Supabase Auth via middleware (`src/middleware.ts`). Route protection **is enforced**: unauthenticated users hitting `/campaigns/*` are redirected to `/login`, and authenticated users on `/login` or `/signup` are redirected to `/campaigns`. Every Server Action additionally re-checks the session and validates UUIDs with `uuidSchema` before doing any work — keep this pattern when adding new actions. Use `requireUserId()` from `src/lib/auth/guards.ts` as the canonical guard helper (it wraps `supabase.auth.getUser()` and throws `Unauthorized` on no session).
+
+Candidate-facing pages (`/respond/[token]`) are token-based, not session-based — see PRD-Critical Product Rules. Token verification lives in `src/lib/auth/screening-token.ts` and is called from public actions in `src/lib/actions/respond.ts`.
 
 ### Domain Types & Constants
 
@@ -198,7 +201,6 @@ Separate concept from applications. Stores `{candidate_id, historical_scores, no
 
 Open violations to migrate:
 - Legacy states (`screening`, `screening_q`, `interview`) still exist in `candidate_stage_enum` and in `APPLICATION_STATE_TRANSITIONS`. They currently bridge into the canonical track — a future migration should re-map existing rows onto canonical names and drop the legacy values.
-- Sending screening questions does NOT transition the application through `screening_sent` → `screening_completed` → `screening_scored`. The response row has its own status lifecycle (`pending | sent | responded | scored`) but the application status stays put. Wire these transitions next.
 - Screening questions are implemented as text Q&A; PRD 3.4.3 requires video/audio recordings — see PRD-Critical Product Rules below.
 - `upsertCandidate` auto-merges on email; PRD requires flagging duplicates for HR review instead.
 - Interview scheduling, AI reference check, and final interview scheduling are not yet implemented as first-class stages — see PRD-Critical Product Rules.
@@ -207,9 +209,13 @@ Open violations to migrate:
 Completed:
 - `updateApplicationStage` and `advanceApplicationStatus` now delegate to `transitionApplication()` in `src/lib/data/transitions.ts` — no direct `status` writes remain.
 - `application_transitions` append-only log + atomic `transition_application` RPC added in `supabase/migrations/20260417000000_application_transitions_log.sql`.
-- Resume scoring and transition are now split: `scoreApplicationResume()` produces evidence only; `evaluateResumeScoringOutcome()` is the rule layer that decides the transition (both in `src/lib/actions/candidates.ts`).
+- Resume scoring and decisioning are split: `scoreApplicationResume()` produces evidence only; `evaluateResumeScoringOutcome()` lives in `src/lib/rules/resume-scoring.ts` and decides the transition.
+- Screening-response guards (`assertResponseIsOpen`, `assertResponseNotResubmitted`, `validateRequiredAnswersPresent`) extracted into `src/lib/rules/screening-response.ts`. `src/lib/actions/respond.ts` is now a thin orchestrator that delegates to the rules layer.
+- `src/lib/rules/` decision layer scaffolded with its own contract (see `src/lib/rules/README.md`). New decision logic should land here, not in actions.
 - `candidate_stage_enum` expanded with the canonical set (`screening_review_pending`, `screening_approved`, `screening_sent`, `screening_completed`, `screening_scored`, `interview_scheduling`, `interview_scheduled`, `interview_completed`, `interview_scored`, `reference_check`, `final_interview_scheduling`, `archived`) in `supabase/migrations/20260418000000_expand_candidate_stage_enum.sql`. `APPLICATION_STATE_TRANSITIONS` in `src/lib/constants.ts` updated in lockstep.
 - HITL branch of `evaluateResumeScoringOutcome` now transitions to `screening_review_pending` (from `new`) instead of silently staying in `new`. Auto-mode uses `screening_approved`. `fetchApplicationsReadyForScreeningSend` accepts both the legacy `screening_q` and canonical `screening_approved` states.
+- Screening lifecycle is wired into the application state machine: sending questions transitions to `screening_sent` (in `sendScreeningQuestionsToCandidate` / `sendScreeningQuestionsBulk`), candidate submission transitions to `screening_completed` (in `submitScreeningAnswers`), and AI scoring transitions to `screening_scored` via `evaluateScreeningScoringOutcome` (in `scoreScreeningAnswers`). All three are best-effort — the side effect (email / answer save / score persist) commits first, then the transition runs and is logged on failure so a transient RPC error can't ghost an email or lose a candidate's submission.
+- `evaluateScreeningScoringOutcome` now branches on automation mode + threshold, parallel to `evaluateResumeScoringOutcome`. It returns a chain of transitions: HITL rests at `screening_scored`; `fully_auto` chains `screening_scored → interview_scheduling` on a pass and `screening_scored → rejected` on a fail (boundary inclusive). The action loops the chain and stops on the first transition error so it can't try an illegal step from a stuck source state.
 
 When touching any code that changes application state, migrate it toward these rules rather than extending the old pattern.
 

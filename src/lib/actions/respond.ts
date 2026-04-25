@@ -6,6 +6,10 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { screeningAnswerSubmissionSchema } from "@/lib/validations";
 import {
+  fetchApplicationForResponse,
+  fetchApplicationCampaignId,
+} from "@/lib/data/candidates";
+import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
   saveCandidateAnswers,
@@ -16,7 +20,7 @@ import {
   assertResponseNotResubmitted,
   validateRequiredAnswersPresent,
 } from "@/lib/rules/screening-response";
-import { createClient } from "@/lib/supabase/server";
+import { transitionApplication } from "@/lib/data/transitions";
 
 async function getClientIp(): Promise<string> {
   const h = await headers();
@@ -47,24 +51,8 @@ export async function loadResponseContext(
 ): Promise<VerifiedResponseContext> {
   const { application_id, expires_at } = verifyResponseToken(token);
 
-  // We use the anon client here; RLS policies require auth.uid() but we
-  // need to read as an unauthenticated candidate. This works because the
-  // Supabase URL + anon key aren't privileged — the security comes from
-  // the signed token, not the DB key. For production, move this to a
-  // service-role client so RLS can stay strict.
-  const supabase = await createClient();
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabase as any;
-
-  // Look up the application → campaign for title + owning campaign id.
-  const { data: appRow, error: appErr } = await db
-    .from("applications")
-    .select("id, campaign_id, campaigns!inner(id, title)")
-    .eq("id", application_id)
-    .single();
-
-  if (appErr || !appRow) {
+  const app = await fetchApplicationForResponse(application_id);
+  if (!app) {
     throw new Error(
       "We couldn't find this application. Please contact the hiring team."
     );
@@ -79,7 +67,7 @@ export async function loadResponseContext(
 
   assertResponseIsOpen(response.status);
 
-  const questions = await fetchScreeningQuestionsByCampaignId(appRow.campaign_id);
+  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
 
   const existing: Record<string, string> = {};
   for (const a of response.answers ?? []) {
@@ -89,7 +77,7 @@ export async function loadResponseContext(
   return {
     application_id,
     status: response.status,
-    campaign_title: appRow.campaigns.title,
+    campaign_title: app.campaign_title,
     questions,
     existing_answers: existing,
     expires_at,
@@ -136,18 +124,11 @@ export async function submitScreeningAnswers(input: {
 
   // Look up the application's campaign so we can reload the authoritative
   // question set (with is_required flags).
-  const supabase = await createClient();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabase as any;
-  const { data: appRow } = await db
-    .from("applications")
-    .select("campaign_id")
-    .eq("id", application_id)
-    .single();
-  if (!appRow) {
+  const campaignId = await fetchApplicationCampaignId(application_id);
+  if (!campaignId) {
     throw new Error("This application no longer exists.");
   }
-  const questions = await fetchScreeningQuestionsByCampaignId(appRow.campaign_id);
+  const questions = await fetchScreeningQuestionsByCampaignId(campaignId);
   if (questions.length === 0) {
     throw new Error("No screening questions are configured for this role.");
   }
@@ -171,6 +152,24 @@ export async function submitScreeningAnswers(input: {
   validateRequiredAnswersPresent(questions, answers);
 
   await saveCandidateAnswers(application_id, answers);
+
+  // Best-effort: the candidate's answers are durable; a transition failure
+  // (illegal source state, RPC error) shouldn't surface as a submission
+  // failure to the candidate. A recruiter sees the response and can advance
+  // manually.
+  try {
+    await transitionApplication({
+      applicationId: application_id,
+      toState: "screening_completed",
+      actor: "system",
+      rationale: "Candidate submitted screening answers",
+    });
+  } catch (err) {
+    console.error(
+      `Failed to transition ${application_id} → screening_completed:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   return { ok: true };
 }
