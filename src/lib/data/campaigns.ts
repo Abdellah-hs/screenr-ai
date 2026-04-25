@@ -243,6 +243,25 @@ export async function fetchCampaignById(id: string): Promise<Campaign | null> {
   return assembleCampaign(row as unknown as Record<string, unknown>, criteria, rubrics, reviewers, slaTimers);
 }
 
+/**
+ * Returns true if the user owns an active (non-deleted) campaign with the
+ * given id. Used by action code to gate recruiter-scoped operations.
+ */
+export async function verifyCampaignOwnership(
+  campaignId: string,
+  userId: string
+): Promise<boolean> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .single();
+  return Boolean(data);
+}
+
 // ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
 export async function fetchCampaignScoringConfig(campaignId: string) {
   const supabase = await createClient();

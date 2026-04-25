@@ -15,12 +15,10 @@ export interface ApplicationForScreeningSend {
  * a campaign owned by the current user.
  */
 export async function fetchApplicationForScreeningSend(
-  applicationId: string
+  applicationId: string,
+  userId: string
 ): Promise<ApplicationForScreeningSend | null> {
   const supabase = await createClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
 
   const selectWithCampaignAndCandidate = `
     id,
@@ -39,7 +37,7 @@ export async function fetchApplicationForScreeningSend(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const row = data as any;
-  if (row.campaigns?.user_id !== user.id) return null;
+  if (row.campaigns?.user_id !== userId) return null;
   if (!row.candidates?.email) return null;
 
   return {
@@ -59,19 +57,17 @@ export async function fetchApplicationForScreeningSend(
  * and the candidate has an email. Used by the bulk-send button.
  */
 export async function fetchApplicationsReadyForScreeningSend(
-  campaignId: string
+  campaignId: string,
+  userId: string
 ): Promise<ApplicationForScreeningSend[]> {
   const supabase = await createClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return [];
 
   // Ownership check
   const { data: campaign } = await supabase
     .from("campaigns")
     .select("id, title")
     .eq("id", campaignId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .single();
   if (!campaign) return [];
 

@@ -286,6 +286,56 @@ export async function saveResumeScore(
 }
 
 /**
+ * Minimal read used by action code that only needs to revalidate cache paths
+ * for an application's owning campaign.
+ */
+export async function fetchApplicationCampaignId(
+  applicationId: string
+): Promise<string | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("applications")
+    .select("campaign_id")
+    .eq("id", applicationId)
+    .single();
+  return data?.campaign_id ?? null;
+}
+
+/**
+ * Unauthenticated read used by the public candidate-response page. Looks up
+ * an application + its owning campaign's title without any user scoping — the
+ * caller must have already verified a signed token, since RLS alone is not
+ * enough to gate this join.
+ */
+export interface ApplicationForResponse {
+  application_id: string;
+  campaign_id: string;
+  campaign_title: string;
+}
+
+export async function fetchApplicationForResponse(
+  applicationId: string
+): Promise<ApplicationForResponse | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("applications")
+    .select("id, campaign_id, campaigns!inner(id, title)")
+    .eq("id", applicationId)
+    .single<{
+      id: string;
+      campaign_id: string;
+      campaigns: { id: string; title: string };
+    }>();
+
+  if (!data) return null;
+  return {
+    application_id: data.id,
+    campaign_id: data.campaign_id,
+    campaign_title: data.campaigns.title,
+  };
+}
+
+/**
  * System-driven advancement (rule-based, e.g. resume scoring passes threshold).
  * Delegates to transitionApplication() so validation + audit log stay consistent.
  */
