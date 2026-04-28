@@ -63,7 +63,7 @@ export async function generateScreeningQuestions(
     windowMs: 5 * 60 * 1000,
   });
 
-  const config = await fetchCampaignScoringConfig(campaignId);
+  const config = await fetchCampaignScoringConfig(campaignId, userId);
   if (!config) throw new Error("Campaign not found");
   if (!config.description || config.description.trim().length < 10) {
     throw new Error(
@@ -274,7 +274,7 @@ export async function scoreScreeningAnswers(
   const [response, questions, config] = await Promise.all([
     fetchScreeningResponseByApplicationId(applicationId),
     fetchScreeningQuestionsByCampaignId(app.campaign_id),
-    fetchCampaignScoringConfig(app.campaign_id),
+    fetchCampaignScoringConfig(app.campaign_id, userId),
   ]);
 
   if (!response) throw new Error("No screening response to score");

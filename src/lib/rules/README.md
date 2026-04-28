@@ -1,6 +1,6 @@
 # `src/lib/rules/` — Decision layer
 
-Pure(-ish) decision functions that read evidence and decide the next state-machine action. This layer exists because `Control > AI > Data` (CLAUDE.md): AI produces evidence, rules decide, actions orchestrate.
+Pure decision functions that read evidence and decide the next state-machine action. This layer exists because `Control > AI > Data` (CLAUDE.md): AI produces evidence, rules decide, actions orchestrate.
 
 ## What lives here
 
@@ -12,12 +12,10 @@ Pure(-ish) decision functions that read evidence and decide the next state-machi
 
 A module in `src/lib/rules/`:
 
-- **MUST NOT** import from `@/lib/supabase/*` directly.
+- **MUST NOT** import from `@/lib/supabase/*`.
 - **MUST NOT** call `supabase.auth.*`, `revalidatePath`, `redirect`, or any other action-layer concern.
-- **MUST NOT** import from `@/lib/actions/*` at runtime (type-only imports are acceptable during the transitional phase; Phase 6 of the decoupling refactor removes them).
-- **SHOULD** be synchronous and pure. The one sanctioned exception: a rule whose decision *is* a state transition. Two styles coexist during the migration:
-  - **Descriptor style** (preferred, after Phase 6): the rule returns `TransitionDescriptor` and the caller executes `transitionApplication`.
-  - **Side-effecting style** (Phase 0 legacy): the rule calls `advanceApplicationStatus` internally. `resume-scoring.ts` is the only rule still in this style; Phase 6 converts it.
+- **MUST NOT** import from `@/lib/actions/*` — not at runtime and not for types. If the rule needs a shape that currently lives in an action, move that shape into the rules module and have the action import it from here. The rule declares the contract it reads; producers conform.
+- **SHOULD** be synchronous and pure. A rule whose decision *is* a state transition returns a `TransitionDescriptor` (`{ toState, rationale }`) and lets the caller execute `transitionApplication` / `advanceApplicationStatus`. Rules never mutate state themselves.
 - **SHOULD** throw plain `Error` (or a single per-module subclass) rather than returning `Result`-like types.
 
 ## What doesn't live here
@@ -28,4 +26,4 @@ A module in `src/lib/rules/`:
 
 ## Testing
 
-Colocated `foo.test.ts` with Vitest. Tests should be blazingly fast because there is no I/O. When a rule is in the side-effecting style (see Phase 0 exception above), mock the single data-layer collaborator and assert the arguments it was called with.
+Colocated `foo.test.ts` with Vitest. Tests should be blazingly fast because there is no I/O and no mocks — rules are pure, so the test inputs and outputs are the whole story.

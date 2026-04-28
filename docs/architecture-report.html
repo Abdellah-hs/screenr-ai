@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Screenr AI — Architecture &amp; Workflow Report</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    max-width: 180mm;
+    margin: 0 auto;
+  }
+  h1 { font-size: 22pt; margin: 0 0 4pt 0; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 15pt;
+    margin: 22pt 0 8pt 0;
+    padding-bottom: 4pt;
+    border-bottom: 1.5pt solid #1a1a1a;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 12pt;
+    margin: 14pt 0 6pt 0;
+    color: #1a1a1a;
+    page-break-after: avoid;
+  }
+  h4 { font-size: 10.5pt; margin: 10pt 0 4pt 0; color: #333; page-break-after: avoid; }
+  p { margin: 0 0 8pt 0; }
+  ul, ol { margin: 0 0 8pt 0; padding-left: 18pt; }
+  li { margin: 2pt 0; }
+  code {
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+    background: #f4f4f4;
+    padding: 1pt 4pt;
+    border-radius: 2pt;
+    font-size: 9.5pt;
+  }
+  pre {
+    background: #f7f7f7;
+    border: 0.5pt solid #ddd;
+    border-left: 3pt solid #555;
+    padding: 8pt 10pt;
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+    font-size: 8.5pt;
+    line-height: 1.4;
+    overflow: hidden;
+    white-space: pre-wrap;
+    page-break-inside: avoid;
+    margin: 6pt 0 10pt 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6pt 0 10pt 0;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+  th, td {
+    border: 0.5pt solid #bbb;
+    padding: 5pt 7pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #eee; font-weight: 600; }
+  .cover {
+    height: 260mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    page-break-after: always;
+  }
+  .cover .title { font-size: 32pt; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+  .cover .subtitle { font-size: 14pt; color: #555; margin-top: 10pt; }
+  .cover .meta { margin-top: 30pt; color: #444; font-size: 10pt; }
+  .cover .meta div { margin: 3pt 0; }
+  .cover hr { border: none; border-top: 2pt solid #1a1a1a; margin: 18pt 0; }
+  .tag {
+    display: inline-block;
+    padding: 1pt 6pt;
+    font-size: 8.5pt;
+    border-radius: 3pt;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .tag.done { background: #d8f0d8; color: #1c5c1c; }
+  .tag.open { background: #fde0c0; color: #7a3b05; }
+  .tag.gap { background: #fcd6d6; color: #7a1a1a; }
+  .callout {
+    border: 0.5pt solid #ccc;
+    border-left: 3pt solid #b45309;
+    background: #fffaf0;
+    padding: 8pt 12pt;
+    margin: 6pt 0 10pt 0;
+    font-size: 10pt;
+    page-break-inside: avoid;
+  }
+  .callout.good { border-left-color: #166534; background: #f0fdf4; }
+  .footer-note {
+    margin-top: 30pt;
+    font-size: 8.5pt;
+    color: #666;
+    text-align: center;
+    border-top: 0.5pt solid #ccc;
+    padding-top: 8pt;
+  }
+</style>
+</head>
+<body>
+
+<!-- ─────────────────────────────────────────── COVER ───────────────────── -->
+<section class="cover">
+  <hr />
+  <div class="title">Screenr&nbsp;AI</div>
+  <div class="subtitle">Architecture &amp; Workflow Report</div>
+  <hr />
+  <div class="meta">
+    <div><strong>Repository:</strong> screenr-ai</div>
+    <div><strong>Stack:</strong> Next.js 16 · React 19 · Supabase · OpenAI</div>
+    <div><strong>Scope:</strong> ATS state machine, end-to-end candidate flow, PRD alignment</div>
+    <div><strong>Date:</strong> 17 April 2026</div>
+    <div><strong>Author:</strong> Engineering</div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────── EXECUTIVE SUMMARY ──────────────── -->
+<h2>1. Executive Summary</h2>
+
+<p>Screenr AI is an internal Applicant Tracking System and AI-assisted interview platform. This report documents the system as it exists today: its layered architecture, the state machine that governs every candidate movement, the end-to-end workflow from inbox to hiring decision, and the deltas between the current implementation and the product requirements document.</p>
+
+<p>The system is built on a strict architectural principle: <strong>Control &gt; AI &gt; Data</strong>. Application state is governed by explicit rules and a single transition function. Artificial intelligence produces scores, classifications, and written evidence, but it never mutates state directly. Every status change &mdash; whether originated by a background rule, a scoring threshold, or a recruiter's manual override &mdash; passes through one code path, one database RPC, and one append-only log.</p>
+
+<p>Recent work has landed the foundation for that discipline: a centralised <code>transitionApplication()</code> entry point, an append-only <code>application_transitions</code> audit table, an atomic database RPC that enforces ownership and concurrency, and a clean split between the AI scoring function and the rule-based advancement function. Several gaps versus the product requirements remain, the largest being the migration from text-based screening answers to PRD-mandated video/audio recordings and the expansion of the stage enum to cover scheduling, reference checks, and final interview scheduling.</p>
+
+<!-- ─────────────────────────────── ARCHITECTURE OVERVIEW ───────────────── -->
+<h2>2. Architectural Overview</h2>
+
+<h3>2.1 The three-layer pattern</h3>
+
+<p>All data flow in the application goes through three clearly bounded layers. Upper layers may call lower layers; the reverse is forbidden.</p>
+
+<table>
+  <thead>
+    <tr><th>Layer</th><th>Location</th><th>Responsibility</th><th>Forbidden from</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Server Actions</strong></td>
+      <td><code>src/lib/actions/</code></td>
+      <td>Entry point for reads/mutations from React. Auth guard, Zod validation, rate limiting, orchestration of services and data-layer calls, final <code>revalidatePath()</code>.</td>
+      <td>&mdash;</td>
+    </tr>
+    <tr>
+      <td><strong>Services</strong></td>
+      <td><code>src/lib/services/</code></td>
+      <td>Third-party integrations: OpenAI, Gmail, PDF parsing, email delivery. Encapsulates all provider-specific code.</td>
+      <td>Must not read user session; receives scoped inputs only.</td>
+    </tr>
+    <tr>
+      <td><strong>Data</strong></td>
+      <td><code>src/lib/data/</code></td>
+      <td>Pure Supabase queries and mutations. Returns raw shapes. <code>transitions.ts</code> is the sole entry point for status mutations.</td>
+      <td>No auth checks, no Zod validation, no AI calls.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>2.2 The control-flow invariant</h3>
+
+<p>The single most important property of the system is this: <strong>every write to <code>applications.status</code> funnels through one function</strong>. That function calls one RPC, which writes one log row, atomically with the status update. The codebase contains no direct <code>.update({ status })</code> calls outside that path, which can be verified by grep.</p>
+
+<div class="callout good">
+  <strong>Consequence.</strong> The transition log is the authoritative history of every application. Querying <code>application_transitions</code> ordered by <code>created_at</code> reconstructs every movement, actor, timestamp, and rationale for any candidate. There is no way to mutate state without leaving a trace.
+</div>
+
+<h3>2.3 Security model</h3>
+
+<ul>
+  <li><strong>Middleware</strong> (<code>src/middleware.ts</code>) redirects unauthenticated requests away from the dashboard.</li>
+  <li><strong>Server actions</strong> re-check <code>supabase.auth.getUser()</code> and validate UUIDs before any work.</li>
+  <li><strong>Row-level security</strong> is enabled on all pipeline tables; campaign ownership is enforced at the database.</li>
+  <li><strong>The transition RPC</strong> runs as <code>SECURITY DEFINER</code> but checks <code>auth.uid()</code> itself against <code>campaigns.user_id</code> &mdash; defense in depth.</li>
+  <li><strong>Resumes</strong> are stored in a private Supabase Storage bucket; access is via one-hour signed URLs.</li>
+</ul>
+
+<!-- ─────────────────────────────── STATE MACHINE ───────────────────────── -->
+<h2>3. The ATS State Machine</h2>
+
+<h3>3.1 Entities</h3>
+
+<ul>
+  <li><strong>Candidate</strong> &mdash; a person. Stable across campaigns. Holds identity data only.</li>
+  <li><strong>Campaign</strong> &mdash; a hiring process for one role.</li>
+  <li><strong>Application</strong> &mdash; the pairing of a candidate with a campaign. All pipeline state, timestamps, scores, decisions, and transitions live on the application, never on the candidate. One candidate may have many applications.</li>
+</ul>
+
+<h3>3.2 The current transition map</h3>
+
+<p>Legal transitions are declared in <code>src/lib/constants.ts</code> and enforced both in TypeScript and at the database:</p>
+
+<pre>new           → screening, screening_q, rejected, withdrawn
+screening     → screening_q, rejected, withdrawn
+screening_q   → interview, rejected, withdrawn
+interview     → manager_review, rejected, withdrawn
+manager_review → hired, rejected, withdrawn
+rejected / hired / withdrawn → [ ]   (terminal)</pre>
+
+<h3>3.3 The transition function</h3>
+
+<p>The TypeScript entry point <code>transitionApplication()</code> performs:</p>
+
+<ol>
+  <li>Actor validation &mdash; <code>recruiter</code> transitions require a written rationale.</li>
+  <li>Auth check &mdash; <code>supabase.auth.getUser()</code> or reject.</li>
+  <li>Pre-flight fetch of current status for a readable error on illegal transitions.</li>
+  <li>Idempotent no-op if <code>from === to</code>.</li>
+  <li>TS-side legality check against <code>APPLICATION_STATE_TRANSITIONS</code>.</li>
+  <li>Call to the <code>transition_application</code> RPC.</li>
+</ol>
+
+<h3>3.4 The database RPC</h3>
+
+<p>The RPC is <code>SECURITY DEFINER</code> plpgsql. Its body is a single transaction:</p>
+
+<pre>1. SELECT ... FOR UPDATE   -- locks the row; concurrent callers block
+2. ownership check against auth.uid()
+3. idempotency check
+4. UPDATE applications SET status = new
+       WHERE id = $1 AND status = from_state   -- concurrency guard
+5. INSERT INTO application_transitions (...)</pre>
+
+<p>Any failure rolls back all five steps. The <code>WHERE status = from_state</code> clause on the <code>UPDATE</code> is the concurrency guard: if another caller won the race, <code>ROW_COUNT</code> is zero and the function raises <em>"Concurrent state change"</em>.</p>
+
+<h3>3.5 Append-only audit table</h3>
+
+<p>The <code>application_transitions</code> table has:</p>
+
+<ul>
+  <li>RLS <code>SELECT</code> policy scoped to campaign owners.</li>
+  <li><strong>No</strong> <code>INSERT</code>, <code>UPDATE</code>, or <code>DELETE</code> policies &mdash; only the <code>SECURITY DEFINER</code> function can write, and nothing can delete.</li>
+  <li>Columns: <code>id</code>, <code>application_id</code>, <code>from_state</code>, <code>to_state</code>, <code>actor</code> (<em>system / ai / recruiter</em>), <code>rationale</code>, <code>created_at</code>.</li>
+</ul>
+
+<!-- ─────────────────────────────── END-TO-END FLOW ─────────────────────── -->
+<h2>4. End-to-End Candidate Workflow</h2>
+
+<h3>4.1 Phase 1 &mdash; Resume intake (Gmail → <code>new</code>)</h3>
+
+<p>Entry point: <code>syncResumesFromGmail()</code> in <code>src/lib/actions/candidates.ts</code>, invoked from the "Sync Gmail" button on a campaign detail page.</p>
+
+<ol>
+  <li><strong>Guards.</strong> Auth check; rate limit of 5 syncs per 10 minutes per user.</li>
+  <li><strong>Inbox scan.</strong> Up to 5 unread messages with PDF attachments are fetched from the campaign's configured Gmail inbox.</li>
+  <li><strong>Storage.</strong> The PDF is uploaded to Supabase Storage. The path (not a public URL) is stored on the application &mdash; resumes are private and accessed via one-hour signed URLs.</li>
+  <li><strong>Extraction.</strong> <code>pdf-parse</code> converts the PDF to text locally. The text is sent to OpenAI with a structured schema, returning typed JSON (name, email, phone, links, skills, experience, education).</li>
+  <li><strong>Candidate upsert.</strong> Keyed by email. An existing row is updated; a new email creates a new candidate record.</li>
+  <li><strong>Application create / resubmit.</strong> On first apply, an application row is inserted in status <code>new</code>. On a resubmission, the resume and parsed data are overwritten; recruiter-owned fields (status, score, rationale) are preserved and a breadcrumb is written to the AI audit log.</li>
+  <li><strong>AI audit row.</strong> Every AI extraction is logged with model version, prompt version, input snapshot, and raw output.</li>
+  <li><strong>Score attempt.</strong> If the campaign has scoring criteria configured, the resume is scored and the rule layer decides whether to advance. Scoring failures are non-blocking.</li>
+  <li><strong>Mark read.</strong> Only after all of the above succeed is the Gmail message marked read.</li>
+</ol>
+
+<h3>4.2 Phase 2 &mdash; Resume scoring (split: AI → evidence, rule → decision)</h3>
+
+<p>The scoring pipeline is split into two functions to enforce the AI/rule boundary in code.</p>
+
+<h4>AI layer &mdash; <code>scoreApplicationResume()</code></h4>
+<ul>
+  <li>Fetches the campaign scoring config.</li>
+  <li>If no criteria are configured, returns <code>null</code> &mdash; scoring is optional.</li>
+  <li>Calls OpenAI with the parsed resume, screening criteria, and job description.</li>
+  <li>Receives <code>{ overall_score, tier, rationale, factors }</code>.</li>
+  <li>Persists all of that on the <code>applications</code> row as evidence.</li>
+  <li><strong>Never touches <code>status</code>.</strong> Returns the result for the rule layer to consume.</li>
+</ul>
+
+<h4>Rule layer &mdash; <code>evaluateResumeScoringOutcome()</code></h4>
+<ul>
+  <li>Does not call AI. Does not query the database for the config &mdash; the AI layer passes it in.</li>
+  <li>In <code>fully_auto</code> mode: score at or above threshold transitions to <code>screening_q</code>; below threshold transitions to <code>rejected</code>.</li>
+  <li>In <code>human_in_loop</code> mode: no transition &mdash; the application remains in <code>new</code> until a recruiter acts. (This is a legacy shortcut; the target state is <code>screening_review_pending</code>, blocked on an enum migration.)</li>
+  <li>Each transition carries a rationale string recording the score and threshold.</li>
+</ul>
+
+<h3>4.3 Phase 3 &mdash; Screening questions (current text flow)</h3>
+
+<p>Applications that reached <code>screening_q</code> are eligible to receive screening questions.</p>
+
+<ul>
+  <li><strong>Eligibility filter.</strong> The bulk-send flow queries applications with <code>status = 'screening_q'</code>, a non-null <code>resume_score</code>, and an email on file.</li>
+  <li><strong>Question bank.</strong> Questions per campaign live in <code>screening_questions</code>; regeneration wipes and re-inserts.</li>
+  <li><strong>Response lifecycle.</strong> A separate table, <code>screening_question_responses</code>, carries its own status (<em>pending → sent → responded → scored → expired</em>). This is distinct from the application's status &mdash; the application only advances when the rule layer reads the overall score.</li>
+  <li><strong>Candidate experience.</strong> Public, token-based pages (no login) where candidates submit answers; token is validated server-side.</li>
+  <li><strong>AI scoring.</strong> On submission, AI produces per-answer scores and an overall score, all written back to the response row.</li>
+  <li><strong>Transition.</strong> A rule layer reads the overall score and calls <code>transitionApplication()</code> with <code>interview</code> or <code>rejected</code>.</li>
+</ul>
+
+<div class="callout">
+  <strong>PRD gap.</strong> The current flow treats screening answers as text. PRD 3.4.3 requires video/audio recordings with a practice question, re-recording, and transcript-linked scoring evidence. This is the largest functional gap in the system and will require recording storage, a transcription service, and a scoring model that references transcript excerpts.
+</div>
+
+<h3>4.4 Phase 4 &mdash; Interview, manager review, terminal states</h3>
+
+<p>From <code>screening_q</code>, the legal onward move is <code>interview</code>, which today is recruiter-driven via <code>updateCandidateStage()</code>. From <code>interview</code>, the legal moves are <code>manager_review</code>, <code>rejected</code>, or <code>withdrawn</code>. From <code>manager_review</code>, the legal moves are <code>hired</code>, <code>rejected</code>, or <code>withdrawn</code>. All three terminal states have empty transition arrays &mdash; the RPC will reject any further movement.</p>
+
+<div class="callout">
+  <strong>PRD gaps.</strong> The current pipeline compresses too much into the <code>interview</code> stage and skips several PRD-mandated phases:
+  <ul>
+    <li>No distinct <code>interview_scheduling</code> / <code>interview_scheduled</code> / <code>interview_completed</code> / <code>interview_scored</code> states.</li>
+    <li>No optional <code>reference_check</code> stage between interview scoring and manager review.</li>
+    <li>No <code>final_interview_scheduling</code> after manager review for the human final interview.</li>
+    <li>No distinct <code>archived</code> terminal state.</li>
+  </ul>
+  All of these require a database enum migration and corresponding rule-layer handlers. The transition plumbing is ready.
+</div>
+
+<!-- ─────────────────────────────── TRANSITION MACHINERY ────────────────── -->
+<h2>5. The Transition Machinery in Detail</h2>
+
+<h3>5.1 Call graph</h3>
+
+<pre>React component
+  │
+  ▼
+Server action  (updateCandidateStage, scoreResume, syncResumesFromGmail, ...)
+  │
+  ▼
+advanceApplicationStatus (system)  or  updateApplicationStage (recruiter)
+  │
+  ▼
+transitionApplication()   ← src/lib/data/transitions.ts
+  │   (legality check, rationale check, actor check)
+  ▼
+RPC: transition_application(id, to_state, actor, rationale)
+  │   (row lock, ownership check, concurrency guard, log insert)
+  ▼
+application_transitions (append-only log)</pre>
+
+<h3>5.2 Properties the machinery guarantees</h3>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th>How it is enforced</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>No silent state change</td>
+      <td>Direct <code>.update({ status })</code> does not exist in the codebase; the only writer is the RPC. Grep catches regressions.</td>
+    </tr>
+    <tr>
+      <td>Atomicity</td>
+      <td>RPC is a single plpgsql transaction. Either status change and log row both happen, or neither.</td>
+    </tr>
+    <tr>
+      <td>Concurrency safety</td>
+      <td><code>SELECT ... FOR UPDATE</code> locks the row; the <code>WHERE status = from_state</code> guard on the update causes the loser of a race to raise.</td>
+    </tr>
+    <tr>
+      <td>Tenant isolation</td>
+      <td>The RPC re-checks <code>auth.uid()</code> against <code>campaigns.user_id</code>, bypassable only by a privileged service role.</td>
+    </tr>
+    <tr>
+      <td>Recruiter accountability</td>
+      <td>TS guard in <code>transitionApplication()</code> rejects recruiter transitions without a rationale.</td>
+    </tr>
+    <tr>
+      <td>Append-only audit</td>
+      <td>RLS exposes no <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> policies on <code>application_transitions</code>; only the <code>SECURITY DEFINER</code> function can write.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─────────────────────────────── COMPLIANCE STATUS ───────────────────── -->
+<h2>6. Compliance Status Against Architectural Rules</h2>
+
+<h3>6.1 Completed</h3>
+
+<ul>
+  <li><span class="tag done">DONE</span> &nbsp;<code>updateApplicationStage</code> and <code>advanceApplicationStatus</code> now delegate to <code>transitionApplication()</code>. No direct <code>status</code> writes remain.</li>
+  <li><span class="tag done">DONE</span> &nbsp;<code>application_transitions</code> append-only log table and atomic <code>transition_application</code> RPC added in migration <code>20260417000000_application_transitions_log.sql</code>.</li>
+  <li><span class="tag done">DONE</span> &nbsp;Resume scoring and transition split into <code>scoreApplicationResume()</code> (AI evidence only) and <code>evaluateResumeScoringOutcome()</code> (rule layer).</li>
+  <li><span class="tag done">DONE</span> &nbsp;Candidate resubmission preserves recruiter-owned fields and writes a breadcrumb to the AI audit log.</li>
+  <li><span class="tag done">DONE</span> &nbsp;Eligibility filter for screening-question send now targets <code>screening_q</code> only, consistent with PRD pipeline intent.</li>
+</ul>
+
+<h3>6.2 Open</h3>
+
+<ul>
+  <li><span class="tag open">OPEN</span> &nbsp;<strong>Expand <code>candidate_stage_enum</code></strong> to the canonical set: <code>screening_review_pending</code>, <code>screening_approved</code>, <code>screening_sent</code>, <code>screening_completed</code>, <code>screening_scored</code>, <code>interview_scheduling</code>, <code>interview_scheduled</code>, <code>interview_completed</code>, <code>interview_scored</code>, <code>reference_check</code>, <code>final_interview_scheduling</code>, <code>archived</code>. Update <code>APPLICATION_STATE_TRANSITIONS</code> in lockstep.</li>
+  <li><span class="tag open">OPEN</span> &nbsp;Until <code>screening_review_pending</code> exists, the HITL branch of <code>evaluateResumeScoringOutcome</code> silently leaves the application in <code>new</code>.</li>
+  <li><span class="tag gap">PRD GAP</span> &nbsp;Screening questions are currently text Q&amp;A; PRD 3.4.3 requires video/audio recordings with practice question, re-recording, and transcript-linked scoring.</li>
+  <li><span class="tag gap">PRD GAP</span> &nbsp;<code>upsertCandidate</code> auto-merges on email match; PRD requires flagging duplicates for HR review.</li>
+  <li><span class="tag gap">PRD GAP</span> &nbsp;No interview-scheduling pipeline (candidate self-serve booking, confirmation, reminders, prep guide web page).</li>
+  <li><span class="tag gap">PRD GAP</span> &nbsp;No optional AI reference-check stage.</li>
+  <li><span class="tag gap">PRD GAP</span> &nbsp;No final interview scheduling stage after manager review.</li>
+</ul>
+
+<!-- ─────────────────────────────── CURRENT vs TARGET ───────────────────── -->
+<h2>7. Current vs PRD Target</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Concept</th>
+      <th>Current implementation</th>
+      <th>PRD target</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Post-resume eligibility</td>
+      <td><code>screening_q</code></td>
+      <td><code>screening_approved</code> → <code>screening_sent</code></td>
+    </tr>
+    <tr>
+      <td>HITL waiting bucket</td>
+      <td>Stays in <code>new</code></td>
+      <td><code>screening_review_pending</code></td>
+    </tr>
+    <tr>
+      <td>Screening answer medium</td>
+      <td>Text fields</td>
+      <td>Video/audio recordings with transcript</td>
+    </tr>
+    <tr>
+      <td>Practice question</td>
+      <td>Not present</td>
+      <td>Required before scored questions</td>
+    </tr>
+    <tr>
+      <td>Screening response lifecycle</td>
+      <td>Response-table status only</td>
+      <td>Application-level states (<code>screening_completed</code>, <code>screening_scored</code>)</td>
+    </tr>
+    <tr>
+      <td>Interview pipeline</td>
+      <td>Single <code>interview</code> state</td>
+      <td><code>interview_scheduling</code> → <code>scheduled</code> → <code>completed</code> → <code>scored</code></td>
+    </tr>
+    <tr>
+      <td>Reference check</td>
+      <td>Not present</td>
+      <td>Optional first-class stage</td>
+    </tr>
+    <tr>
+      <td>Final interview</td>
+      <td>Not present</td>
+      <td><code>final_interview_scheduling</code> via calendar integration</td>
+    </tr>
+    <tr>
+      <td>Deduplication policy</td>
+      <td>Auto-merge on email</td>
+      <td>Flag for HR review</td>
+    </tr>
+    <tr>
+      <td>Candidate UX</td>
+      <td>Token-based public pages (screening)</td>
+      <td>Token-based + mobile-friendly, desktop-only AI interview</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─────────────────────────────── ROADMAP ─────────────────────────────── -->
+<h2>8. Recommended Roadmap</h2>
+
+<ol>
+  <li><strong>Stage enum expansion.</strong> A single Supabase migration adds the canonical values to <code>candidate_stage_enum</code>. <code>APPLICATION_STATE_TRANSITIONS</code> is updated in the same pull request. This is purely data; behaviour only changes when rule handlers reference the new states. Unblocks the HITL fix and every downstream stage.</li>
+  <li><strong>HITL branch.</strong> Once the enum exists, change <code>evaluateResumeScoringOutcome</code> to transition HITL applications to <code>screening_review_pending</code>. Add a recruiter-facing review queue.</li>
+  <li><strong>Screening recording pipeline.</strong> Add a storage bucket for recordings, a transcription service call, a <code>screening_recordings</code> table, and a scoring model that emits transcript excerpts. Migrate the public candidate page from text fields to a recording UI with practice question and re-record. Largest single piece of work.</li>
+  <li><strong>Interview scheduling.</strong> Introduce the four post-screening states, build a candidate self-serve calendar page, and wire the confirmation/reminder emails.</li>
+  <li><strong>Reference check.</strong> Optional stage between <code>interview_scored</code> and <code>manager_review</code>. First-class in the transitions map, gated by a campaign setting.</li>
+  <li><strong>Final interview scheduling.</strong> Calendar integration for the human final interview after <code>manager_review</code>.</li>
+  <li><strong>Deduplication policy.</strong> Change <code>upsertCandidate</code> to detect potential duplicates on email / phone / profile similarity and flag them, rather than silently merging.</li>
+  <li><strong>Archived terminal state.</strong> For campaigns that close without a hire or where an application should be removed from active metrics without a harsh "rejected" label.</li>
+</ol>
+
+<!-- ─────────────────────────────── APPENDIX ────────────────────────────── -->
+<h2>9. Appendix &mdash; Key Files</h2>
+
+<table>
+  <thead>
+    <tr><th>Path</th><th>Role</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/lib/actions/candidates.ts</code></td><td>Server actions for Gmail sync, scoring, stage changes</td></tr>
+    <tr><td><code>src/lib/data/candidates.ts</code></td><td>Candidate/application data layer (no AI, no auth)</td></tr>
+    <tr><td><code>src/lib/data/transitions.ts</code></td><td>Sole entry point for status mutations</td></tr>
+    <tr><td><code>src/lib/data/screening-questions.ts</code></td><td>Screening question and response data layer</td></tr>
+    <tr><td><code>src/lib/services/openai.ts</code></td><td>AI extraction, criteria generation, scoring</td></tr>
+    <tr><td><code>src/lib/services/gmail.ts</code></td><td>Gmail API integration for resume inbox</td></tr>
+    <tr><td><code>src/lib/services/pdf.ts</code></td><td>PDF text extraction</td></tr>
+    <tr><td><code>src/lib/constants.ts</code></td><td>Domain types, enums, <code>APPLICATION_STATE_TRANSITIONS</code></td></tr>
+    <tr><td><code>src/lib/validations.ts</code></td><td>Zod schemas for server-action inputs</td></tr>
+    <tr><td><code>src/lib/rate-limit.ts</code></td><td>In-memory per-process rate limiter</td></tr>
+    <tr><td><code>supabase/migrations/20260417000000_application_transitions_log.sql</code></td><td>Transition log table and atomic RPC</td></tr>
+    <tr><td><code>CLAUDE.md</code></td><td>Architectural rules and compliance tracker</td></tr>
+    <tr><td><code>docs/prd.md</code></td><td>Product source of truth</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-note">
+  Screenr AI · Architecture &amp; Workflow Report · Prepared for internal engineering use
+</div>
+
+</body>
+</html>

@@ -1,11 +1,10 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import type { Campaign } from "@/lib/constants";
 import { parseCampaignFormData, uuidSchema } from "@/lib/validations";
+import { requireUserId } from "@/lib/auth/guards";
 
-// Data Access
 import {
   fetchAllCampaigns,
   fetchCampaignById,
@@ -17,21 +16,21 @@ import {
 // ─── GET all campaigns ───────────────────────────────────────────────────────
 
 export async function getCampaigns(): Promise<Campaign[]> {
-  return fetchAllCampaigns();
+  const userId = await requireUserId();
+  return fetchAllCampaigns(userId);
 }
 
 // ─── GET single campaign ─────────────────────────────────────────────────────
 
 export async function getCampaignById(id: string): Promise<Campaign | null> {
-  return fetchCampaignById(id);
+  const userId = await requireUserId();
+  return fetchCampaignById(id, userId);
 }
 
 // ─── CREATE campaign ─────────────────────────────────────────────────────────
 
 export async function createCampaign(formData: FormData) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
+  const userId = await requireUserId();
 
   // Validate all inputs
   const {
@@ -58,7 +57,7 @@ export async function createCampaign(formData: FormData) {
     rubrics,
     slaTimers,
     reviewers,
-    user.id
+    userId
   );
 
   redirect(`/campaigns/${campaignId}`);
@@ -67,9 +66,7 @@ export async function createCampaign(formData: FormData) {
 // ─── UPDATE campaign ─────────────────────────────────────────────────────────
 
 export async function updateCampaign(id: string, formData: FormData) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
+  const userId = await requireUserId();
 
   uuidSchema.parse(id);
 
@@ -97,7 +94,7 @@ export async function updateCampaign(id: string, formData: FormData) {
     },
     screeningCriteria,
     slaTimers,
-    user.id
+    userId
   );
 
   redirect(`/campaigns/${id}`);
@@ -106,14 +103,12 @@ export async function updateCampaign(id: string, formData: FormData) {
 // ─── CLONE campaign ──────────────────────────────────────────────────────────
 
 export async function cloneCampaign(id: string) {
-  const source = await getCampaignById(id);
+  const userId = await requireUserId();
+
+  const source = await fetchCampaignById(id, userId);
   if (!source) throw new Error("Campaign not found");
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  const clonedId = await cloneCampaignTx(id, source, user.id);
+  const clonedId = await cloneCampaignTx(id, source, userId);
 
   redirect(`/campaigns/${clonedId}`);
 }

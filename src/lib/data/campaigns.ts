@@ -87,14 +87,13 @@ function groupBy<T extends Record<string, unknown>>(arr: T[], key: string): Reco
 }
 
 // ─── GET all campaigns
-export async function fetchAllCampaigns(): Promise<Campaign[]> {
+export async function fetchAllCampaigns(userId: string): Promise<Campaign[]> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return [];
 
   const { data: rows, error } = await supabase
     .from("campaigns")
     .select("*")
+    .eq("user_id", userId)
     .is("deleted_at", null)
     .order("created_at", { ascending: false });
 
@@ -166,18 +165,14 @@ export async function fetchAllCampaigns(): Promise<Campaign[]> {
 }
 
 // ─── GET single campaign
-export async function fetchCampaignById(id: string): Promise<Campaign | null> {
+export async function fetchCampaignById(id: string, userId: string): Promise<Campaign | null> {
   const supabase = await createClient();
-
-  // Auth guard
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
 
   const { data: row, error } = await supabase
     .from("campaigns")
     .select("*")
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .is("deleted_at", null)
     .single();
 
@@ -263,16 +258,14 @@ export async function verifyCampaignOwnership(
 }
 
 // ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
-export async function fetchCampaignScoringConfig(campaignId: string) {
+export async function fetchCampaignScoringConfig(campaignId: string, userId: string) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
 
   const { data: row } = await supabase
     .from("campaigns")
     .select("id, description, automation_mode, screening_threshold")
     .eq("id", campaignId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .is("deleted_at", null)
     .single();
 
