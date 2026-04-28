@@ -1,15 +1,19 @@
 "use server";
 
 import type { gmail_v1 } from "googleapis";
-import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { uuidSchema, candidateStageSchema } from "@/lib/validations";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { requireUserId } from "@/lib/auth/guards";
 
 // Services
 import { fetchUnreadGmailResumes, getGmailMessage, getGmailAttachmentBuffer, markGmailMessageAsRead } from "@/lib/services/gmail";
 import { parsePdf } from "@/lib/services/pdf";
-import { extractResumeData, type ParsedResumeData } from "@/lib/services/openai";
+import {
+  extractResumeData,
+  scoreResumeAgainstCriteria,
+  type ParsedResumeData,
+} from "@/lib/services/openai";
 
 // Data Access
 import {
@@ -20,10 +24,11 @@ import {
   fetchCandidatesByCampaignId,
   fetchCandidateById,
   updateApplicationStage,
+  advanceApplicationStatus,
   getResumeSignedUrl,
   saveResumeScore,
+  fetchApplicationCampaignId,
 } from "@/lib/data/candidates";
-import { scoreResumeAgainstCriteria } from "@/lib/actions/ai-generate";
 import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
 
 // Rules
@@ -45,16 +50,10 @@ type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
  */
 export async function syncResumesFromGmail(campaignId: string) {
   try {
-    const supabase = await createClient();
-
-    // Auth guard
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      throw new Error("Unauthorized");
-    }
+    const userId = await requireUserId();
 
     // Rate limit: 5 Gmail syncs per 10 minutes per user
-    checkRateLimit(user.id, { name: "gmail-sync", maxRequests: 5, windowMs: 10 * 60 * 1000 });
+    checkRateLimit(userId, { name: "gmail-sync", maxRequests: 5, windowMs: 10 * 60 * 1000 });
 
     // Find up to 5 recent unread emails with PDF attachments
     const messages = await fetchUnreadGmailResumes(5);
@@ -108,8 +107,11 @@ export async function syncResumesFromGmail(campaignId: string) {
         //    the rule layer decide whether to advance. Scoring failures are
         //    non-blocking — the application still lands in `new` either way.
         try {
-          const scored = await scoreApplicationResume(applicationId, campaignId, structuredData);
-          if (scored) await evaluateResumeScoringOutcome(applicationId, scored.result, scored.config);
+          const scored = await scoreApplicationResume(applicationId, campaignId, userId, structuredData);
+          if (scored) {
+            const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
+            await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
+          }
         } catch (scoreErr) {
           console.error("Resume scoring failed (non-blocking):", scoreErr);
         }
@@ -151,7 +153,8 @@ function normalizeStage(status: string): CandidateStage {
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
 
 export async function getCandidatesByCampaignId(campaignId: string): Promise<Candidate[]> {
-  const data = await fetchCandidatesByCampaignId(campaignId);
+  const userId = await requireUserId();
+  const data = await fetchCandidatesByCampaignId(campaignId, userId);
   if (!data) return [];
 
   return (data as ApplicationWithCandidate[]).map((app) => {
@@ -178,7 +181,8 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
 }
 
 export async function getCandidateById(applicationId: string) {
-  const data = (await fetchCandidateById(applicationId)) as ApplicationWithCandidate | null;
+  const userId = await requireUserId();
+  const data = (await fetchCandidateById(applicationId, userId)) as ApplicationWithCandidate | null;
   if (!data) return null;
 
   const candidateRecord = data.candidates;
@@ -218,22 +222,18 @@ export async function updateCandidateStage(
   stage: string,
   rationale?: string,
 ) {
+  await requireUserId();
   uuidSchema.parse(applicationId);
   candidateStageSchema.parse(stage);
 
   // Fetch campaign_id before updating so we can revalidate the right paths
-  const supabase = await createClient();
-  const { data: app } = await supabase
-    .from("applications")
-    .select("campaign_id")
-    .eq("id", applicationId)
-    .single();
+  const campaignId = await fetchApplicationCampaignId(applicationId);
 
   await updateApplicationStage(applicationId, stage as CandidateStageEnum, rationale);
 
-  if (app?.campaign_id) {
-    revalidatePath(`/campaigns/${app.campaign_id}`);
-    revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
+  if (campaignId) {
+    revalidatePath(`/campaigns/${campaignId}`);
+    revalidatePath(`/campaigns/${campaignId}/candidates/${applicationId}`);
   }
 }
 
@@ -251,9 +251,10 @@ export async function updateCandidateStage(
 async function scoreApplicationResume(
   applicationId: string,
   campaignId: string,
+  userId: string,
   parsedResume: ParsedResumeData | Record<string, unknown>,
 ): Promise<{ result: ResumeScoreResult; config: CampaignScoringConfig } | null> {
-  const config = await fetchCampaignScoringConfig(campaignId);
+  const config = await fetchCampaignScoringConfig(campaignId, userId);
   if (!config || config.screening_criteria.length === 0) return null;
 
   const result = await scoreResumeAgainstCriteria(
@@ -280,20 +281,21 @@ async function scoreApplicationResume(
  */
 export async function scoreResume(applicationId: string) {
   try {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Unauthorized");
+    const userId = await requireUserId();
 
-    checkRateLimit(user.id, { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 });
+    checkRateLimit(userId, { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 });
 
-    const data = (await fetchCandidateById(applicationId)) as ApplicationWithCandidate | null;
+    const data = (await fetchCandidateById(applicationId, userId)) as ApplicationWithCandidate | null;
     if (!data) throw new Error("Application not found");
 
     const parsedResume = data.parsed_data as ParsedResumeData | null;
     if (!parsedResume) throw new Error("No parsed resume data available for scoring");
 
-    const scored = await scoreApplicationResume(applicationId, data.campaign_id, parsedResume);
-    if (scored) await evaluateResumeScoringOutcome(applicationId, scored.result, scored.config);
+    const scored = await scoreApplicationResume(applicationId, data.campaign_id, userId, parsedResume);
+    if (scored) {
+      const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
+      await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
+    }
 
     revalidatePath(`/campaigns/${data.campaign_id}`);
     revalidatePath(`/campaigns/${data.campaign_id}/candidates/${applicationId}`);

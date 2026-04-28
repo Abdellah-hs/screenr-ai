@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import type { ParsedResumeData } from "@/lib/services/openai";
 import type { Database, Json } from "@/types/database.types";
 import { transitionApplication } from "@/lib/data/transitions";
+import { verifyCampaignOwnership } from "@/lib/data/campaigns";
 import type { ApplicationState } from "@/lib/constants";
 
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
@@ -28,10 +29,6 @@ export async function uploadResumeToStorage(campaignId: string, filename: string
 export async function getResumeSignedUrl(filePath: string): Promise<string | null> {
   if (!filePath) return null;
   const supabase = await createClient();
-
-  // Auth guard
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
 
   const { data, error } = await supabase.storage
     .from("resumes")
@@ -168,21 +165,11 @@ export async function logAiAudit(params: {
   });
 }
 
-export async function fetchCandidatesByCampaignId(campaignId: string) {
+export async function fetchCandidatesByCampaignId(campaignId: string, userId: string) {
+  if (!(await verifyCampaignOwnership(campaignId, userId))) {
+    throw new Error("Campaign not found or access denied");
+  }
   const supabase = await createClient();
-
-  // Auth guard
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-
-  // Ownership check: verify user owns the campaign
-  const { data: campaign } = await supabase
-    .from("campaigns")
-    .select("id")
-    .eq("id", campaignId)
-    .eq("user_id", user.id)
-    .single();
-  if (!campaign) throw new Error("Campaign not found or access denied");
 
   const { data, error } = await supabase
     .from("applications")
@@ -208,12 +195,8 @@ export async function fetchCandidatesByCampaignId(campaignId: string) {
   return data;
 }
 
-export async function fetchCandidateById(applicationId: string) {
+export async function fetchCandidateById(applicationId: string, userId: string) {
   const supabase = await createClient();
-
-  // Auth guard
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
 
   const { data, error } = await supabase
     .from("applications")
@@ -238,15 +221,9 @@ export async function fetchCandidateById(applicationId: string) {
     return null;
   }
 
-  // Ownership check: verify the application belongs to a campaign the user owns
-  const { data: campaign } = await supabase
-    .from("campaigns")
-    .select("id")
-    .eq("id", data.campaign_id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (!campaign) throw new Error("Access denied");
+  if (!(await verifyCampaignOwnership(data.campaign_id, userId))) {
+    throw new Error("Access denied");
+  }
 
   return data;
 }
@@ -259,9 +236,6 @@ export async function saveResumeScore(
   factors: { name: string; weight: number; score: number }[]
 ) {
   const supabase = await createClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
 
   const { error, data } = await supabase
     .from("applications")

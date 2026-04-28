@@ -33,9 +33,6 @@ export async function transitionApplication(params: TransitionParams): Promise<v
 
   const supabase = await createClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Unauthorized");
-
   // Pre-flight validation so we fail fast with a readable error before the RPC.
   // The RPC itself also enforces ownership + row-level concurrency.
   const { data: app, error: fetchError } = await supabase
