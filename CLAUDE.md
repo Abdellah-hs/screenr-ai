@@ -94,6 +94,26 @@ When adding a new enum value, update both `constants.ts` **and** the matching Zo
 
 `@/*` maps to `./src/*` (configured in tsconfig.json).
 
+## Working Principles
+
+Process rules for how features get picked, planned, and built. Not aspirational — when one of these is violated in practice, the right response is to follow it, not delete it.
+
+### Grill before code
+
+For any new feature, ask the unanswered questions before writing code. Bad workflow: `idea → code immediately`. Good workflow: `idea → questions → refined idea → document → code`. When given a vague feature ask, push back with the questions a senior reviewer would have raised in design review (who uses this, edge cases, failure modes, unclear UI behavior, what happens when the AI is wrong) before implementing. The cost of one round of questions is far less than the cost of building the wrong thing efficiently.
+
+### Prefer vertical slices
+
+When picking the next thing to build, choose a feature that cuts through every layer end-to-end (UI → action → rules → data → DB), however thin, rather than building one layer at a time. Vertical slices ship value at every commit and surface integration problems immediately. Horizontal slicing (build all of layer A, then all of layer B) defers all the interesting failures to the end and leaves the system unshippable in the meantime. The HITL screening review queue (commit `4dc3903`) was built this way as a reference example.
+
+### Keep the ubiquitous language alive
+
+[docs/ubiquitous-language.md](docs/ubiquitous-language.md) is the shared vocabulary for this project — `Candidate` is a person, `Application` is that person applying to one campaign, `Transition` is a state-machine move, etc. When a new domain term shows up in conversation, code, or a PRD, add or update its entry. Drifted vocabulary is how subtle bugs ship: code that conflates `Candidate` with `Application` will mis-attribute scores or stages because the same person can score differently for different roles.
+
+### Skim every issue before implementing it
+
+Generated issues — whether from a PRD breakdown, an AI agent, or a backlog import — can implement the wrong thing very efficiently. The bar is not "review every line" but "skim enough to confirm the intent matches the actual product need". This applies to GitHub issues, plans, todo lists, and prompts. If an issue's acceptance criteria don't match what you'd accept on review, fix the issue first, then implement.
+
 ## ATS State Machine Rules (STRICT)
 
 **Core principle: Control > AI > Data.** This ATS is a controlled state machine. AI is analysis only — it produces scores, classifications, and rationale, but it NEVER mutates application state. All decisions are made by explicit rules.
