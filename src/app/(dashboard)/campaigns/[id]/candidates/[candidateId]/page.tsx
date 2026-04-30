@@ -5,6 +5,7 @@ import { getCandidateById } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { ScoreResumeButton } from "@/components/candidates/score-resume-button";
 import { StageChanger } from "@/components/candidates/stage-changer";
+import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import type { CandidateStage, CandidateScore } from "@/lib/constants";
 
@@ -420,6 +421,10 @@ export default async function CandidateDetailPage({
 
         {/* Right column — Scores + Screening thread */}
         <div className="lg:col-span-2 space-y-4">
+          {candidate.awaiting_human_review && (
+            <HitlReviewPanel applicationId={candidateId} />
+          )}
+
           <ScreeningThread
             applicationId={candidateId}
             questions={screeningState.questions}

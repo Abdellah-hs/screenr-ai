@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import type { Candidate, CandidateStage } from "@/lib/constants";
+import type { AutomationMode, Candidate, CandidateStage } from "@/lib/constants";
 
 const stageColors: Record<CandidateStage, string> = {
   applied: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
@@ -38,18 +38,46 @@ function getLatestScore(candidate: Candidate) {
 export default function CandidateTable({
   candidates,
   campaignId,
+  automationMode,
 }: {
   candidates: Candidate[];
   campaignId: string;
+  automationMode: AutomationMode;
 }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortField>("applied_at");
 
+  const stageCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: candidates.length,
+      pending_review: 0,
+    };
+    for (const c of candidates) {
+      counts[c.stage] = (counts[c.stage] || 0) + 1;
+      if (c.awaiting_human_review) counts.pending_review += 1;
+    }
+    return counts;
+  }, [candidates]);
+
+  // If the "Pending review" pill is no longer rendered (e.g. recruiter
+  // approved the last pending candidate on a fully_auto campaign), don't
+  // leave the user filtered to a hidden state with no visible reset —
+  // derive the effective filter from the requested one, so a stale
+  // "pending_review" intent silently behaves as "all".
+  const showPendingReview =
+    automationMode === "human_in_loop" || stageCounts.pending_review > 0;
+  const effectiveFilter =
+    stageFilter === "pending_review" && !showPendingReview ? "all" : stageFilter;
+
   const filtered = useMemo(() => {
     return candidates
       .filter((c) => {
-        if (stageFilter !== "all" && c.stage !== stageFilter) return false;
+        if (effectiveFilter === "pending_review") {
+          if (!c.awaiting_human_review) return false;
+        } else if (effectiveFilter !== "all" && c.stage !== effectiveFilter) {
+          return false;
+        }
         if (search) {
           const q = search.toLowerCase();
           return (
@@ -72,44 +100,48 @@ export default function CandidateTable({
           new Date(b.applied_at).getTime() - new Date(a.applied_at).getTime()
         );
       });
-  }, [candidates, search, stageFilter, sortBy]);
-
-  const stageCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: candidates.length };
-    for (const c of candidates) {
-      counts[c.stage] = (counts[c.stage] || 0) + 1;
-    }
-    return counts;
-  }, [candidates]);
+  }, [candidates, search, effectiveFilter, sortBy]);
 
   return (
     <div className="space-y-4">
       {/* Stage pills */}
       <div className="flex flex-wrap gap-2">
-        {[
-          { key: "all", label: "All" },
-          { key: "applied", label: "Applied" },
-          { key: "screening", label: "Screening" },
-          { key: "interview", label: "Interview" },
-          { key: "offer", label: "Offer" },
-          { key: "hired", label: "Hired" },
-          { key: "rejected", label: "Rejected" },
-        ].map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setStageFilter(key)}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
-              stageFilter === key
-                ? "bg-[#2563EB] text-white border-[#2563EB]"
-                : "bg-white text-[#4B5563] border-[#E5E7EB] hover:bg-[#F9FAFB]"
-            }`}
-          >
-            {label}
-            {stageCounts[key] != null && (
-              <span className="ml-1.5 opacity-70">{stageCounts[key]}</span>
-            )}
-          </button>
-        ))}
+        {(
+          [
+            { key: "all", label: "All" },
+            { key: "applied", label: "Applied" },
+            ...(showPendingReview
+              ? [{ key: "pending_review", label: "Pending review" }]
+              : []),
+            { key: "screening", label: "Screening" },
+            { key: "interview", label: "Interview" },
+            { key: "offer", label: "Offer" },
+            { key: "hired", label: "Hired" },
+            { key: "rejected", label: "Rejected" },
+          ] as { key: string; label: string }[]
+        ).map(({ key, label }) => {
+          const isPending = key === "pending_review";
+          const isActive = effectiveFilter === key;
+          const inactiveClasses = isPending
+            ? "bg-[#FFFBEB] text-[#B45309] border-[#FDE68A] hover:bg-[#FEF3C7]"
+            : "bg-white text-[#4B5563] border-[#E5E7EB] hover:bg-[#F9FAFB]";
+          return (
+            <button
+              key={key}
+              onClick={() => setStageFilter(key)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                isActive
+                  ? "bg-[#2563EB] text-white border-[#2563EB]"
+                  : inactiveClasses
+              }`}
+            >
+              {label}
+              {stageCounts[key] != null && (
+                <span className="ml-1.5 opacity-70">{stageCounts[key]}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Search + Sort */}
@@ -221,13 +253,20 @@ export default function CandidateTable({
                             "—"}
                       </td>
                       <td className="px-6 py-4">
-                        <span
-                          className={`inline-flex px-2.5 py-1 text-xs font-medium border rounded-md capitalize ${
-                            stageColors[candidate.stage]
-                          }`}
-                        >
-                          {stageLabels[candidate.stage]}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`inline-flex px-2.5 py-1 text-xs font-medium border rounded-md capitalize ${
+                              stageColors[candidate.stage]
+                            }`}
+                          >
+                            {stageLabels[candidate.stage]}
+                          </span>
+                          {candidate.awaiting_human_review && (
+                            <span className="inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]">
+                              Pending review
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         {latestScore ? (
