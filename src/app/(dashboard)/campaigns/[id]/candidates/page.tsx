@@ -56,7 +56,11 @@ export default async function CandidatesPage({
         </Link>
       </div>
 
-      <CandidateTable candidates={candidates} campaignId={id} />
+      <CandidateTable
+        candidates={candidates}
+        campaignId={id}
+        automationMode={campaign.automation_mode}
+      />
     </div>
   );
 }
