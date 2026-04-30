@@ -1,0 +1,153 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { decideHitlReview } from "@/lib/actions/candidates";
+import { Modal, ModalFooter, ModalHeader } from "@/components/ui";
+
+type Decision = "approve" | "reject";
+
+export function HitlReviewPanel({ applicationId }: { applicationId: string }) {
+  const router = useRouter();
+  const [decision, setDecision] = useState<Decision | null>(null);
+  const [rationale, setRationale] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function open(d: Decision) {
+    setDecision(d);
+    setRationale("");
+    setError(null);
+  }
+
+  function close() {
+    if (isPending) return;
+    setDecision(null);
+    setRationale("");
+    setError(null);
+  }
+
+  function submit() {
+    if (!decision) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        await decideHitlReview({
+          applicationId,
+          decision,
+          rationale: rationale.trim(),
+        });
+        setDecision(null);
+        setRationale("");
+        router.refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to submit decision");
+      }
+    });
+  }
+
+  const isApprove = decision === "approve";
+
+  return (
+    <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-xl p-5">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="w-8 h-8 rounded-full bg-[#FEF3C7] text-[#B45309] flex items-center justify-center shrink-0">
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 9v3.75m0-10.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285zm0 13.036h.008v.008H12v-.008z"
+            />
+          </svg>
+        </div>
+        <div className="flex-1">
+          <h3 className="text-sm font-semibold text-[#92400E]">
+            Awaiting your review
+          </h3>
+          <p className="text-xs text-[#B45309] mt-0.5">
+            This campaign is in human-in-the-loop mode. The AI has produced a
+            score and rationale; the advancement decision is yours.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => open("approve")}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#059669] rounded-lg cursor-pointer hover:bg-[#047857] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] focus-visible:ring-offset-1"
+        >
+          Approve for screening
+        </button>
+        <button
+          type="button"
+          onClick={() => open("reject")}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#DC2626] bg-white border border-[#FECACA] rounded-lg cursor-pointer hover:bg-[#FEF2F2] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#DC2626] focus-visible:ring-offset-1"
+        >
+          Reject
+        </button>
+      </div>
+
+      <Modal open={decision !== null} onClose={close}>
+        <ModalHeader>
+          <h2 className="text-lg font-semibold text-[#0C4A6E]">
+            {isApprove ? "Approve for screening" : "Reject application"}
+          </h2>
+          <p className="text-sm text-[#6B7280] mt-1">
+            Add a short rationale. This is recorded on the audit trail.
+          </p>
+        </ModalHeader>
+
+        <textarea
+          value={rationale}
+          onChange={(e) => setRationale(e.target.value)}
+          disabled={isPending}
+          rows={4}
+          placeholder={
+            isApprove
+              ? "e.g. Strong relevant experience; want to see screening answers."
+              : "e.g. Background does not match required stack; declining."
+          }
+          className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] outline-none resize-y"
+        />
+
+        {error && (
+          <p className="text-xs text-[#DC2626] mt-2">{error}</p>
+        )}
+
+        <ModalFooter>
+          <button
+            type="button"
+            onClick={close}
+            disabled={isPending}
+            className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={isPending || rationale.trim().length < 10}
+            className={`px-4 py-2 text-sm font-medium text-white rounded-lg cursor-pointer transition-colors disabled:opacity-50 ${
+              isApprove
+                ? "bg-[#059669] hover:bg-[#047857]"
+                : "bg-[#DC2626] hover:bg-[#B91C1C]"
+            }`}
+          >
+            {isPending
+              ? "Submitting..."
+              : isApprove
+                ? "Confirm approval"
+                : "Confirm rejection"}
+          </button>
+        </ModalFooter>
+      </Modal>
+    </div>
+  );
+}

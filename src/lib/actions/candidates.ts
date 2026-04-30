@@ -2,9 +2,10 @@
 
 import type { gmail_v1 } from "googleapis";
 import { revalidatePath } from "next/cache";
-import { uuidSchema, candidateStageSchema } from "@/lib/validations";
+import { uuidSchema, candidateStageSchema, hitlReviewDecisionSchema } from "@/lib/validations";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
+import { transitionApplication } from "@/lib/data/transitions";
 
 // Services
 import { fetchUnreadGmailResumes, getGmailMessage, getGmailAttachmentBuffer, markGmailMessageAsRead } from "@/lib/services/gmail";
@@ -37,7 +38,7 @@ import {
   type CampaignScoringConfig,
   type ResumeScoreResult,
 } from "@/lib/rules/resume-scoring";
-import type { Candidate, CandidateScore, CandidateStage, ScoreFactor, ScreeningTier } from "@/lib/constants";
+import type { ApplicationState, Candidate, CandidateScore, CandidateStage, ScoreFactor, ScreeningTier } from "@/lib/constants";
 import type { Database } from "@/types/database.types";
 
 type ApplicationRow = Database["public"]["Tables"]["applications"]["Row"];
@@ -168,6 +169,7 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       current_title: parsed?.experience?.[0]?.title || null,
       current_company: parsed?.experience?.[0]?.company || null,
       stage: normalizeStage(app.status),
+      awaiting_human_review: app.status === "screening_review_pending",
       scores: buildScoresArray(app),
       resume: {
         skills: parsed?.skills || [],
@@ -202,6 +204,7 @@ export async function getCandidateById(applicationId: string) {
     current_title: parsed?.experience?.[0]?.title || null,
     current_company: parsed?.experience?.[0]?.company || null,
     stage: normalizeStage(data.status),
+    awaiting_human_review: data.status === "screening_review_pending",
     screening_tier: data.screening_tier || null,
     scores: buildScoresArray(data),
     applied_at: data.created_at,
@@ -272,6 +275,50 @@ async function scoreApplicationResume(
   );
 
   return { result, config };
+}
+
+// ─── HITL Screening Review ──────────────────────────────────────────────────
+// When automation_mode = human_in_loop, the resume-scoring rule routes
+// applications to `screening_review_pending` instead of approving/rejecting
+// automatically. This action is the recruiter's decision point. It is a
+// recruiter-actor transition, so a written rationale is mandatory.
+
+export async function decideHitlReview(input: {
+  applicationId: string;
+  decision: "approve" | "reject";
+  rationale: string;
+}) {
+  const userId = await requireUserId();
+
+  // Validate shape, length, decision enum, and uuid format up-front.
+  const parsed = hitlReviewDecisionSchema.parse(input);
+
+  checkRateLimit(userId, { name: "hitl-review", maxRequests: 30, windowMs: 5 * 60 * 1000 });
+
+  // Ownership check + preflight: only proceed if this application is actually
+  // in `screening_review_pending`. Without this guard a recruiter could press
+  // approve/reject on a stale page and try to drive an illegal transition.
+  const data = (await fetchCandidateById(parsed.applicationId, userId)) as ApplicationWithCandidate | null;
+  if (!data) throw new Error("Application not found");
+
+  if (data.status !== "screening_review_pending") {
+    throw new Error("Application is no longer awaiting review");
+  }
+
+  const toState: ApplicationState =
+    parsed.decision === "approve" ? "screening_approved" : "rejected";
+
+  await transitionApplication({
+    applicationId: parsed.applicationId,
+    toState,
+    actor: "recruiter",
+    rationale: parsed.rationale,
+  });
+
+  revalidatePath(`/campaigns/${data.campaign_id}`);
+  revalidatePath(`/campaigns/${data.campaign_id}/candidates/${parsed.applicationId}`);
+
+  return { success: true, decision: parsed.decision };
 }
 
 /**

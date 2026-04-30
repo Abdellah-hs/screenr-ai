@@ -147,3 +147,18 @@ export const screeningAnswerSubmissionSchema = z.object({
   token: z.string().min(10).max(2000),
   answers: z.array(screeningAnswerSchema).min(1, "No answers submitted").max(15),
 });
+
+// ─── HITL Screening Review ──────────────────────────────────────────────────
+
+// Recruiter approve/reject decision on a screening_review_pending application.
+// Rationale is mandatory because this is a recruiter-actor transition (per
+// transitionApplication's contract) and overrides an AI suggestion.
+export const hitlReviewDecisionSchema = z.object({
+  applicationId: uuidSchema,
+  decision: z.enum(["approve", "reject"]),
+  rationale: z
+    .string()
+    .trim()
+    .min(10, "Please give a short rationale (10+ characters)")
+    .max(2000, "Rationale is too long"),
+});
