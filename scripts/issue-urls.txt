@@ -1,0 +1,24 @@
+schema(audit): add rubric_version and confidence to ai_audit_log (I15) || https://github.com/MatiousCorp/screenr-ai/issues/25
+fix(audit): write ai_audit_log row on every resume score (I9) || https://github.com/MatiousCorp/screenr-ai/issues/26
+fix(audit): write ai_audit_log row on every screening-answer score (I10) || https://github.com/MatiousCorp/screenr-ai/issues/27
+refactor(state-machine): migrate legacy candidate_stage_enum values to canonical names (I13) || https://github.com/MatiousCorp/screenr-ai/issues/28
+feat(ai-interview): build real-time interview backbone (LiveKit Agents + OpenAI Realtime plugin) (I18) || https://github.com/MatiousCorp/screenr-ai/issues/29
+feat(dedup): flag duplicate candidates for HR review instead of auto-merge (I2a) || https://github.com/MatiousCorp/screenr-ai/issues/30
+feat(email): baseline transactional email surface for advance/reject flows (I11) || https://github.com/MatiousCorp/screenr-ai/issues/31
+schema(state-machine): add explicit failure states to candidate_stage_enum (I14) || https://github.com/MatiousCorp/screenr-ai/issues/32
+feat(scheduling): interview self-scheduling against system availability (I19) || https://github.com/MatiousCorp/screenr-ai/issues/33
+feat(recording): interview recording + transcript persistence (I20) || https://github.com/MatiousCorp/screenr-ai/issues/34
+feat(scoring): interview scoring per-section + overall (I21) || https://github.com/MatiousCorp/screenr-ai/issues/35
+feat(scoring): stamp rubric version on score writes and show mismatch badge (I3) || https://github.com/MatiousCorp/screenr-ai/issues/36
+feat(parser): add DOCX support to resume parser (I4) || https://github.com/MatiousCorp/screenr-ai/issues/37
+chore(copy): rename moderate tier label to Potential Match in UI and prompts (I6) || https://github.com/MatiousCorp/screenr-ai/issues/38
+feat(review): manager review backbone — compare schema and notes data layer (I12a) || https://github.com/MatiousCorp/screenr-ai/issues/39
+fix(ui): mobile pass on candidate-facing pages (I16) || https://github.com/MatiousCorp/screenr-ai/issues/40
+feat(proctoring): basic interview proctoring (tab focus + presence) (I22) || https://github.com/MatiousCorp/screenr-ai/issues/41
+feat(content): interview prep guide page (I23) || https://github.com/MatiousCorp/screenr-ai/issues/42
+feat(linkedin): browser extension for one-click candidate intake (I25) || https://github.com/MatiousCorp/screenr-ai/issues/43
+feat(ui): HR duplicate review queue page (I2b) || https://github.com/MatiousCorp/screenr-ai/issues/44
+feat(ui): manager review backbone — side-by-side compare + notes panel (I12b) || https://github.com/MatiousCorp/screenr-ai/issues/45
+chore(flags): hide team-reviewers-editor behind a feature flag (I5) || https://github.com/MatiousCorp/screenr-ai/issues/46
+docs: document text-screening divergence as accepted temporary gap (I7) || https://github.com/MatiousCorp/screenr-ai/issues/47
+feat(intake): add video/audio recording to screening questions (share LiveKit infra) (I24) || https://github.com/MatiousCorp/screenr-ai/issues/48
