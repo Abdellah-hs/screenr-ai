@@ -62,11 +62,20 @@
   * {
     @apply border-border;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
   body {
     @apply bg-background text-foreground font-sans antialiased;
   }
   h1, h2, h3, h4, h5, h6 {
     @apply font-heading tracking-tight;
+  }
+  /* Ensure interactive elements meet minimum 44px touch target */
+  button, a, input, textarea, select, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
   }
 }
 
@@ -97,7 +106,7 @@
   
   /* Inputs */
   .input {
-    @apply w-full px-4 py-2.5 border border-[#D1D5DB] rounded-lg text-[#111827] bg-white placeholder-[#9CA3AF] transition-colors focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none;
+    @apply w-full px-4 py-2.5 border border-[#D1D5DB] rounded-lg text-base text-[#111827] bg-white placeholder-[#9CA3AF] transition-colors focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none min-h-[44px];
   }
   
   /* Modals */
