@@ -44,6 +44,7 @@ export type Database = {
           action_taken: string | null
           campaign_id: string
           candidate_id: string | null
+          confidence: number | null
           created_at: string
           id: string
           input_snapshot: Json
@@ -52,12 +53,14 @@ export type Database = {
           prompt_version: string
           rationale: string | null
           raw_output: string
+          rubric_version: string | null
           stage: string
         }
         Insert: {
           action_taken?: string | null
           campaign_id: string
           candidate_id?: string | null
+          confidence?: number | null
           created_at?: string
           id?: string
           input_snapshot: Json
@@ -66,12 +69,14 @@ export type Database = {
           prompt_version: string
           rationale?: string | null
           raw_output: string
+          rubric_version?: string | null
           stage: string
         }
         Update: {
           action_taken?: string | null
           campaign_id?: string
           candidate_id?: string | null
+          confidence?: number | null
           created_at?: string
           id?: string
           input_snapshot?: Json
@@ -80,6 +85,7 @@ export type Database = {
           prompt_version?: string
           rationale?: string | null
           raw_output?: string
+          rubric_version?: string | null
           stage?: string
         }
         Relationships: [
@@ -396,6 +402,60 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      duplicate_review_queue: {
+        Row: {
+          id: string
+          candidate_id: string
+          matched_candidate_id: string
+          match_signals: Json
+          status: string
+          reviewer_user_id: string | null
+          rationale: string | null
+          created_at: string
+          updated_at: string
+          resolved_at: string | null
+        }
+        Insert: {
+          id?: string
+          candidate_id: string
+          matched_candidate_id: string
+          match_signals?: Json
+          status?: string
+          reviewer_user_id?: string | null
+          rationale?: string | null
+          created_at?: string
+          updated_at?: string
+          resolved_at?: string | null
+        }
+        Update: {
+          id?: string
+          candidate_id?: string
+          matched_candidate_id?: string
+          match_signals?: Json
+          status?: string
+          reviewer_user_id?: string | null
+          rationale?: string | null
+          created_at?: string
+          updated_at?: string
+          resolved_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "duplicate_review_queue_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "duplicate_review_queue_matched_candidate_id_fkey"
+            columns: ["matched_candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       evaluation_rubrics: {
         Row: {
