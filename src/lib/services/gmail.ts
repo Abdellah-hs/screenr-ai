@@ -1,5 +1,14 @@
 import { google } from "googleapis";
 
+const SUPPORTED_RESUME_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
+export function isSupportedResumeMimeType(mimeType: string): boolean {
+  return SUPPORTED_RESUME_MIME_TYPES.has(mimeType);
+}
+
 /**
  * Validates or initializes a simple Google OAuth2 client.
  * Note: For local testing, you need GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN in .env.local
@@ -29,7 +38,7 @@ export async function fetchUnreadGmailResumes(maxResults: number = 5) {
   const gmail = getGmailClient();
   const res = await gmail.users.messages.list({
     userId: "me",
-    q: "is:unread has:attachment filename:pdf",
+    q: "is:unread has:attachment (filename:pdf OR filename:docx)",
     maxResults,
   });
 

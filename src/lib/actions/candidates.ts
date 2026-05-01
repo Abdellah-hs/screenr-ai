@@ -8,8 +8,15 @@ import { requireUserId } from "@/lib/auth/guards";
 import { transitionApplication } from "@/lib/data/transitions";
 
 // Services
-import { fetchUnreadGmailResumes, getGmailMessage, getGmailAttachmentBuffer, markGmailMessageAsRead } from "@/lib/services/gmail";
+import {
+  fetchUnreadGmailResumes,
+  getGmailMessage,
+  getGmailAttachmentBuffer,
+  markGmailMessageAsRead,
+  isSupportedResumeMimeType,
+} from "@/lib/services/gmail";
 import { parsePdf } from "@/lib/services/pdf";
+import { parseDocx } from "@/lib/services/docx";
 import {
   extractResumeData,
   scoreResumeAgainstCriteria,
@@ -56,7 +63,7 @@ export async function syncResumesFromGmail(campaignId: string) {
     // Rate limit: 5 Gmail syncs per 10 minutes per user
     checkRateLimit(userId, { name: "gmail-sync", maxRequests: 5, windowMs: 10 * 60 * 1000 });
 
-    // Find up to 5 recent unread emails with PDF attachments
+    // Find up to 5 recent unread emails with supported attachment types
     const messages = await fetchUnreadGmailResumes(5);
 
     if (messages.length === 0) {
@@ -71,9 +78,11 @@ export async function syncResumesFromGmail(campaignId: string) {
       // Get the full message
       const msgData = await getGmailMessage(msg.id);
       const parts: gmail_v1.Schema$MessagePart[] = msgData.payload?.parts || [];
-      const pdfParts = parts.filter((p) => p.mimeType === "application/pdf" && p.filename);
+      const resumeParts = parts.filter(
+        (p) => p.mimeType && isSupportedResumeMimeType(p.mimeType) && p.filename
+      );
 
-      for (const part of pdfParts) {
+      for (const part of resumeParts) {
         if (!part.body?.attachmentId) continue;
 
         // Fetch attachment data
@@ -83,8 +92,8 @@ export async function syncResumesFromGmail(campaignId: string) {
         // 1. Upload to Supabase Storage
         const resumeUrl = await uploadResumeToStorage(campaignId, part.filename || "resume.pdf", fileBuffer);
 
-        // 2. Parse PDF to Text locally
-        const textContent = await parsePdf(fileBuffer);
+        // 2. Parse attachment to text locally
+        const textContent = await parseAttachment(part.mimeType || "", fileBuffer);
 
         // 3. Extract JSON out of text using OpenAI
         const structuredData = await extractResumeData(textContent);
@@ -149,6 +158,13 @@ function buildScoresArray(row: Pick<ApplicationRow, "resume_score" | "screening_
 
 function normalizeStage(status: string): CandidateStage {
   return (status === "new" ? "applied" : status) as CandidateStage;
+}
+
+async function parseAttachment(mimeType: string, fileBuffer: Buffer): Promise<string> {
+  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return parseDocx(fileBuffer);
+  }
+  return parsePdf(fileBuffer);
 }
 
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
