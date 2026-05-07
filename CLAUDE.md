@@ -197,28 +197,6 @@ Separate concept from applications. Stores `{candidate_id, historical_scores, no
 - Non-versioned AI prompts or rubrics
 - Silent failures — every error path ends in an explicit failure state
 
-### Current Compliance Status
-
-Open violations to migrate:
-- Legacy states (`screening`, `screening_q`, `interview`) still exist in `candidate_stage_enum` and in `APPLICATION_STATE_TRANSITIONS`. They currently bridge into the canonical track — a future migration should re-map existing rows onto canonical names and drop the legacy values.
-- Screening questions are implemented as text Q&A; PRD 3.4.3 requires video/audio recordings — see PRD-Critical Product Rules below.
-- `upsertCandidate` auto-merges on email; PRD requires flagging duplicates for HR review instead.
-- Interview scheduling, AI reference check, and final interview scheduling are not yet implemented as first-class stages — see PRD-Critical Product Rules.
-- Failure states (`screening_expired`, `interview_no_show`, `processing_failed`) from CLAUDE.md's state diagram are not yet in the enum. Add once the corresponding features exist.
-
-Completed:
-- `updateApplicationStage` and `advanceApplicationStatus` now delegate to `transitionApplication()` in `src/lib/data/transitions.ts` — no direct `status` writes remain.
-- `application_transitions` append-only log + atomic `transition_application` RPC added in `supabase/migrations/20260417000000_application_transitions_log.sql`.
-- Resume scoring and decisioning are split: `scoreApplicationResume()` produces evidence only; `evaluateResumeScoringOutcome()` lives in `src/lib/rules/resume-scoring.ts` and decides the transition.
-- Screening-response guards (`assertResponseIsOpen`, `assertResponseNotResubmitted`, `validateRequiredAnswersPresent`) extracted into `src/lib/rules/screening-response.ts`. `src/lib/actions/respond.ts` is now a thin orchestrator that delegates to the rules layer.
-- `src/lib/rules/` decision layer scaffolded with its own contract (see `src/lib/rules/README.md`). New decision logic should land here, not in actions.
-- `candidate_stage_enum` expanded with the canonical set (`screening_review_pending`, `screening_approved`, `screening_sent`, `screening_completed`, `screening_scored`, `interview_scheduling`, `interview_scheduled`, `interview_completed`, `interview_scored`, `reference_check`, `final_interview_scheduling`, `archived`) in `supabase/migrations/20260418000000_expand_candidate_stage_enum.sql`. `APPLICATION_STATE_TRANSITIONS` in `src/lib/constants.ts` updated in lockstep.
-- HITL branch of `evaluateResumeScoringOutcome` now transitions to `screening_review_pending` (from `new`) instead of silently staying in `new`. Auto-mode uses `screening_approved`. `fetchApplicationsReadyForScreeningSend` accepts both the legacy `screening_q` and canonical `screening_approved` states.
-- Screening lifecycle is wired into the application state machine: sending questions transitions to `screening_sent` (in `sendScreeningQuestionsToCandidate` / `sendScreeningQuestionsBulk`), candidate submission transitions to `screening_completed` (in `submitScreeningAnswers`), and AI scoring transitions to `screening_scored` via `evaluateScreeningScoringOutcome` (in `scoreScreeningAnswers`). All three are best-effort — the side effect (email / answer save / score persist) commits first, then the transition runs and is logged on failure so a transient RPC error can't ghost an email or lose a candidate's submission.
-- `evaluateScreeningScoringOutcome` now branches on automation mode + threshold, parallel to `evaluateResumeScoringOutcome`. It returns a chain of transitions: HITL rests at `screening_scored`; `fully_auto` chains `screening_scored → interview_scheduling` on a pass and `screening_scored → rejected` on a fail (boundary inclusive). The action loops the chain and stops on the first transition error so it can't try an illegal step from a stuck source state.
-
-When touching any code that changes application state, migrate it toward these rules rather than extending the old pattern.
-
 ## PRD-Critical Product Rules
 
 Non-negotiable product behaviors from `docs/prd.md`. Do not assume a feature is out of scope just because the code doesn't implement it yet — missing implementation is migration work, not permission to drop the requirement.
@@ -362,6 +340,46 @@ A few rules we learned the hard way:
 ### CI
 
 Tests run automatically on every push and PR via GitHub Actions (`.github/workflows/ci.yml`). The CI pipeline runs `lint → typecheck → test → build` in order. A failing step blocks the PR from merging.
+
+## Development Workflow
+
+Screenr AI is built using a structured **day shift / night shift** model. The human drives alignment and architecture; Claude Code drives implementation.
+
+### Day Shift: Alignment and Planning
+
+The human leads planning before any code is written.
+
+1. **Grill me session** — Intensive Q&A to align on feature scope, constraints, and edge cases.
+2. **PRD** — Synthesize alignment into `docs/prd.md` or feature-specific PRDs.
+3. **Vertical slices** — Break work into GitHub issues that are **vertical slices** (tracer bullets): thin end-to-end features that touch all layers (schema → data → rules → UI). Never assign horizontal slices (e.g., "write all migrations" or "build all UI").
+4. **Kanban with blocking relationships** — Issues must declare `Blocked by` dependencies. Agents only pick up unblocked issues.
+
+### Night Shift: Autonomous Implementation
+
+Claude Code implements issues with minimal human intervention.
+
+- **TDD is mandatory** — Write failing tests first, then implementation, then refactor. This is the only reliable feedback loop when coding autonomously.
+- **Deep modules** — The codebase is split into deep modules (rules, data, services) with simple interfaces and rich internals. Respect the interface; implement the internals.
+- **One feature = one branch** — Each vertical slice gets its own `feature/issue-XX-description` branch off `main`.
+- **Quality gates before push** — `pnpm typecheck && pnpm test` must pass. No exceptions.
+
+### QA: Human Taste Loop
+
+After an agent pushes a branch, the human performs manual QA. Do not automate QA — this is where human taste and edge-case discovery happen. New findings become fresh issues on the board while the AI continues working in the background.
+
+**Bug or refactor found during QA?**
+
+1. **Document it** — File a new issue (or comment on the existing one) describing exactly what's wrong, with steps to reproduce.
+2. **Move the card back** — The issue returns to "Ready" or "In Progress" on the Kanban board.
+3. **Agent fixes it** — New commits are pushed to the same feature branch. `pnpm typecheck && pnpm test` must still pass.
+4. **Re-QA** — Human verifies the fix before merging.
+5. **Merge only when green** — No merging branches with known QA failures.
+
+Refactors discovered during QA get their own issue so they don't block shipping the feature.
+
+### Prerequisites for AFK Mode
+
+Background agents require **Bash to be auto-approved** in Claude Code settings. Without this, agents cannot run `git`, `pnpm`, or tests and will stall.
 
 ## Environment Variables
 
