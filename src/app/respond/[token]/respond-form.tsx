@@ -82,8 +82,8 @@ export default function RespondForm({
 
   if (submitted) {
     return (
-      <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-8 shadow-sm text-center">
+      <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4 sm:p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-6 sm:p-8 shadow-sm text-center">
           <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center mb-4 mx-auto">
             <svg
               className="w-6 h-6 text-emerald-600"
@@ -112,13 +112,13 @@ export default function RespondForm({
   }
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] py-10 px-4">
+    <div className="min-h-screen bg-[#F9FAFB] py-6 sm:py-10 px-4">
       <div className="max-w-2xl mx-auto">
-        <header className="mb-8">
+        <header className="mb-6 sm:mb-8">
           <p className="text-xs font-medium uppercase tracking-wider text-[#0369A1] mb-2">
             Screening Questions
           </p>
-          <h1 className="text-2xl font-semibold text-[#111827] mb-2">
+          <h1 className="text-xl sm:text-2xl font-semibold text-[#111827] mb-2">
             {campaignTitle}
           </h1>
           <p className="text-sm text-[#6B7280]">
@@ -140,7 +140,7 @@ export default function RespondForm({
             return (
               <div
                 key={q.id}
-                className="bg-white rounded-xl border border-[#E5E7EB] p-5 shadow-sm"
+                className="bg-white rounded-xl border border-[#E5E7EB] p-4 sm:p-5 shadow-sm"
               >
                 <label
                   htmlFor={`q-${q.id}`}
@@ -161,12 +161,12 @@ export default function RespondForm({
                   value={value}
                   onChange={(e) => updateAnswer(q.id, e.target.value)}
                   placeholder="Share a concrete example…"
-                  rows={5}
+                  rows={4}
                   maxLength={5000}
                   required={q.is_required}
-                  className="w-full px-3 py-2 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 resize-y"
+                  className="w-full px-3 py-2.5 bg-white border border-[#E2E8F0] rounded-lg text-base text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 resize-y min-h-[44px]"
                 />
-                <div className="flex justify-between text-xs text-[#9CA3AF] mt-1">
+                <div className="flex justify-between text-xs text-[#9CA3AF] mt-1.5">
                   <span>
                     {q.is_required ? "Required" : "Optional"}
                   </span>
@@ -176,8 +176,8 @@ export default function RespondForm({
             );
           })}
 
-          <div className="sticky bottom-4 flex items-center justify-between gap-3 p-4 bg-white rounded-xl border border-[#E5E7EB] shadow-md">
-            <p className="text-xs text-[#6B7280]">
+          <div className="sticky bottom-3 sm:bottom-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 sm:p-4 bg-white rounded-xl border border-[#E5E7EB] shadow-md">
+            <p className="text-xs text-[#6B7280] text-center sm:text-left">
               {totalRequired > 0 ? (
                 <>
                   {completedRequired} of {totalRequired} required questions
@@ -190,7 +190,7 @@ export default function RespondForm({
             <button
               type="submit"
               disabled={submitting || !canSubmit}
-              className="inline-flex items-center gap-2 px-6 py-2.5 text-sm font-semibold text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-2 px-6 py-3 sm:py-2.5 text-base sm:text-sm font-semibold text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px] sm:min-h-0"
             >
               {submitting ? (
                 <>

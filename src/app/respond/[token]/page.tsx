@@ -16,8 +16,8 @@ export default async function RespondPage({
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unable to load this link.";
     return (
-      <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-8 shadow-sm">
+      <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4 sm:p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-6 sm:p-8 shadow-sm">
           <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mb-4">
             <svg
               className="w-6 h-6 text-red-600"
@@ -44,8 +44,8 @@ export default async function RespondPage({
 
   if (ctx.status === "responded") {
     return (
-      <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-6">
-        <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-8 shadow-sm text-center">
+      <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4 sm:p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-6 sm:p-8 shadow-sm text-center">
           <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center mb-4 mx-auto">
             <svg
               className="w-6 h-6 text-emerald-600"
