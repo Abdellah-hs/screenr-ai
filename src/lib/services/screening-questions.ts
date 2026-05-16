@@ -90,11 +90,28 @@ export interface AnswerScoringResult {
   answers: ScoredAnswer[];
 }
 
+export const SCREENING_SCORING_MODEL = "gpt-4o-mini";
+export const SCREENING_SCORING_PROMPT_VERSION = "v1_screening_scoring";
+
+export interface AnswerScoringEvidence {
+  result: AnswerScoringResult;
+  rawOutput: string;
+  model: string;
+  promptVersion: string;
+}
+
+/**
+ * AI-scores a candidate's screening answers.
+ *
+ * Returns both the normalized result AND the raw output + model identifiers
+ * so the caller can persist an `ai_audit_log` row per the "Mandatory AI
+ * Output Persistence" rule in CLAUDE.md.
+ */
 export async function scoreAnswers(params: {
   jobDescription: string;
   questions: { id: string; prompt: string; is_required: boolean }[];
   answers: { question_id: string; answer_text: string }[];
-}): Promise<AnswerScoringResult> {
+}): Promise<AnswerScoringEvidence> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -114,7 +131,7 @@ ${answerText}`;
     .join("\n\n");
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: SCREENING_SCORING_MODEL,
     temperature: 0.2,
     response_format: { type: "json_object" },
     messages: [
@@ -163,7 +180,7 @@ ${qaPairs}`,
   const parsed = JSON.parse(content) as AnswerScoringResult;
 
   const overall = Math.max(0, Math.min(100, Math.round(parsed.overall_score)));
-  return {
+  const result: AnswerScoringResult = {
     overall_score: overall,
     overall_rationale: parsed.overall_rationale || "No rationale provided.",
     answers: (parsed.answers || []).map((a) => ({
@@ -171,5 +188,12 @@ ${qaPairs}`,
       score: Math.max(0, Math.min(100, Math.round(a.score))),
       rationale: String(a.rationale || ""),
     })),
+  };
+
+  return {
+    result,
+    rawOutput: content,
+    model: SCREENING_SCORING_MODEL,
+    promptVersion: SCREENING_SCORING_PROMPT_VERSION,
   };
 }
