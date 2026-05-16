@@ -319,15 +319,29 @@ Rules:
   }));
 }
 
+export const RESUME_SCORING_MODEL = "gpt-4o-mini";
+export const RESUME_SCORING_PROMPT_VERSION = "v1_resume_scoring";
+
+export interface ResumeScoringEvidence {
+  result: ResumeScoreResult;
+  rawOutput: string;
+  model: string;
+  promptVersion: string;
+}
+
 /**
  * AI-scores a parsed resume against a campaign's screening criteria.
- * Returns an overall score (0-100), tier, rationale, and per-criterion factors.
+ *
+ * Returns both the normalized result AND the raw output + model identifiers
+ * so the caller can persist an `ai_audit_log` row per the "Mandatory AI
+ * Output Persistence" rule in CLAUDE.md. The caller decides what becomes
+ * official.
  */
 export async function scoreResumeAgainstCriteria(
   parsedResume: Record<string, unknown>,
   screeningCriteria: ScreeningCriterion[],
   jobDescription: string
-): Promise<ResumeScoreResult> {
+): Promise<ResumeScoringEvidence> {
   assertApiKeyConfigured();
 
   const criteriaList = screeningCriteria
@@ -335,7 +349,7 @@ export async function scoreResumeAgainstCriteria(
     .join("\n");
 
   const completion = await openai.chat.completions.parse({
-    model: "gpt-4o-mini",
+    model: RESUME_SCORING_MODEL,
     temperature: 0.2,
     messages: [
       {
@@ -390,7 +404,7 @@ ${JSON.stringify(parsedResume, null, 2)}`,
 
   const parsed = message.parsed;
 
-  return {
+  const result: ResumeScoreResult = {
     overall_score: Math.max(0, Math.min(100, Math.round(parsed.overall_score))),
     tier: parsed.tier,
     rationale: parsed.rationale || "No rationale provided.",
@@ -399,5 +413,12 @@ ${JSON.stringify(parsedResume, null, 2)}`,
       weight: f.weight,
       score: Math.max(0, Math.min(100, Math.round(f.score))),
     })),
+  };
+
+  return {
+    result,
+    rawOutput: JSON.stringify(parsed),
+    model: RESUME_SCORING_MODEL,
+    promptVersion: RESUME_SCORING_PROMPT_VERSION,
   };
 }

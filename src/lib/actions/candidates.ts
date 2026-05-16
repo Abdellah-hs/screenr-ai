@@ -128,7 +128,7 @@ export async function syncResumesFromGmail(campaignId: string) {
         //    the rule layer decide whether to advance. Scoring failures are
         //    non-blocking — the application still lands in `new` either way.
         try {
-          const scored = await scoreApplicationResume(applicationId, campaignId, userId, structuredData);
+          const scored = await scoreApplicationResume(applicationId, campaignId, candidateId, userId, structuredData);
           if (scored) {
             const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
             await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
@@ -281,27 +281,40 @@ export async function updateCandidateStage(
 async function scoreApplicationResume(
   applicationId: string,
   campaignId: string,
+  candidateId: string,
   userId: string,
   parsedResume: ParsedResumeData | Record<string, unknown>,
 ): Promise<{ result: ResumeScoreResult; config: CampaignScoringConfig } | null> {
   const config = await fetchCampaignScoringConfig(campaignId, userId);
   if (!config || config.screening_criteria.length === 0) return null;
 
-  const result = await scoreResumeAgainstCriteria(
+  const evidence = await scoreResumeAgainstCriteria(
     parsedResume,
     config.screening_criteria,
     config.description,
   );
 
-  await saveResumeScore(
+  await saveResumeScore({
     applicationId,
-    result.overall_score,
-    result.tier as Database["public"]["Enums"]["screening_tier_enum"],
-    result.rationale,
-    result.factors,
-  );
+    campaignId,
+    candidateId,
+    score: evidence.result.overall_score,
+    tier: evidence.result.tier as Database["public"]["Enums"]["screening_tier_enum"],
+    rationale: evidence.result.rationale,
+    factors: evidence.result.factors,
+    audit: {
+      model: evidence.model,
+      promptVersion: evidence.promptVersion,
+      rawOutput: evidence.rawOutput,
+      inputSnapshot: {
+        criteria_count: config.screening_criteria.length,
+        criteria_labels: config.screening_criteria.map((c) => c.label),
+        job_description_length: config.description.length,
+      },
+    },
+  });
 
-  return { result, config };
+  return { result: evidence.result, config };
 }
 
 // ─── HITL Screening Review ──────────────────────────────────────────────────
@@ -365,7 +378,7 @@ export async function scoreResume(applicationId: string) {
     const parsedResume = data.parsed_data as ParsedResumeData | null;
     if (!parsedResume) throw new Error("No parsed resume data available for scoring");
 
-    const scored = await scoreApplicationResume(applicationId, data.campaign_id, userId, parsedResume);
+    const scored = await scoreApplicationResume(applicationId, data.campaign_id, data.candidates.id, userId, parsedResume);
     if (scored) {
       const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
       await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);

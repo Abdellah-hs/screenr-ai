@@ -220,19 +220,19 @@ describe("scoreResumeAgainstCriteria", () => {
     mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 142 })));
 
     const high = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(high.overall_score).toBe(100);
+    expect(high.result.overall_score).toBe(100);
 
     mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: -30 })));
 
     const low = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(low.overall_score).toBe(0);
+    expect(low.result.overall_score).toBe(0);
   });
 
   it("rounds non-integer overall_score to the nearest integer", async () => {
     mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 72.6 })));
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.overall_score).toBe(73);
+    expect(result.result.overall_score).toBe(73);
   });
 
   it("clamps and rounds factor scores", async () => {
@@ -249,7 +249,7 @@ describe("scoreResumeAgainstCriteria", () => {
     );
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.factors.map((f) => f.score)).toEqual([100, 0, 47]);
+    expect(result.result.factors.map((f) => f.score)).toEqual([100, 0, 47]);
   });
 
   it("forwards the AI's tier verbatim, even when it disagrees with the score range", async () => {
@@ -258,14 +258,26 @@ describe("scoreResumeAgainstCriteria", () => {
     );
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.tier).toBe("weak");
+    expect(result.result.tier).toBe("weak");
   });
 
   it("falls back to a default rationale when the AI returns an empty string", async () => {
     mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ rationale: "" })));
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.rationale).toBe("No rationale provided.");
+    expect(result.result.rationale).toBe("No rationale provided.");
+  });
+
+  it("returns audit evidence (rawOutput, model, promptVersion) alongside the normalized result", async () => {
+    const payload = scorePayload({ overall_score: 60 });
+    mockParse.mockResolvedValueOnce(parsedResponse(payload));
+
+    const evidence = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
+
+    expect(evidence.rawOutput).toBe(JSON.stringify(payload));
+    expect(evidence.model).toBe("gpt-4o-mini");
+    expect(evidence.promptVersion).toBe("v1_resume_scoring");
+    expect(evidence.result.overall_score).toBe(60);
   });
 
   it("forwards the job description, criteria, and parsed resume into the prompt", async () => {
