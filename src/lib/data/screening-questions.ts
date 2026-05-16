@@ -349,9 +349,10 @@ export interface ScreeningScoreAuditFields {
  * insert fails the function throws — the score is already saved, so the
  * caller sees the failure and can decide whether to surface it.
  *
- * `rubric_version` is intentionally left null here; screening scoring is
- * driven by the campaign's screening questions, not by a versioned rubric
- * (#36 will revisit).
+ * `rubricVersion` is the screening_q-stage `evaluation_rubrics.version`
+ * that was active at score time. Stamped both on the response row and on
+ * the audit row so the UI can flag scores produced against a stale rubric
+ * (issue #36). Pass null when no active rubric exists for the campaign.
  */
 export async function saveAnswerScores(args: {
   applicationId: string;
@@ -359,6 +360,7 @@ export async function saveAnswerScores(args: {
   candidateId: string;
   overall: { score: number; rationale: string };
   perAnswer: { question_id: string; score: number; rationale: string }[];
+  rubricVersion: number | null;
   audit: ScreeningScoreAuditFields;
 }): Promise<void> {
   const supabase = await createClient();
@@ -383,6 +385,7 @@ export async function saveAnswerScores(args: {
       overall_score: args.overall.score,
       overall_rationale: args.overall.rationale,
       answers: mergedAnswers,
+      rubric_version: args.rubricVersion,
       scored_at: new Date().toISOString(),
     })
     .eq("application_id", args.applicationId);
@@ -399,6 +402,7 @@ export async function saveAnswerScores(args: {
     stage: "screening_scoring",
     model: args.audit.model,
     prompt_version: args.audit.promptVersion,
+    rubric_version: args.rubricVersion != null ? String(args.rubricVersion) : null,
     input_snapshot: args.audit.inputSnapshot,
     raw_output: args.audit.rawOutput,
     parsed_score: args.overall.score,

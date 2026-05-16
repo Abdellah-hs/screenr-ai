@@ -37,7 +37,7 @@ import {
   saveResumeScore,
   fetchApplicationCampaignId,
 } from "@/lib/data/candidates";
-import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
+import { fetchCampaignScoringConfig, fetchActiveRubricVersion } from "@/lib/data/campaigns";
 
 // Rules
 import {
@@ -155,7 +155,10 @@ export async function syncResumesFromGmail(campaignId: string) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function buildScoresArray(row: Pick<ApplicationRow, "resume_score" | "screening_tier" | "score_rationale" | "score_factors" | "scored_at" | "created_at">): CandidateScore[] {
+function buildScoresArray(
+  row: Pick<ApplicationRow, "resume_score" | "screening_tier" | "score_rationale" | "score_factors" | "scored_at" | "created_at" | "rubric_version">,
+  currentResumeRubricVersion: number | null,
+): CandidateScore[] {
   if (row.resume_score == null) return [];
   return [{
     stage: "resume",
@@ -164,6 +167,8 @@ function buildScoresArray(row: Pick<ApplicationRow, "resume_score" | "screening_
     ai_summary: row.score_rationale || "Scored by AI",
     factors: (row.score_factors as ScoreFactor[] | null) || [],
     scored_at: row.scored_at || row.created_at,
+    rubric_version: row.rubric_version,
+    current_rubric_version: currentResumeRubricVersion,
   }];
 }
 
@@ -182,7 +187,10 @@ async function parseAttachment(mimeType: string, fileBuffer: Buffer): Promise<st
 
 export async function getCandidatesByCampaignId(campaignId: string): Promise<Candidate[]> {
   const userId = await requireUserId();
-  const data = await fetchCandidatesByCampaignId(campaignId, userId);
+  const [data, currentResumeRubricVersion] = await Promise.all([
+    fetchCandidatesByCampaignId(campaignId, userId),
+    fetchActiveRubricVersion(campaignId, "resume"),
+  ]);
   if (!data) return [];
 
   return (data as ApplicationWithCandidate[]).map((app) => {
@@ -197,7 +205,7 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       current_company: parsed?.experience?.[0]?.company || null,
       stage: normalizeStage(app.status),
       awaiting_human_review: app.status === "screening_review_pending",
-      scores: buildScoresArray(app),
+      scores: buildScoresArray(app, currentResumeRubricVersion),
       resume: {
         skills: parsed?.skills || [],
         experience_years: parsed?.experience?.length || 0,
@@ -217,10 +225,13 @@ export async function getCandidateById(applicationId: string) {
   const candidateRecord = data.candidates;
   const parsed = data.parsed_data as ParsedResumeData | null;
 
-  // Generate signed URL for resume if path exists
-  const resumeSignedUrl = data.resume_url
-    ? await getResumeSignedUrl(data.resume_url)
-    : null;
+  // Generate signed URL for resume if path exists, and look up the
+  // currently-active resume rubric version so the UI can flag scores
+  // produced under a stale rubric.
+  const [resumeSignedUrl, currentResumeRubricVersion] = await Promise.all([
+    data.resume_url ? getResumeSignedUrl(data.resume_url) : Promise.resolve(null),
+    fetchActiveRubricVersion(data.campaign_id, "resume"),
+  ]);
 
   return {
     id: data.id,
@@ -233,7 +244,7 @@ export async function getCandidateById(applicationId: string) {
     stage: normalizeStage(data.status),
     awaiting_human_review: data.status === "screening_review_pending",
     screening_tier: data.screening_tier || null,
-    scores: buildScoresArray(data),
+    scores: buildScoresArray(data, currentResumeRubricVersion),
     applied_at: data.created_at,
     resume_url: resumeSignedUrl || "",
     resume: {
@@ -288,11 +299,14 @@ async function scoreApplicationResume(
   const config = await fetchCampaignScoringConfig(campaignId, userId);
   if (!config || config.screening_criteria.length === 0) return null;
 
-  const evidence = await scoreResumeAgainstCriteria(
-    parsedResume,
-    config.screening_criteria,
-    config.description,
-  );
+  const [evidence, rubricVersion] = await Promise.all([
+    scoreResumeAgainstCriteria(
+      parsedResume,
+      config.screening_criteria,
+      config.description,
+    ),
+    fetchActiveRubricVersion(campaignId, "resume"),
+  ]);
 
   await saveResumeScore({
     applicationId,
@@ -302,6 +316,7 @@ async function scoreApplicationResume(
     tier: evidence.result.tier as Database["public"]["Enums"]["screening_tier_enum"],
     rationale: evidence.result.rationale,
     factors: evidence.result.factors,
+    rubricVersion,
     audit: {
       model: evidence.model,
       promptVersion: evidence.promptVersion,

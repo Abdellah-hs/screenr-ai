@@ -291,6 +291,39 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
   };
 }
 
+/**
+ * Look up the version of the active evaluation_rubric for a campaign/stage.
+ * Used at score time to stamp every score (and its audit row) with the
+ * rubric version it was scored under, so the UI can flag candidates whose
+ * scores were produced against an older rubric than the campaign's
+ * current one.
+ *
+ * Returns null when there is no active rubric for that stage — the
+ * campaign may have been set up without one. Callers should treat null
+ * as "rubric version unknown" and not surface a mismatch badge.
+ */
+export type RubricStage = "resume" | "screening_q" | "interview";
+
+export async function fetchActiveRubricVersion(
+  campaignId: string,
+  stage: RubricStage,
+): Promise<number | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("evaluation_rubrics")
+    .select("version")
+    .eq("campaign_id", campaignId)
+    .eq("stage", stage)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`fetchActiveRubricVersion(${campaignId}, ${stage}) failed:`, error);
+    return null;
+  }
+  return data?.version ?? null;
+}
+
 // ─── Mutation Helpers
 export async function insertCampaignTx(
   payload: Omit<CampaignInsert, "user_id">,

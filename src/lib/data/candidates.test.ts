@@ -146,6 +146,7 @@ describe("saveResumeScore", () => {
       { name: "React", weight: 0.6, score: 90 },
       { name: "TypeScript", weight: 0.4, score: 75 },
     ],
+    rubricVersion: 2,
     audit: {
       model: "gpt-4o-mini",
       promptVersion: "v1_resume_scoring",
@@ -190,6 +191,29 @@ describe("saveResumeScore", () => {
       expect.objectContaining({
         input_snapshot: { criteria_count: 2, criteria_labels: ["React", "TypeScript"] },
       }),
+    );
+  });
+
+  it("stamps rubric_version on both the application row and the audit row", async () => {
+    await saveResumeScore(validArgs);
+
+    expect(mockApplicationsUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: 2 }),
+    );
+    // ai_audit_log.rubric_version is TEXT — the integer is coerced to a string label.
+    expect(mockAuditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: "2" }),
+    );
+  });
+
+  it("writes nulls for rubric_version when the campaign has no active rubric", async () => {
+    await saveResumeScore({ ...validArgs, rubricVersion: null });
+
+    expect(mockApplicationsUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: null }),
+    );
+    expect(mockAuditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: null }),
     );
   });
 

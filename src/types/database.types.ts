@@ -158,6 +158,7 @@ export type Database = {
           rejection_reason: string | null
           resume_score: number | null
           resume_url: string | null
+          rubric_version: number | null
           score_factors: Json | null
           score_rationale: string | null
           scored_at: string | null
@@ -178,6 +179,7 @@ export type Database = {
           rejection_reason?: string | null
           resume_score?: number | null
           resume_url?: string | null
+          rubric_version?: number | null
           score_factors?: Json | null
           score_rationale?: string | null
           scored_at?: string | null
@@ -198,6 +200,7 @@ export type Database = {
           rejection_reason?: string | null
           resume_score?: number | null
           resume_url?: string | null
+          rubric_version?: number | null
           score_factors?: Json | null
           score_rationale?: string | null
           scored_at?: string | null
@@ -599,6 +602,7 @@ export type Database = {
           overall_rationale: string | null
           overall_score: number | null
           responded_at: string | null
+          rubric_version: number | null
           scored_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["screening_response_status_enum"]
@@ -613,6 +617,7 @@ export type Database = {
           overall_rationale?: string | null
           overall_score?: number | null
           responded_at?: string | null
+          rubric_version?: number | null
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
@@ -627,6 +632,7 @@ export type Database = {
           overall_rationale?: string | null
           overall_score?: number | null
           responded_at?: string | null
+          rubric_version?: number | null
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]

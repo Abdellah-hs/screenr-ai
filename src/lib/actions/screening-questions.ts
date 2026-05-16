@@ -11,7 +11,7 @@ import {
   generateQuestionsForRole,
   scoreAnswers,
 } from "@/lib/services/screening-questions";
-import { fetchCampaignScoringConfig, verifyCampaignOwnership } from "@/lib/data/campaigns";
+import { fetchCampaignScoringConfig, fetchActiveRubricVersion, verifyCampaignOwnership } from "@/lib/data/campaigns";
 import { sendEmail } from "@/lib/services/email";
 import { buildScreeningQuestionsEmail } from "@/lib/services/email-templates/screening-questions";
 import { signResponseToken } from "@/lib/auth/screening-token";
@@ -295,15 +295,18 @@ export async function scoreScreeningAnswers(
     answer_text: a.answer_text ?? "",
   }));
 
-  const evidence = await scoreAnswers({
-    jobDescription: config.description,
-    questions: questions.map((q) => ({
-      id: q.id,
-      prompt: q.prompt,
-      is_required: q.is_required,
-    })),
-    answers: answerInputs,
-  });
+  const [evidence, rubricVersion] = await Promise.all([
+    scoreAnswers({
+      jobDescription: config.description,
+      questions: questions.map((q) => ({
+        id: q.id,
+        prompt: q.prompt,
+        is_required: q.is_required,
+      })),
+      answers: answerInputs,
+    }),
+    fetchActiveRubricVersion(app.campaign_id, "screening_q"),
+  ]);
 
   await saveAnswerScores({
     applicationId,
@@ -311,6 +314,7 @@ export async function scoreScreeningAnswers(
     candidateId: app.candidate_id,
     overall: { score: evidence.result.overall_score, rationale: evidence.result.overall_rationale },
     perAnswer: evidence.result.answers,
+    rubricVersion,
     audit: {
       model: evidence.model,
       promptVersion: evidence.promptVersion,
