@@ -245,34 +245,76 @@ export async function fetchCandidateById(applicationId: string, userId: string) 
   return data;
 }
 
-export async function saveResumeScore(
-  applicationId: string,
-  score: number,
-  tier: ScreeningTierEnum,
-  rationale: string,
-  factors: { name: string; weight: number; score: number }[]
-) {
+export interface ResumeScoreAuditFields {
+  model: string;
+  promptVersion: string;
+  rawOutput: string;
+  inputSnapshot: Json;
+}
+
+/**
+ * Persist a resume score AND its audit-log evidence. Per CLAUDE.md's
+ * "Mandatory AI Output Persistence" rule every AI score must have a matching
+ * `ai_audit_log` row — this function is the only sanctioned writer of the
+ * pair, so a score cannot exist without its audit row.
+ *
+ * Write order: application update first, then audit insert. If the audit
+ * insert fails the function throws — the score is already on the row, so
+ * the caller sees the failure and can decide whether to surface it.
+ *
+ * `rubric_version` is intentionally left null here; resume scoring is driven
+ * by `screening_criteria`, not by a versioned rubric (#36 will revisit).
+ */
+export async function saveResumeScore(args: {
+  applicationId: string;
+  campaignId: string;
+  candidateId: string;
+  score: number;
+  tier: ScreeningTierEnum;
+  rationale: string;
+  factors: { name: string; weight: number; score: number }[];
+  audit: ResumeScoreAuditFields;
+}) {
   const supabase = await createClient();
 
-  const { error, data } = await supabase
+  const { error: updateError, data: updateData } = await supabase
     .from("applications")
     .update({
-      resume_score: score,
-      screening_tier: tier,
-      score_rationale: rationale,
-      score_factors: factors as unknown as Json,
+      resume_score: args.score,
+      screening_tier: args.tier,
+      score_rationale: args.rationale,
+      score_factors: args.factors as unknown as Json,
       scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .eq("id", applicationId)
+    .eq("id", args.applicationId)
     .select("id");
 
-  if (error) {
-    console.error("saveResumeScore failed:", error);
-    throw new Error(`Failed to save resume score: ${error.message}${error.details ? ` (${error.details})` : ""}`);
+  if (updateError) {
+    console.error("saveResumeScore failed:", updateError);
+    throw new Error(`Failed to save resume score: ${updateError.message}${updateError.details ? ` (${updateError.details})` : ""}`);
   }
-  if (!data || data.length === 0) {
+  if (!updateData || updateData.length === 0) {
     throw new Error("Failed to save resume score: application not found or access denied");
+  }
+
+  const { error: auditError } = await supabase.from("ai_audit_log").insert({
+    campaign_id: args.campaignId,
+    candidate_id: args.candidateId,
+    stage: "resume_scoring",
+    model: args.audit.model,
+    prompt_version: args.audit.promptVersion,
+    input_snapshot: args.audit.inputSnapshot,
+    raw_output: args.audit.rawOutput,
+    parsed_score: args.score,
+    rationale: args.rationale,
+    action_taken: "scored",
+  });
+
+  if (auditError) {
+    throw new Error(
+      `Resume scored but audit log write failed (compliance gap): ${auditError.message}`,
+    );
   }
 }
 
