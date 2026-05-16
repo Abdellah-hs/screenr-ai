@@ -7,6 +7,7 @@ import { ScoreResumeButton } from "@/components/candidates/score-resume-button";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
+import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
 import type { CandidateStage, CandidateScore } from "@/lib/constants";
 
 const tierColors: Record<string, string> = {
@@ -25,9 +26,15 @@ function ScoreCard({ score }: { score: CandidateScore }) {
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-[#0C4A6E]">
-          {scoreStageLabels[score.stage] ?? score.stage}
-        </h3>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="text-sm font-semibold text-[#0C4A6E]">
+            {scoreStageLabels[score.stage] ?? score.stage}
+          </h3>
+          <RubricMismatchBadge
+            scoredAt={score.rubric_version}
+            currentVersion={score.current_rubric_version}
+          />
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-2xl font-bold text-[#0C4A6E]">
             {score.overall}

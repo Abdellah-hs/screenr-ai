@@ -62,6 +62,7 @@ describe("saveAnswerScores", () => {
       { question_id: "q-1", score: 80, rationale: "Specific" },
       { question_id: "q-2", score: 64, rationale: "Generic" },
     ],
+    rubricVersion: 3,
     audit: {
       model: "gpt-4o-mini",
       promptVersion: "v1_screening_scoring",
@@ -116,6 +117,29 @@ describe("saveAnswerScores", () => {
       expect.objectContaining({
         input_snapshot: { question_count: 2, question_ids: ["q-1", "q-2"], answered_count: 2 },
       }),
+    );
+  });
+
+  it("stamps rubric_version on both the response row and the audit row", async () => {
+    await saveAnswerScores(validArgs);
+
+    expect(mockResponseUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: 3 }),
+    );
+    // ai_audit_log.rubric_version is TEXT — the integer is coerced to a string label.
+    expect(mockAuditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: "3" }),
+    );
+  });
+
+  it("writes nulls for rubric_version when the campaign has no active rubric", async () => {
+    await saveAnswerScores({ ...validArgs, rubricVersion: null });
+
+    expect(mockResponseUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: null }),
+    );
+    expect(mockAuditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric_version: null }),
     );
   });
 

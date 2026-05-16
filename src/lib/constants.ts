@@ -146,6 +146,17 @@ export interface CandidateScore {
   ai_summary: string;
   factors: ScoreFactor[];
   scored_at: string;
+  /**
+   * Version of the stage's evaluation_rubric active when this score was
+   * produced. Null for scores written before rubric versioning was tracked.
+   */
+  rubric_version: number | null;
+  /**
+   * Version of the stage's evaluation_rubric currently active on the
+   * campaign. Null when no active rubric exists for that stage. The UI
+   * shows a mismatch badge when this differs from `rubric_version`.
+   */
+  current_rubric_version: number | null;
 }
 
 export interface Candidate {

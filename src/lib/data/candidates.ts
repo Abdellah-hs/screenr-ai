@@ -262,8 +262,10 @@ export interface ResumeScoreAuditFields {
  * insert fails the function throws — the score is already on the row, so
  * the caller sees the failure and can decide whether to surface it.
  *
- * `rubric_version` is intentionally left null here; resume scoring is driven
- * by `screening_criteria`, not by a versioned rubric (#36 will revisit).
+ * `rubricVersion` is the resume-stage `evaluation_rubrics.version` that
+ * was active at score time. Stamped both on the application row and on
+ * the audit row so the UI can flag scores produced against a stale rubric
+ * (issue #36). Pass null when no active rubric exists for the campaign.
  */
 export async function saveResumeScore(args: {
   applicationId: string;
@@ -273,6 +275,7 @@ export async function saveResumeScore(args: {
   tier: ScreeningTierEnum;
   rationale: string;
   factors: { name: string; weight: number; score: number }[];
+  rubricVersion: number | null;
   audit: ResumeScoreAuditFields;
 }) {
   const supabase = await createClient();
@@ -284,6 +287,7 @@ export async function saveResumeScore(args: {
       screening_tier: args.tier,
       score_rationale: args.rationale,
       score_factors: args.factors as unknown as Json,
+      rubric_version: args.rubricVersion,
       scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
@@ -304,6 +308,7 @@ export async function saveResumeScore(args: {
     stage: "resume_scoring",
     model: args.audit.model,
     prompt_version: args.audit.promptVersion,
+    rubric_version: args.rubricVersion != null ? String(args.rubricVersion) : null,
     input_snapshot: args.audit.inputSnapshot,
     raw_output: args.audit.rawOutput,
     parsed_score: args.score,
