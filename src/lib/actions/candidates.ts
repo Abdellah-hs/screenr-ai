@@ -98,8 +98,19 @@ export async function syncResumesFromGmail(campaignId: string) {
         // 3. Extract JSON out of text using OpenAI
         const structuredData = await extractResumeData(textContent);
 
+        // Skip resumes the AI could not extract an email from — the candidates
+        // table requires email NOT NULL, and inventing one would violate the
+        // "AI must not fabricate evidence" rule. The message is marked read at
+        // the end of the outer loop so we don't loop on it next sync.
+        if (structuredData.email == null) {
+          console.warn(
+            `syncResumesFromGmail: skipping ${part.filename ?? "(unnamed attachment)"} — no email extracted.`,
+          );
+          continue;
+        }
+
         // 4. Insert or Update Candidate Record
-        const candidateId = await upsertCandidate(structuredData);
+        const candidateId = await upsertCandidate({ ...structuredData, email: structuredData.email });
 
         // 5. Create Application link
         const applicationId = await createApplicationIfNotExists(candidateId, campaignId, resumeUrl, structuredData);

@@ -38,7 +38,15 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
   return data.signedUrl;
 }
 
-export async function upsertCandidate(structuredData: ParsedResumeData): Promise<string> {
+/**
+ * Insert or update a candidate. The action layer is responsible for
+ * guaranteeing `email` is non-null before calling — the parameter type
+ * encodes that precondition so this function does not have to defend
+ * against null.
+ */
+export async function upsertCandidate(
+  structuredData: ParsedResumeData & { email: string },
+): Promise<string> {
   const supabase = await createClient();
 
   const { data: existingCandidate } = await supabase

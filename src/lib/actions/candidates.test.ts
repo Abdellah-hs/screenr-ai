@@ -55,10 +55,15 @@ vi.mock("@/lib/services/gmail", () => ({
   getGmailMessage: vi.fn(),
   getGmailAttachmentBuffer: vi.fn(),
   markGmailMessageAsRead: vi.fn(),
+  isSupportedResumeMimeType: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("@/lib/services/pdf", () => ({
   parsePdf: vi.fn(),
+}));
+
+vi.mock("@/lib/services/docx", () => ({
+  parseDocx: vi.fn(),
 }));
 
 vi.mock("@/lib/services/openai", () => ({
@@ -70,7 +75,22 @@ vi.mock("next/cache", () => ({
   revalidatePath: mockRevalidatePath,
 }));
 
-import { decideHitlReview } from "./candidates";
+import { decideHitlReview, syncResumesFromGmail } from "./candidates";
+import { extractResumeData } from "@/lib/services/openai";
+import {
+  fetchUnreadGmailResumes,
+  getGmailMessage,
+  getGmailAttachmentBuffer,
+  markGmailMessageAsRead,
+} from "@/lib/services/gmail";
+import { parsePdf } from "@/lib/services/pdf";
+import {
+  upsertCandidate,
+  createApplicationIfNotExists,
+  uploadResumeToStorage,
+  logAiAudit,
+} from "@/lib/data/candidates";
+import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
 
 beforeEach(() => {
   mockRequireUserId.mockReset();
@@ -249,5 +269,81 @@ describe("decideHitlReview", () => {
     expect(mockRevalidatePath).toHaveBeenCalledWith(
       `/campaigns/${VALID_CAMPAIGN_ID}/candidates/${VALID_APP_ID}`,
     );
+  });
+});
+
+describe("syncResumesFromGmail", () => {
+  const PDF_MIME = "application/pdf";
+
+  function resumePayload(overrides: Record<string, unknown> = {}) {
+    return {
+      first_name: "Alice",
+      last_name: "Smith",
+      headline: null,
+      summary: null,
+      email: "alice@example.com",
+      phone: "+1-555-0100",
+      location: "NYC",
+      linkedin_url: null,
+      portfolio_url: null,
+      skills: ["React"],
+      languages: [],
+      interests: [],
+      certifications: [],
+      experience: [],
+      education: [],
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    // Single message, single PDF attachment, fetchable buffer.
+    vi.mocked(fetchUnreadGmailResumes).mockResolvedValue([{ id: "msg-1" }]);
+    vi.mocked(getGmailMessage).mockResolvedValue({
+      payload: {
+        parts: [
+          {
+            mimeType: PDF_MIME,
+            filename: "alice.pdf",
+            body: { attachmentId: "att-1" },
+          },
+        ],
+      },
+    });
+    vi.mocked(getGmailAttachmentBuffer).mockResolvedValue(Buffer.from("fake-pdf"));
+    vi.mocked(parsePdf).mockResolvedValue("Alice's resume text");
+
+    vi.mocked(uploadResumeToStorage).mockResolvedValue("campaigns/c1/alice.pdf");
+    vi.mocked(createApplicationIfNotExists).mockResolvedValue("app-1");
+    vi.mocked(upsertCandidate).mockResolvedValue("candidate-1");
+    vi.mocked(logAiAudit).mockResolvedValue(undefined);
+
+    // No scoring config configured for this campaign — skip the scoring path.
+    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
+  });
+
+  it("skips messages where the AI could not extract an email and marks them read", async () => {
+    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload({ email: null }));
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
+    expect(vi.mocked(createApplicationIfNotExists)).not.toHaveBeenCalled();
+    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith("msg-1");
+    expect(result.count).toBe(0);
+  });
+
+  it("ingests a message when the AI extracts an email", async () => {
+    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload());
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(vi.mocked(upsertCandidate)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(upsertCandidate)).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "alice@example.com" }),
+    );
+    expect(vi.mocked(createApplicationIfNotExists)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith("msg-1");
+    expect(result.count).toBe(1);
   });
 });
