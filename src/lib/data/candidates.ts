@@ -5,6 +5,12 @@ import type { Database, Json } from "@/types/database.types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
 import type { ApplicationState } from "@/lib/constants";
+import {
+  findCandidateByEmail,
+  findCandidateByPhone,
+  flagDuplicateCandidate,
+  type MatchSignals,
+} from "@/lib/data/duplicate-flags";
 
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
 type ScreeningTierEnum = Database["public"]["Enums"]["screening_tier_enum"];
@@ -39,55 +45,58 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
 }
 
 /**
- * Insert or update a candidate. The action layer is responsible for
- * guaranteeing `email` is non-null before calling — the parameter type
- * encodes that precondition so this function does not have to defend
- * against null.
+ * Insert a candidate from parsed resume data, flagging duplicates instead of
+ * auto-merging.
+ *
+ * Why: PRD requires HR review for duplicates across channels, not silent
+ * merges. We always insert the new record so the application can proceed,
+ * then queue a flag for HR if email or phone matches an existing candidate.
+ * HR resolves via mergeCandidatesTx (approve) or by leaving both records
+ * separate (reject). The action layer guarantees `email` is non-null before
+ * calling — the parameter type encodes that precondition.
  */
 export async function upsertCandidate(
   structuredData: ParsedResumeData & { email: string },
 ): Promise<string> {
   const supabase = await createClient();
 
-  const { data: existingCandidate } = await supabase
-    .from("candidates")
-    .select("id")
-    .eq("email", structuredData.email)
-    .single();
+  const [matchedByEmail, matchedByPhone] = await Promise.all([
+    findCandidateByEmail(structuredData.email),
+    structuredData.phone ? findCandidateByPhone(structuredData.phone) : Promise.resolve(null),
+  ]);
 
-  if (existingCandidate) {
-    const candidateId = existingCandidate.id;
-    // Update details
-    await supabase.from("candidates").update({
+  const candidateId = randomUUID();
+  const { error: insertError } = await supabase
+    .from("candidates")
+    .insert({
+      id: candidateId,
       first_name: structuredData.first_name,
       last_name: structuredData.last_name,
+      email: structuredData.email,
       phone: structuredData.phone || null,
       linkedin_url: structuredData.linkedin_url || null,
       portfolio_url: structuredData.portfolio_url || null,
       location: structuredData.location || null,
-      updated_at: new Date().toISOString()
-    }).eq("id", candidateId);
+    });
 
-    return candidateId;
-  } else {
-    // Insert new
-    const candidateId = randomUUID();
-    const { error: insertError } = await supabase
-      .from("candidates")
-      .insert({
-        id: candidateId,
-        first_name: structuredData.first_name,
-        last_name: structuredData.last_name,
-        email: structuredData.email,
-        phone: structuredData.phone || null,
-        linkedin_url: structuredData.linkedin_url || null,
-        portfolio_url: structuredData.portfolio_url || null,
-        location: structuredData.location || null,
-      });
+  if (insertError) throw insertError;
 
-    if (insertError) throw insertError;
-    return candidateId;
+  const matchedCandidateId = matchedByEmail?.id ?? matchedByPhone?.id ?? null;
+  if (matchedCandidateId) {
+    const matchSignals: MatchSignals = {
+      email_match: !!matchedByEmail,
+      phone_match: !!matchedByPhone,
+      matched_email: matchedByEmail ? structuredData.email : undefined,
+      matched_phone: matchedByPhone ? structuredData.phone ?? null : undefined,
+    };
+    await flagDuplicateCandidate({
+      candidateId,
+      matchedCandidateId,
+      matchSignals,
+    });
   }
+
+  return candidateId;
 }
 
 export async function createApplicationIfNotExists(

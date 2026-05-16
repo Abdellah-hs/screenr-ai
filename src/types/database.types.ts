@@ -403,6 +403,60 @@ export type Database = {
         }
         Relationships: []
       }
+      duplicate_review_queue: {
+        Row: {
+          id: string
+          candidate_id: string
+          matched_candidate_id: string
+          match_signals: Json
+          status: string
+          reviewer_user_id: string | null
+          rationale: string | null
+          created_at: string
+          updated_at: string
+          resolved_at: string | null
+        }
+        Insert: {
+          id?: string
+          candidate_id: string
+          matched_candidate_id: string
+          match_signals?: Json
+          status?: string
+          reviewer_user_id?: string | null
+          rationale?: string | null
+          created_at?: string
+          updated_at?: string
+          resolved_at?: string | null
+        }
+        Update: {
+          id?: string
+          candidate_id?: string
+          matched_candidate_id?: string
+          match_signals?: Json
+          status?: string
+          reviewer_user_id?: string | null
+          rationale?: string | null
+          created_at?: string
+          updated_at?: string
+          resolved_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "duplicate_review_queue_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "duplicate_review_queue_matched_candidate_id_fkey"
+            columns: ["matched_candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       evaluation_rubrics: {
         Row: {
           archived_at: string | null
