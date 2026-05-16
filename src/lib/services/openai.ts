@@ -58,6 +58,43 @@ export type ParsedResumeData = z.infer<typeof ParsedResumeSchema>;
 export type ResumeExperience = z.infer<typeof ResumeExperienceSchema>;
 export type ResumeEducation = z.infer<typeof ResumeEducationSchema>;
 
+const ScreeningCriterionAiSchema = z.object({
+  label: z.string(),
+  weight: z.number(),
+  is_mandatory: z.boolean(),
+});
+
+const ScreeningCriteriaResponseSchema = z.object({
+  criteria: z.array(ScreeningCriterionAiSchema),
+});
+
+const RubricDimensionAiSchema = z.object({
+  name: z.string(),
+  weight: z.number(),
+  is_mandatory: z.boolean(),
+});
+
+const RubricResponseSchema = z.object({
+  resume: z.array(RubricDimensionAiSchema),
+  screening_q: z.array(RubricDimensionAiSchema),
+  interview: z.array(RubricDimensionAiSchema),
+});
+
+const ScoreTierSchema = z.enum(["strong", "moderate", "weak", "no_match"]);
+
+const ScoreFactorAiSchema = z.object({
+  name: z.string(),
+  weight: z.number(),
+  score: z.number(),
+});
+
+const ResumeScoreResponseSchema = z.object({
+  overall_score: z.number(),
+  tier: ScoreTierSchema,
+  rationale: z.string(),
+  factors: z.array(ScoreFactorAiSchema),
+});
+
 const MAX_RESUME_TEXT_CHARS = 70_000;
 const RESUME_HEAD_CHARS = 50_000;
 const RESUME_TAIL_CHARS = 20_000;
@@ -152,21 +189,13 @@ export async function generateScreeningCriteria(
 ): Promise<ScreeningCriterion[]> {
   assertApiKeyConfigured();
 
-  const response = await openai.chat.completions.create({
+  const completion = await openai.chat.completions.parse({
     model: "gpt-4o-mini",
     temperature: 0.4,
-    response_format: { type: "json_object" },
     messages: [
       {
         role: "system",
         content: `You are an expert HR hiring consultant. Given a job description, generate 4-7 screening criteria that a hiring manager would use to evaluate resumes.
-
-Return JSON in this exact format:
-{
-  "criteria": [
-    { "label": "string", "weight": number, "is_mandatory": boolean }
-  ]
-}
 
 Rules:
 - Weights must sum to 1.0
@@ -180,22 +209,28 @@ Rules:
         content: `Generate screening criteria for this role:\n\n${description}`,
       },
     ],
+    response_format: zodResponseFormat(ScreeningCriteriaResponseSchema, "screening_criteria"),
   });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenAI returned an empty response");
+  const message = completion.choices[0]?.message;
+
+  if (!message) {
+    throw new Error("OpenAI returned no message for screening criteria.");
   }
 
-  const parsed = JSON.parse(content) as {
-    criteria: { label: string; weight: number; is_mandatory: boolean }[];
-  };
+  if (message.refusal) {
+    throw new Error(`OpenAI refused screening criteria generation: ${message.refusal}`);
+  }
 
-  if (!parsed.criteria?.length) {
+  if (!message.parsed) {
+    throw new Error("OpenAI returned no parsed screening criteria.");
+  }
+
+  if (!message.parsed.criteria.length) {
     throw new Error("OpenAI returned no criteria");
   }
 
-  return parsed.criteria.map((c) => ({
+  return message.parsed.criteria.map((c) => ({
     id: generateId("sc"),
     label: c.label,
     weight: Math.round(c.weight * 100) / 100,
@@ -212,27 +247,13 @@ export async function generateRubricDimensions(
 ): Promise<EvaluationRubric[]> {
   assertApiKeyConfigured();
 
-  const response = await openai.chat.completions.create({
+  const completion = await openai.chat.completions.parse({
     model: "gpt-4o-mini",
     temperature: 0.4,
-    response_format: { type: "json_object" },
     messages: [
       {
         role: "system",
         content: `You are an expert HR hiring consultant. Given a job description, generate evaluation rubric dimensions for three pipeline stages: resume review, screening questions, and interview.
-
-Return JSON in this exact format:
-{
-  "resume": [
-    { "name": "string", "weight": number, "is_mandatory": boolean }
-  ],
-  "screening_q": [
-    { "name": "string", "weight": number, "is_mandatory": boolean }
-  ],
-  "interview": [
-    { "name": "string", "weight": number, "is_mandatory": boolean }
-  ]
-}
 
 Rules:
 - Each stage should have 4-6 dimensions
@@ -250,26 +271,33 @@ Rules:
         content: `Generate rubric dimensions for this role:\n\n${description}`,
       },
     ],
+    response_format: zodResponseFormat(RubricResponseSchema, "rubric_dimensions"),
   });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenAI returned an empty response");
+  const message = completion.choices[0]?.message;
+
+  if (!message) {
+    throw new Error("OpenAI returned no message for rubric dimensions.");
   }
 
-  const parsed = JSON.parse(content) as Record<
-    string,
-    { name: string; weight: number; is_mandatory: boolean }[]
-  >;
+  if (message.refusal) {
+    throw new Error(`OpenAI refused rubric dimensions generation: ${message.refusal}`);
+  }
 
-  const now = new Date().toISOString();
+  if (!message.parsed) {
+    throw new Error("OpenAI returned no parsed rubric dimensions.");
+  }
+
+  const parsed = message.parsed;
   const stages = ["resume", "screening_q", "interview"] as const;
 
   for (const stage of stages) {
-    if (!parsed[stage]?.length) {
+    if (!parsed[stage].length) {
       throw new Error(`OpenAI returned no dimensions for ${stage} stage`);
     }
   }
+
+  const now = new Date().toISOString();
 
   return stages.map((stage) => ({
     id: generateId("rub"),
@@ -306,10 +334,9 @@ export async function scoreResumeAgainstCriteria(
     .map((c) => `- ${c.label} (weight: ${c.weight}, mandatory: ${c.is_mandatory})`)
     .join("\n");
 
-  const response = await openai.chat.completions.create({
+  const completion = await openai.chat.completions.parse({
     model: "gpt-4o-mini",
     temperature: 0.2,
-    response_format: { type: "json_object" },
     messages: [
       {
         role: "system",
@@ -324,16 +351,6 @@ Classify the candidate into a tier based on the overall score:
 - "no_match": 0-24 (does not meet basic requirements)
 
 IMPORTANT: If a candidate fails ANY mandatory criterion (scores below 30), the maximum tier is "weak" regardless of overall score.
-
-Return JSON in this exact format:
-{
-  "overall_score": number,
-  "tier": "strong" | "moderate" | "weak" | "no_match",
-  "rationale": "2-4 sentence summary explaining the score and tier classification",
-  "factors": [
-    { "name": "criterion label", "weight": number, "score": number }
-  ]
-}
 
 Rules:
 - overall_score must equal the weighted sum of factor scores (rounded to nearest integer)
@@ -354,26 +371,30 @@ ${criteriaList}
 ${JSON.stringify(parsedResume, null, 2)}`,
       },
     ],
+    response_format: zodResponseFormat(ResumeScoreResponseSchema, "resume_score"),
   });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenAI returned an empty response for resume scoring");
+  const message = completion.choices[0]?.message;
+
+  if (!message) {
+    throw new Error("OpenAI returned no message for resume scoring.");
   }
 
-  const parsed = JSON.parse(content) as ResumeScoreResult;
+  if (message.refusal) {
+    throw new Error(`OpenAI refused resume scoring: ${message.refusal}`);
+  }
 
-  const overall = Math.max(0, Math.min(100, Math.round(parsed.overall_score)));
-  const validTiers = ["strong", "moderate", "weak", "no_match"] as const;
-  const tier = validTiers.includes(parsed.tier as typeof validTiers[number])
-    ? parsed.tier
-    : overall >= 75 ? "strong" : overall >= 50 ? "moderate" : overall >= 25 ? "weak" : "no_match";
+  if (!message.parsed) {
+    throw new Error("OpenAI returned no parsed resume score.");
+  }
+
+  const parsed = message.parsed;
 
   return {
-    overall_score: overall,
-    tier: tier as ResumeScoreResult["tier"],
+    overall_score: Math.max(0, Math.min(100, Math.round(parsed.overall_score))),
+    tier: parsed.tier,
     rationale: parsed.rationale || "No rationale provided.",
-    factors: (parsed.factors || []).map((f) => ({
+    factors: parsed.factors.map((f) => ({
       name: f.name,
       weight: f.weight,
       score: Math.max(0, Math.min(100, Math.round(f.score))),
