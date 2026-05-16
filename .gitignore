@@ -55,3 +55,6 @@ skills.md
 # generated docs (keep HTML source, skip binary output)
 docs/*.pdf
 compile_errors*.txt
+
+# weekly changelogs (local notes, not versioned)
+weekly_changelog*.md

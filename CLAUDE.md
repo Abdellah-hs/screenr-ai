@@ -249,12 +249,25 @@ Duplicate candidates across channels (email, phone, strong profile similarity) m
 Branch off `main` with descriptive names:
 
 ```
-feature/campaign-creation
-fix/screening-score-display
-chore/update-deps
+feature/issue-<n>-<slug>
+fix/issue-<n>-<slug>
+chore/<slug>
+docs/<slug>
+refactor/<slug>
 ```
 
 Keep branches small and focused — one feature or fix per branch. All PRs merge into `main`.
+
+### Branch Hygiene (non-negotiable)
+
+1. **One issue = one branch = one PR.** Use the naming patterns above so the branch name carries the issue number.
+2. **`main` is the only long-lived branch.** Every other branch is short-lived (days, not weeks).
+3. **Never commit on `main` directly.** Always `git checkout -b <new-branch>` first.
+4. **Sync before branching:** `git checkout main && git pull` before creating a new branch.
+5. **Delete the branch the moment its PR merges** — locally (`git branch -d <name>`) and on GitHub (the "Delete branch" button on the merged PR page).
+6. **`git status` and `git branch` should be boring.** If `git branch` shows >5 local feature branches, run a cleanup pass: prune merged ones with `git branch -d`, and for orphans archive their tip as a tag (`git tag archive/<name> <name>`) before force-deleting.
+7. **No subagent worktrees left behind.** After any subagent run, check `git worktree list` and remove any leftover `.claude/worktrees/agent-*` entries with `git worktree remove --force <path>`.
+8. **Recovery is always possible** via archive tags: `git checkout -b <name> archive/<name>` restores an archived branch.
 
 ### Commit Messages
 
