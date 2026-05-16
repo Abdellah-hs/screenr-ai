@@ -295,7 +295,7 @@ export async function scoreScreeningAnswers(
     answer_text: a.answer_text ?? "",
   }));
 
-  const result = await scoreAnswers({
+  const evidence = await scoreAnswers({
     jobDescription: config.description,
     questions: questions.map((q) => ({
       id: q.id,
@@ -305,11 +305,24 @@ export async function scoreScreeningAnswers(
     answers: answerInputs,
   });
 
-  await saveAnswerScores(
+  await saveAnswerScores({
     applicationId,
-    { score: result.overall_score, rationale: result.overall_rationale },
-    result.answers
-  );
+    campaignId: app.campaign_id,
+    candidateId: app.candidate_id,
+    overall: { score: evidence.result.overall_score, rationale: evidence.result.overall_rationale },
+    perAnswer: evidence.result.answers,
+    audit: {
+      model: evidence.model,
+      promptVersion: evidence.promptVersion,
+      rawOutput: evidence.rawOutput,
+      inputSnapshot: {
+        question_count: questions.length,
+        question_ids: questions.map((q) => q.id),
+        answered_count: answerInputs.filter((a) => a.answer_text.trim().length > 0).length,
+        job_description_length: config.description.length,
+      },
+    },
+  });
 
   // Rule layer decides the chain of transitions from the persisted score
   // evidence + campaign config. HITL stops at screening_scored; auto-mode
@@ -318,7 +331,7 @@ export async function scoreScreeningAnswers(
   // chain (subsequent steps would be illegal from a stuck state) and let
   // the recruiter advance manually.
   const decisions = evaluateScreeningScoringOutcome(
-    { overall_score: result.overall_score },
+    { overall_score: evidence.result.overall_score },
     {
       automation_mode: config.automation_mode,
       screening_threshold: config.screening_threshold,
@@ -345,7 +358,7 @@ export async function scoreScreeningAnswers(
   revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
   revalidatePath(`/campaigns/${app.campaign_id}`);
 
-  return { overall_score: result.overall_score };
+  return { overall_score: evidence.result.overall_score };
 }
 
 /**

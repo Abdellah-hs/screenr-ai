@@ -1,8 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
+import type { Json } from "@/types/database.types";
 
 export interface ApplicationForScreeningSend {
   application_id: string;
   campaign_id: string;
+  candidate_id: string;
   campaign_title: string;
   candidate_name: string;
   candidate_email: string;
@@ -23,8 +25,9 @@ export async function fetchApplicationForScreeningSend(
   const selectWithCampaignAndCandidate = `
     id,
     campaign_id,
+    candidate_id,
     campaigns!inner ( id, title, user_id ),
-    candidates!inner ( first_name, last_name, email )
+    candidates!inner ( id, first_name, last_name, email )
   `;
   const { data, error } = await supabase
     .from("applications")
@@ -43,6 +46,7 @@ export async function fetchApplicationForScreeningSend(
   return {
     application_id: row.id,
     campaign_id: row.campaign_id,
+    candidate_id: row.candidate_id,
     campaign_title: row.campaigns.title,
     candidate_name:
       `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
@@ -74,9 +78,10 @@ export async function fetchApplicationsReadyForScreeningSend(
   const selectWithCandidate = `
     id,
     campaign_id,
+    candidate_id,
     status,
     resume_score,
-    candidates!inner ( first_name, last_name, email )
+    candidates!inner ( id, first_name, last_name, email )
   `;
   const { data, error } = await supabase
     .from("applications")
@@ -97,6 +102,7 @@ export async function fetchApplicationsReadyForScreeningSend(
     results.push({
       application_id: row.id,
       campaign_id: row.campaign_id,
+      candidate_id: row.candidate_id,
       campaign_title: campaign.title,
       candidate_name:
         `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
@@ -324,19 +330,45 @@ export async function saveCandidateAnswers(
   }
 }
 
-export async function saveAnswerScores(
-  applicationId: string,
-  overall: { score: number; rationale: string },
-  perAnswer: { question_id: string; score: number; rationale: string }[]
-): Promise<void> {
+export interface ScreeningScoreAuditFields {
+  model: string;
+  promptVersion: string;
+  rawOutput: string;
+  inputSnapshot: Json;
+}
+
+/**
+ * Persist screening answer scores AND their audit-log evidence.
+ *
+ * Mirrors the resume-score pattern from #26: per CLAUDE.md's "Mandatory AI
+ * Output Persistence" rule, every AI score must have a matching
+ * `ai_audit_log` row, so this function is the only sanctioned writer of
+ * the pair.
+ *
+ * Write order: response update first, then audit insert. If the audit
+ * insert fails the function throws — the score is already saved, so the
+ * caller sees the failure and can decide whether to surface it.
+ *
+ * `rubric_version` is intentionally left null here; screening scoring is
+ * driven by the campaign's screening questions, not by a versioned rubric
+ * (#36 will revisit).
+ */
+export async function saveAnswerScores(args: {
+  applicationId: string;
+  campaignId: string;
+  candidateId: string;
+  overall: { score: number; rationale: string };
+  perAnswer: { question_id: string; score: number; rationale: string }[];
+  audit: ScreeningScoreAuditFields;
+}): Promise<void> {
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  const existing = await fetchScreeningResponseByApplicationId(applicationId);
+  const existing = await fetchScreeningResponseByApplicationId(args.applicationId);
   if (!existing) throw new Error("Screening response not found");
 
-  const scoreById = new Map(perAnswer.map((a) => [a.question_id, a]));
+  const scoreById = new Map(args.perAnswer.map((a) => [a.question_id, a]));
   const mergedAnswers = existing.answers.map((a) => {
     const s = scoreById.get(a.question_id);
     return s
@@ -344,20 +376,39 @@ export async function saveAnswerScores(
       : a;
   });
 
-  const { error } = await db
+  const { error: updateError } = await db
     .from("screening_question_responses")
     .update({
       status: "scored",
-      overall_score: overall.score,
-      overall_rationale: overall.rationale,
+      overall_score: args.overall.score,
+      overall_rationale: args.overall.rationale,
       answers: mergedAnswers,
       scored_at: new Date().toISOString(),
     })
-    .eq("application_id", applicationId);
+    .eq("application_id", args.applicationId);
 
-  if (error) {
+  if (updateError) {
     throw new Error(
-      `Failed to save answer scores: ${error.message ?? JSON.stringify(error)}`
+      `Failed to save answer scores: ${updateError.message ?? JSON.stringify(updateError)}`
+    );
+  }
+
+  const { error: auditError } = await supabase.from("ai_audit_log").insert({
+    campaign_id: args.campaignId,
+    candidate_id: args.candidateId,
+    stage: "screening_scoring",
+    model: args.audit.model,
+    prompt_version: args.audit.promptVersion,
+    input_snapshot: args.audit.inputSnapshot,
+    raw_output: args.audit.rawOutput,
+    parsed_score: args.overall.score,
+    rationale: args.overall.rationale,
+    action_taken: "scored",
+  });
+
+  if (auditError) {
+    throw new Error(
+      `Screening scored but audit log write failed (compliance gap): ${auditError.message}`,
     );
   }
 }
