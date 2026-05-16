@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-const { mockCreate, mockParse } = vi.hoisted(() => ({
-  mockCreate: vi.fn(),
+const { mockParse } = vi.hoisted(() => ({
   mockParse: vi.fn(),
 }));
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
-    chat = { completions: { create: mockCreate, parse: mockParse } };
+    chat = { completions: { parse: mockParse } };
   },
 }));
 
@@ -18,16 +17,15 @@ import {
   scoreResumeAgainstCriteria,
 } from "./openai";
 
-function aiResponse(payload: unknown) {
+function parsedResponse(parsed: unknown, refusal: string | null = null) {
   return {
-    choices: [{ message: { content: JSON.stringify(payload) } }],
+    choices: [{ message: { parsed, refusal } }],
   };
 }
 
 const ORIGINAL_API_KEY = process.env.OPENAI_API_KEY;
 
 beforeEach(() => {
-  mockCreate.mockReset();
   mockParse.mockReset();
   process.env.OPENAI_API_KEY = "test-key";
 });
@@ -42,8 +40,8 @@ afterEach(() => {
 
 describe("generateScreeningCriteria", () => {
   it("rounds weights to two decimal places and prefixes ids with sc-", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse({
+    mockParse.mockResolvedValueOnce(
+      parsedResponse({
         criteria: [
           { label: "Senior React experience", weight: 0.33333, is_mandatory: true },
           { label: "TypeScript fluency", weight: 0.16666, is_mandatory: false },
@@ -64,13 +62,13 @@ describe("generateScreeningCriteria", () => {
   });
 
   it("forwards the job description into the OpenAI prompt", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse({ criteria: [{ label: "X", weight: 1, is_mandatory: true }] }),
+    mockParse.mockResolvedValueOnce(
+      parsedResponse({ criteria: [{ label: "X", weight: 1, is_mandatory: true }] }),
     );
 
     await generateScreeningCriteria("Hire a Rust systems engineer");
 
-    const call = mockCreate.mock.calls[0][0];
+    const call = mockParse.mock.calls[0][0];
     const userMessage = call.messages.find((m: { role: string }) => m.role === "user");
     expect(userMessage.content).toContain("Hire a Rust systems engineer");
   });
@@ -81,22 +79,30 @@ describe("generateScreeningCriteria", () => {
     await expect(generateScreeningCriteria("anything")).rejects.toThrow(
       "OPENAI_API_KEY is not configured",
     );
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockParse).not.toHaveBeenCalled();
   });
 
   it("throws when the AI returns an empty criteria array", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse({ criteria: [] }));
+    mockParse.mockResolvedValueOnce(parsedResponse({ criteria: [] }));
 
     await expect(generateScreeningCriteria("desc")).rejects.toThrow(
       "OpenAI returned no criteria",
     );
   });
 
-  it("throws when the AI returns an empty content string", async () => {
-    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: "" } }] });
+  it("throws when the AI refuses the request", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "I can't help with that"));
 
     await expect(generateScreeningCriteria("desc")).rejects.toThrow(
-      "OpenAI returned an empty response",
+      "OpenAI refused screening criteria generation",
+    );
+  });
+
+  it("throws when the AI returns no parsed payload", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, null));
+
+    await expect(generateScreeningCriteria("desc")).rejects.toThrow(
+      "OpenAI returned no parsed screening criteria",
     );
   });
 });
@@ -120,7 +126,7 @@ describe("generateRubricDimensions", () => {
   }
 
   it("produces one rubric per stage in the canonical order, all active", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(fullStagesPayload()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullStagesPayload()));
 
     const rubrics = await generateRubricDimensions("desc", "campaign-123");
 
@@ -135,8 +141,8 @@ describe("generateRubricDimensions", () => {
   });
 
   it("rounds dimension weights and assigns sort_order in array order", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse({
+    mockParse.mockResolvedValueOnce(
+      parsedResponse({
         ...fullStagesPayload(),
         resume: [
           { name: "Skill A", weight: 0.33333, is_mandatory: true },
@@ -156,13 +162,28 @@ describe("generateRubricDimensions", () => {
     expect(resumeRubric.dimensions[0].id).toMatch(/^dim-/);
   });
 
-  it("throws when the AI omits any of the three required stages", async () => {
-    const payload = fullStagesPayload();
-    delete (payload as Partial<typeof payload>).interview;
-    mockCreate.mockResolvedValueOnce(aiResponse(payload));
+  it("throws when a stage array is empty", async () => {
+    const payload = { ...fullStagesPayload(), interview: [] };
+    mockParse.mockResolvedValueOnce(parsedResponse(payload));
 
     await expect(generateRubricDimensions("desc", "campaign-1")).rejects.toThrow(
       "OpenAI returned no dimensions for interview stage",
+    );
+  });
+
+  it("throws when the AI refuses the request", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "no can do"));
+
+    await expect(generateRubricDimensions("desc", "campaign-1")).rejects.toThrow(
+      "OpenAI refused rubric dimensions generation",
+    );
+  });
+
+  it("throws when the AI returns no parsed payload", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, null));
+
+    await expect(generateRubricDimensions("desc", "campaign-1")).rejects.toThrow(
+      "OpenAI returned no parsed rubric dimensions",
     );
   });
 
@@ -172,7 +193,7 @@ describe("generateRubricDimensions", () => {
     await expect(generateRubricDimensions("desc", "campaign-1")).rejects.toThrow(
       "OPENAI_API_KEY is not configured",
     );
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockParse).not.toHaveBeenCalled();
   });
 });
 
@@ -196,27 +217,27 @@ describe("scoreResumeAgainstCriteria", () => {
   }
 
   it("clamps overall_score to the 0..100 range", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(scorePayload({ overall_score: 142 })));
+    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 142 })));
 
     const high = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
     expect(high.overall_score).toBe(100);
 
-    mockCreate.mockResolvedValueOnce(aiResponse(scorePayload({ overall_score: -30 })));
+    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: -30 })));
 
     const low = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
     expect(low.overall_score).toBe(0);
   });
 
   it("rounds non-integer overall_score to the nearest integer", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(scorePayload({ overall_score: 72.6 })));
+    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 72.6 })));
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
     expect(result.overall_score).toBe(73);
   });
 
   it("clamps and rounds factor scores", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(
+    mockParse.mockResolvedValueOnce(
+      parsedResponse(
         scorePayload({
           factors: [
             { name: "React", weight: 0.6, score: 200 },
@@ -231,55 +252,24 @@ describe("scoreResumeAgainstCriteria", () => {
     expect(result.factors.map((f) => f.score)).toEqual([100, 0, 47]);
   });
 
-  it("derives the tier from the score when the AI returns an invalid tier", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(scorePayload({ tier: "lol-not-a-tier", overall_score: 80 })),
-    );
-    expect((await scoreResumeAgainstCriteria({}, sampleCriteria, "JD")).tier).toBe("strong");
-
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(scorePayload({ tier: "lol-not-a-tier", overall_score: 60 })),
-    );
-    expect((await scoreResumeAgainstCriteria({}, sampleCriteria, "JD")).tier).toBe("moderate");
-
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(scorePayload({ tier: "lol-not-a-tier", overall_score: 30 })),
-    );
-    expect((await scoreResumeAgainstCriteria({}, sampleCriteria, "JD")).tier).toBe("weak");
-
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(scorePayload({ tier: "lol-not-a-tier", overall_score: 10 })),
-    );
-    expect((await scoreResumeAgainstCriteria({}, sampleCriteria, "JD")).tier).toBe("no_match");
-  });
-
-  it("preserves a valid tier returned by the AI even if it disagrees with the score", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(scorePayload({ tier: "weak", overall_score: 90 })),
+  it("forwards the AI's tier verbatim, even when it disagrees with the score range", async () => {
+    mockParse.mockResolvedValueOnce(
+      parsedResponse(scorePayload({ tier: "weak", overall_score: 90 })),
     );
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
     expect(result.tier).toBe("weak");
   });
 
-  it("falls back to a default rationale when the AI omits one", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(scorePayload({ rationale: "" })));
+  it("falls back to a default rationale when the AI returns an empty string", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ rationale: "" })));
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
     expect(result.rationale).toBe("No rationale provided.");
   });
 
-  it("returns an empty factors array when the AI omits factors", async () => {
-    const { factors: _omitted, ...withoutFactors } = scorePayload();
-    void _omitted;
-    mockCreate.mockResolvedValueOnce(aiResponse(withoutFactors));
-
-    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.factors).toEqual([]);
-  });
-
   it("forwards the job description, criteria, and parsed resume into the prompt", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(scorePayload()));
+    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload()));
 
     await scoreResumeAgainstCriteria(
       { skills: ["React", "TS"] },
@@ -287,7 +277,7 @@ describe("scoreResumeAgainstCriteria", () => {
       "Frontend role at Acme",
     );
 
-    const call = mockCreate.mock.calls[0][0];
+    const call = mockParse.mock.calls[0][0];
     const userMessage = call.messages.find((m: { role: string }) => m.role === "user");
     expect(userMessage.content).toContain("Frontend role at Acme");
     expect(userMessage.content).toContain("React");
@@ -301,25 +291,27 @@ describe("scoreResumeAgainstCriteria", () => {
     await expect(
       scoreResumeAgainstCriteria({}, sampleCriteria, "JD"),
     ).rejects.toThrow("OPENAI_API_KEY is not configured");
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockParse).not.toHaveBeenCalled();
   });
 
-  it("throws when the AI returns an empty content string", async () => {
-    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: "" } }] });
+  it("throws when the AI refuses the request", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "I can't help with that"));
 
     await expect(
       scoreResumeAgainstCriteria({}, sampleCriteria, "JD"),
-    ).rejects.toThrow("OpenAI returned an empty response for resume scoring");
+    ).rejects.toThrow("OpenAI refused resume scoring");
+  });
+
+  it("throws when the AI returns no parsed payload", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, null));
+
+    await expect(
+      scoreResumeAgainstCriteria({}, sampleCriteria, "JD"),
+    ).rejects.toThrow("OpenAI returned no parsed resume score");
   });
 });
 
 describe("extractResumeData", () => {
-  function parseResponse(parsed: unknown, refusal: string | null = null) {
-    return {
-      choices: [{ message: { parsed, refusal } }],
-    };
-  }
-
   function fullResume(overrides: Record<string, unknown> = {}) {
     return {
       first_name: "Alice",
@@ -356,7 +348,7 @@ describe("extractResumeData", () => {
   }
 
   it("returns parsed resume fields straight through when populated", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     const result = await extractResumeData("Alice resume text");
 
@@ -367,7 +359,7 @@ describe("extractResumeData", () => {
   });
 
   it("round-trips the new headline / summary / languages / interests / certifications fields", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     const result = await extractResumeData("Alice resume text");
 
@@ -379,7 +371,7 @@ describe("extractResumeData", () => {
   });
 
   it("instructs the model to keep skills, interests, and languages distinct", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     await extractResumeData("any resume");
 
@@ -392,7 +384,7 @@ describe("extractResumeData", () => {
 
   it("preserves null for missing-but-tolerable fields instead of forcing strings", async () => {
     mockParse.mockResolvedValueOnce(
-      parseResponse(
+      parsedResponse(
         fullResume({
           email: null,
           phone: null,
@@ -413,7 +405,7 @@ describe("extractResumeData", () => {
   });
 
   it("instructs gpt-4o-mini and forwards the resume text in the user message", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     await extractResumeData("Distinctive marker XYZQ-123");
 
@@ -426,7 +418,7 @@ describe("extractResumeData", () => {
   });
 
   it("hardens the system prompt against prompt-injection from resume text", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     await extractResumeData("any resume");
 
@@ -437,7 +429,7 @@ describe("extractResumeData", () => {
   });
 
   it("strips null bytes and collapses runs of whitespace before sending", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     await extractResumeData("Foo  Bar     baz\n\n\n\nqux");
 
@@ -453,7 +445,7 @@ describe("extractResumeData", () => {
     const head = "HEAD_SECTION_" + "a".repeat(60_000);
     const tail = "b".repeat(20_000) + "_TAIL_SECTION";
     const middle = "MIDDLE_GARBAGE_" + "x".repeat(30_000);
-    mockParse.mockResolvedValueOnce(parseResponse(fullResume()));
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
 
     await extractResumeData(head + middle + tail);
 
@@ -482,7 +474,7 @@ describe("extractResumeData", () => {
   });
 
   it("throws when the AI refuses the request", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(null, "I can't help with that"));
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "I can't help with that"));
 
     await expect(extractResumeData("any resume")).rejects.toThrow(
       "OpenAI refused resume extraction",
@@ -490,7 +482,7 @@ describe("extractResumeData", () => {
   });
 
   it("throws when the AI returns no parsed payload", async () => {
-    mockParse.mockResolvedValueOnce(parseResponse(null, null));
+    mockParse.mockResolvedValueOnce(parsedResponse(null, null));
 
     await expect(extractResumeData("any resume")).rejects.toThrow(
       "OpenAI returned no parsed resume data",
