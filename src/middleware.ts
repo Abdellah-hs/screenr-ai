@@ -34,10 +34,12 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isAuthPage = request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup";
-  const isCampaignPage = request.nextUrl.pathname.startsWith("/campaigns");
+  const isProtectedPage =
+    request.nextUrl.pathname.startsWith("/campaigns") ||
+    request.nextUrl.pathname.startsWith("/admin");
 
-  // Protect /campaigns routes - redirect to /login if not authenticated
-  if (!user && isCampaignPage) {
+  // Protect dashboard routes - redirect to /login if not authenticated
+  if (!user && isProtectedPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

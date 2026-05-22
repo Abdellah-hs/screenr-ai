@@ -170,6 +170,83 @@ export async function resolveDuplicateFlag(params: {
   }
 }
 
+export interface DuplicateCandidateSummary {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  created_at: string;
+}
+
+export interface DuplicateReviewItem {
+  flag: DuplicateFlag;
+  /** The newly-ingested record — soft-deleted if the flag is approved. */
+  candidate: DuplicateCandidateSummary;
+  /** The pre-existing record the new one matched — kept on approval. */
+  matched: DuplicateCandidateSummary;
+}
+
+/**
+ * The HR review queue: every open duplicate flag, each enriched with both
+ * candidates' details so the page can show them side by side. Two separate
+ * queries (flags, then candidates) stitched in memory — avoids the awkward
+ * PostgREST embed of two FKs pointing at the same table. Flags whose
+ * candidates can no longer be loaded are skipped.
+ */
+export async function fetchOpenDuplicateFlagsWithCandidates(): Promise<
+  DuplicateReviewItem[]
+> {
+  const supabase = await createClient();
+
+  const { data: flagRows, error: flagError } = await supabase
+    .from("duplicate_review_queue")
+    .select("*")
+    .eq("status", "open")
+    .order("created_at", { ascending: false });
+
+  if (flagError) {
+    throw new Error(`Failed to fetch duplicate review queue: ${flagError.message}`);
+  }
+
+  const flags = (flagRows || []).map((r) => toDuplicateFlag(r as DuplicateFlagRow));
+  if (flags.length === 0) return [];
+
+  const candidateIds = Array.from(
+    new Set(flags.flatMap((f) => [f.candidate_id, f.matched_candidate_id])),
+  );
+
+  const { data: candRows, error: candError } = await supabase
+    .from("candidates")
+    .select("id, first_name, last_name, email, phone, created_at")
+    .in("id", candidateIds);
+
+  if (candError) {
+    throw new Error(
+      `Failed to fetch candidates for review queue: ${candError.message}`,
+    );
+  }
+
+  const byId = new Map<string, DuplicateCandidateSummary>();
+  for (const c of candRows || []) {
+    byId.set(c.id, {
+      id: c.id,
+      name: `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || c.email,
+      email: c.email,
+      phone: c.phone,
+      created_at: c.created_at,
+    });
+  }
+
+  const items: DuplicateReviewItem[] = [];
+  for (const flag of flags) {
+    const candidate = byId.get(flag.candidate_id);
+    const matched = byId.get(flag.matched_candidate_id);
+    if (!candidate || !matched) continue; // a candidate row is gone — skip
+    items.push({ flag, candidate, matched });
+  }
+  return items;
+}
+
 /**
  * Merge two candidates: re-point all applications from `sourceCandidateId`
  * to `targetCandidateId`, then soft-delete the source candidate.
