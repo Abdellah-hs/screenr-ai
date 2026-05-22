@@ -768,6 +768,9 @@ export type Database = {
         | "reference_check"
         | "final_interview_scheduling"
         | "archived"
+        | "screening_expired"
+        | "interview_no_show"
+        | "processing_failed"
       interview_persona_enum:
         | "neutral"
         | "pressure"
@@ -932,6 +935,9 @@ export const Constants = {
         "reference_check",
         "final_interview_scheduling",
         "archived",
+        "screening_expired",
+        "interview_no_show",
+        "processing_failed",
       ],
       interview_persona_enum: [
         "neutral",

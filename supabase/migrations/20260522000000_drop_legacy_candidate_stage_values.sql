@@ -6,7 +6,10 @@
 --
 -- Postgres cannot DROP a value from an enum, so this migration:
 --   1. Remaps every legacy-valued row to its canonical equivalent.
---   2. Recreates candidate_stage_enum with canonical values only.
+--   2. Recreates candidate_stage_enum without the legacy values. The three
+--      failure states from 20260419000000 (screening_expired,
+--      interview_no_show, processing_failed) are carried over so the
+--      recreation preserves them instead of dropping them.
 --   3. Converts the dependent columns and recreates transition_application().
 --
 -- Legacy -> canonical mapping (confirmed against existing code semantics):
@@ -64,6 +67,9 @@ CREATE TYPE candidate_stage_enum AS ENUM (
     'reference_check',
     'manager_review',
     'final_interview_scheduling',
+    'screening_expired',
+    'interview_no_show',
+    'processing_failed',
     'rejected',
     'hired',
     'withdrawn',
