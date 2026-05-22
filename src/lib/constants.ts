@@ -240,6 +240,10 @@ export type ApplicationState =
   | "reference_check"
   | "manager_review"
   | "final_interview_scheduling"
+  // Failure states — explicit, never silent
+  | "screening_expired"
+  | "interview_no_show"
+  | "processing_failed"
   // Terminal
   | "rejected"
   | "hired"
@@ -259,6 +263,7 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   new: [
     "screening_review_pending",
     "screening_approved",
+    "processing_failed",
     "rejected",
     "withdrawn",
   ],
@@ -266,20 +271,25 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   // Canonical screening track
   screening_review_pending: ["screening_approved", "rejected", "withdrawn"],
   screening_approved: ["screening_sent", "rejected", "withdrawn"],
-  screening_sent: ["screening_completed", "rejected", "withdrawn"],
-  screening_completed: ["screening_scored", "rejected", "withdrawn"],
+  screening_sent: ["screening_completed", "screening_expired", "rejected", "withdrawn"],
+  screening_completed: ["screening_scored", "processing_failed", "rejected", "withdrawn"],
   screening_scored: ["interview_scheduling", "rejected", "withdrawn"],
 
   // Canonical interview track
   interview_scheduling: ["interview_scheduled", "rejected", "withdrawn"],
-  interview_scheduled: ["interview_completed", "rejected", "withdrawn"],
-  interview_completed: ["interview_scored", "rejected", "withdrawn"],
+  interview_scheduled: ["interview_completed", "interview_no_show", "rejected", "withdrawn"],
+  interview_completed: ["interview_scored", "processing_failed", "rejected", "withdrawn"],
   interview_scored: ["reference_check", "manager_review", "rejected", "withdrawn"],
 
   // Post-interview
   reference_check: ["manager_review", "rejected", "withdrawn"],
   manager_review: ["final_interview_scheduling", "hired", "rejected", "withdrawn"],
   final_interview_scheduling: ["hired", "rejected", "withdrawn"],
+
+  // Failure states — observable dead-ends, archived is the only exit.
+  screening_expired: ["archived"],
+  interview_no_show: ["archived"],
+  processing_failed: ["archived"],
 
   // Terminal — only `archived` is reachable from them (for housekeeping).
   rejected: ["archived"],

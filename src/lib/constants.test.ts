@@ -13,6 +13,14 @@ const ALL_STATES = Object.keys(
 // `interview_completed`) and dropped from `candidate_stage_enum`.
 const LEGACY_STATES = ["screening", "screening_q", "interview"];
 
+// The explicit failure states added by issue #32 — every silent-failure
+// path CLAUDE.md flagged now has an observable terminal state.
+const FAILURE_STATES: ApplicationState[] = [
+  "screening_expired",
+  "interview_no_show",
+  "processing_failed",
+];
+
 describe("APPLICATION_STATE_TRANSITIONS", () => {
   it("contains no legacy stage value as a key", () => {
     for (const legacy of LEGACY_STATES) {
@@ -50,5 +58,37 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
 
   it("keeps archived a terminal state with no outbound transitions", () => {
     expect(APPLICATION_STATE_TRANSITIONS.archived).toEqual([]);
+  });
+});
+
+describe("failure states", () => {
+  it.each(FAILURE_STATES)("defines %s as a state-machine key", (state) => {
+    expect(ALL_STATES).toContain(state);
+  });
+
+  it.each(FAILURE_STATES)(
+    "makes %s an observable dead-end whose only exit is archived",
+    (state) => {
+      expect(APPLICATION_STATE_TRANSITIONS[state]).toEqual(["archived"]);
+    },
+  );
+
+  it("reaches screening_expired from screening_sent", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.screening_sent).toContain(
+      "screening_expired",
+    );
+  });
+
+  it("reaches interview_no_show from interview_scheduled", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.interview_scheduled).toContain(
+      "interview_no_show",
+    );
+  });
+
+  it("reaches processing_failed from at least one state", () => {
+    const sources = Object.entries(APPLICATION_STATE_TRANSITIONS).filter(
+      ([, targets]) => targets.includes("processing_failed"),
+    );
+    expect(sources.length).toBeGreaterThan(0);
   });
 });
