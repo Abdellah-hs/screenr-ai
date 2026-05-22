@@ -170,8 +170,8 @@ export interface Candidate {
   stage: CandidateStage;
   // Derived from raw application.status === "screening_review_pending".
   // Surfaced as a boolean (not a stage value) because HITL-pending is a
-  // workflow flag, not a manager-selectable stage — it should never appear
-  // in the StageChanger dropdown or be writable via candidateStageSchema.
+  // workflow flag — the HITL review panel resolves it, not the recruiter's
+  // manual stage changer.
   awaiting_human_review: boolean;
   scores: CandidateScore[];
   resume: {

@@ -113,13 +113,42 @@ function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
 
 export const aiDescriptionSchema = z.string().min(10, "Description too short for AI generation").max(10000, "Description too long");
 
-// ─── Candidate Stage Validation ─────────────────────────────────────────────
+// ─── Application State Validation ───────────────────────────────────────────
 
-// Must match the CandidateStage union in constants.ts exactly.
-// Note: the DB may store "new" as the initial status, but that is handled by
-// normalizeStage() in actions/candidates.ts and is never sent from the UI.
-const candidateStageValues = ["applied", "screening", "interview", "offer", "hired", "rejected"] as const;
-export const candidateStageSchema = z.enum(candidateStageValues);
+// Must match the ApplicationState union in constants.ts exactly — the
+// canonical candidate_stage_enum. A recruiter manual stage change is
+// validated against this; whether a given transition is *legal* from the
+// current state is enforced downstream by transitionApplication().
+const applicationStateValues = [
+  "new",
+  "screening_review_pending",
+  "screening_approved",
+  "screening_sent",
+  "screening_completed",
+  "screening_scored",
+  "interview_scheduling",
+  "interview_scheduled",
+  "interview_completed",
+  "interview_scored",
+  "reference_check",
+  "manager_review",
+  "final_interview_scheduling",
+  "screening_expired",
+  "interview_no_show",
+  "processing_failed",
+  "rejected",
+  "hired",
+  "withdrawn",
+  "archived",
+] as const;
+export const applicationStateSchema = z.enum(applicationStateValues);
+
+// A recruiter manual stage change must carry a written rationale — the ATS
+// state machine treats unexplained overrides as forbidden (see CLAUDE.md).
+export const stageChangeRationaleSchema = z
+  .string()
+  .trim()
+  .min(1, "A reason is required for a manual stage change.");
 
 // ─── UUID Validation ────────────────────────────────────────────────────────
 
