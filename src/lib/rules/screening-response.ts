@@ -32,10 +32,9 @@ export class ScreeningResponseError extends Error {
 
 /**
  * Application states from which a recruiter may (re)send screening questions
- * to a single candidate. Derived from the state machine: these are exactly
- * the legal predecessors of `screening_sent` (`screening_approved` plus the
- * legacy `screening` / `screening_q`), plus `screening_sent` itself so an
- * expired or lost link can be resent.
+ * to a single candidate: `screening_approved` (the legal predecessor of
+ * `screening_sent`) and `screening_sent` itself, so an expired or lost link
+ * can be resent.
  *
  * Every other state is ineligible — a candidate still in resume review,
  * awaiting human approval, already past screening, or in a terminal state
@@ -43,8 +42,6 @@ export class ScreeningResponseError extends Error {
  */
 export const SCREENING_SEND_ELIGIBLE_STATES = [
   "screening_approved",
-  "screening_q",
-  "screening",
   "screening_sent",
 ] as const satisfies readonly ApplicationState[];
 

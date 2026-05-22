@@ -225,11 +225,6 @@ export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview
 export type ApplicationState =
   // Entry
   | "new"
-  // Legacy screening stages (kept for backward compat with existing rows;
-  // new flows should use the canonical names below).
-  | "screening"
-  | "screening_q"
-  | "interview"
   // Canonical screening stages
   | "screening_review_pending"
   | "screening_approved"
@@ -255,26 +250,18 @@ export type ApplicationState =
  * Legal transitions per state. The key is the from_state; the array lists
  * every legal to_state. Empty array = terminal state.
  *
- * Dual-track during the legacy→canonical migration: the old values
- * (`screening`, `screening_q`, `interview`) remain legal so existing rows
- * keep working, but their transitions bridge into the canonical track.
- * New flows should emit canonical names directly.
+ * Canonical-only since issue #28 — the legacy values `screening`,
+ * `screening_q`, and `interview` were migrated to canonical names and
+ * dropped from `candidate_stage_enum`.
  */
 export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, ApplicationState[]> = {
-  // Entry — `new` can go to HITL review, straight to approved (auto), or legacy tracks.
+  // Entry — `new` can go to HITL review or straight to approved (auto mode).
   new: [
     "screening_review_pending",
     "screening_approved",
-    "screening",
-    "screening_q",
     "rejected",
     "withdrawn",
   ],
-
-  // Legacy screening bridges
-  screening: ["screening_q", "screening_sent", "rejected", "withdrawn"],
-  screening_q: ["screening_sent", "interview", "rejected", "withdrawn"],
-  interview: ["interview_scored", "manager_review", "rejected", "withdrawn"],
 
   // Canonical screening track
   screening_review_pending: ["screening_approved", "rejected", "withdrawn"],

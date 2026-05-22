@@ -752,9 +752,6 @@ export type Database = {
         | "archived"
       candidate_stage_enum:
         | "new"
-        | "screening"
-        | "screening_q"
-        | "interview"
         | "manager_review"
         | "rejected"
         | "hired"
@@ -919,9 +916,6 @@ export const Constants = {
       campaign_status_enum: ["draft", "active", "paused", "closed", "archived"],
       candidate_stage_enum: [
         "new",
-        "screening",
-        "screening_q",
-        "interview",
         "manager_review",
         "rejected",
         "hired",
