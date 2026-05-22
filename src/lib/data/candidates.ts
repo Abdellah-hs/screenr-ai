@@ -408,3 +408,43 @@ export async function updateApplicationStage(
     rationale,
   });
 }
+
+export interface ApplicationEmailContext {
+  candidateName: string;
+  candidateEmail: string;
+  campaignTitle: string;
+}
+
+/**
+ * Minimal candidate + campaign read for composing a transition email.
+ * No ownership check — the calling action has already authorized the
+ * transition that triggered the notification. Returns null if the
+ * application is missing or the candidate has no email on file.
+ */
+export async function fetchApplicationEmailContext(
+  applicationId: string,
+): Promise<ApplicationEmailContext | null> {
+  const supabase = await createClient();
+
+  const select = `campaigns!inner ( title ), candidates!inner ( first_name, last_name, email )`;
+  const { data, error } = await supabase
+    .from("applications")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(select as any)
+    .eq("id", applicationId)
+    .single();
+
+  if (error || !data) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = data as any;
+  if (!row.candidates?.email) return null;
+
+  return {
+    candidateName:
+      `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
+      row.candidates.email,
+    candidateEmail: row.candidates.email,
+    campaignTitle: row.campaigns?.title ?? "the role",
+  };
+}

@@ -18,6 +18,7 @@ import { signResponseToken } from "@/lib/auth/screening-token";
 import { requireUserId } from "@/lib/auth/guards";
 import type { ApplicationState } from "@/lib/constants";
 import { transitionApplication } from "@/lib/data/transitions";
+import { sendTransitionNotification } from "./transition-notifications";
 import {
   assertEligibleForScreeningSend,
   evaluateScreeningScoringOutcome,
@@ -364,6 +365,7 @@ export async function scoreScreeningAnswers(
         actor: "system",
         rationale: decision.rationale,
       });
+      await sendTransitionNotification(applicationId, decision.toState);
     } catch (err) {
       console.error(
         `Failed to transition ${applicationId} → ${decision.toState}:`,

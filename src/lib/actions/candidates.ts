@@ -11,6 +11,7 @@ import {
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { transitionApplication } from "@/lib/data/transitions";
+import { sendTransitionNotification } from "./transition-notifications";
 
 // Services
 import {
@@ -137,6 +138,7 @@ export async function syncResumesFromGmail(campaignId: string) {
           if (scored) {
             const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
             await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
+            await sendTransitionNotification(applicationId, decision.toState);
           }
         } catch (scoreErr) {
           console.error("Resume scoring failed (non-blocking):", scoreErr);
@@ -282,6 +284,8 @@ export async function updateCandidateStage(
 
   await updateApplicationStage(applicationId, validState, validRationale);
 
+  await sendTransitionNotification(applicationId, validState);
+
   if (campaignId) {
     revalidatePath(`/campaigns/${campaignId}`);
     revalidatePath(`/campaigns/${campaignId}/candidates/${applicationId}`);
@@ -380,6 +384,8 @@ export async function decideHitlReview(input: {
     rationale: parsed.rationale,
   });
 
+  await sendTransitionNotification(parsed.applicationId, toState);
+
   revalidatePath(`/campaigns/${data.campaign_id}`);
   revalidatePath(`/campaigns/${data.campaign_id}/candidates/${parsed.applicationId}`);
 
@@ -407,6 +413,7 @@ export async function scoreResume(applicationId: string) {
     if (scored) {
       const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
       await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
+      await sendTransitionNotification(applicationId, decision.toState);
     }
 
     revalidatePath(`/campaigns/${data.campaign_id}`);
