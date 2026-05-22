@@ -72,8 +72,10 @@
   h1, h2, h3, h4, h5, h6 {
     @apply font-heading tracking-tight;
   }
-  /* Ensure interactive elements meet minimum 44px touch target */
-  button, a, input, textarea, select, [role="button"] {
+  /* Ensure interactive elements meet minimum 44px touch target.
+     Checkbox/radio inputs are excluded — their touch target should come
+     from a larger clickable label/cell, not from inflating the box. */
+  button, a, input:not([type="checkbox"]):not([type="radio"]), textarea, select, [role="button"] {
     min-height: 44px;
     min-width: 44px;
   }

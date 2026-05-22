@@ -16,8 +16,12 @@ import { sendEmail } from "@/lib/services/email";
 import { buildScreeningQuestionsEmail } from "@/lib/services/email-templates/screening-questions";
 import { signResponseToken } from "@/lib/auth/screening-token";
 import { requireUserId } from "@/lib/auth/guards";
+import type { ApplicationState } from "@/lib/constants";
 import { transitionApplication } from "@/lib/data/transitions";
-import { evaluateScreeningScoringOutcome } from "@/lib/rules/screening-response";
+import {
+  assertEligibleForScreeningSend,
+  evaluateScreeningScoringOutcome,
+} from "@/lib/rules/screening-response";
 import {
   fetchScreeningQuestionsByCampaignId,
   replaceScreeningQuestions,
@@ -193,6 +197,13 @@ export async function sendScreeningQuestionsToCandidate(
   const app = await fetchApplicationForScreeningSend(applicationId, userId);
   if (!app) throw new Error("Application not found or access denied");
 
+  // Gate the send on pipeline state. The bulk sender filters ineligible
+  // candidates at the query level; this single-candidate path has no such
+  // filter, so without this guard the email would go out to anyone — even
+  // a candidate still in resume review or already rejected. Must run before
+  // buildAndSendOne: the post-send transition can't un-send a delivered mail.
+  assertEligibleForScreeningSend(app.status);
+
   checkRateLimit(userId, {
     name: "screening-send",
     maxRequests: 30,
@@ -226,13 +237,16 @@ export async function sendScreeningQuestionsToCandidate(
 // ─── Per-candidate Reads & Scoring ──────────────────────────────────────────
 
 export interface CandidateScreeningState {
+  status: ApplicationState | null;
   questions: ScreeningQuestionRow[];
   response: ScreeningResponseRow | null;
 }
 
 /**
- * Bundled read for the candidate detail page: the campaign's question set
- * and the candidate's response row (if any).
+ * Bundled read for the candidate detail page: the application's pipeline
+ * state, the campaign's question set, and the candidate's response row (if
+ * any). `status` lets the UI disable the send button for candidates who
+ * haven't reached screening — see `isEligibleForScreeningSend`.
  */
 export async function getCandidateScreeningState(
   applicationId: string
@@ -248,7 +262,7 @@ export async function getCandidateScreeningState(
     fetchScreeningResponseByApplicationId(applicationId),
   ]);
 
-  return { questions, response };
+  return { status: app.status, questions, response };
 }
 
 /**

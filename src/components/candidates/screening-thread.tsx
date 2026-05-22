@@ -5,6 +5,8 @@ import {
   sendScreeningQuestionsToCandidate,
   scoreScreeningAnswers,
 } from "@/lib/actions/screening-questions";
+import { isEligibleForScreeningSend } from "@/lib/rules/screening-response";
+import type { ApplicationState } from "@/lib/constants";
 import type {
   ScoredAnswerRow,
   ScreeningQuestionRow,
@@ -13,6 +15,7 @@ import type {
 
 interface ScreeningThreadProps {
   applicationId: string;
+  applicationStatus: ApplicationState | null;
   questions: ScreeningQuestionRow[];
   response: ScreeningResponseRow | null;
 }
@@ -37,6 +40,7 @@ function scoreColor(score: number | null): string {
 
 export default function ScreeningThread({
   applicationId,
+  applicationStatus,
   questions,
   response,
 }: ScreeningThreadProps) {
@@ -87,6 +91,14 @@ export default function ScreeningThread({
     answersById.set(a.question_id, a);
   }
 
+  // Mirror the server-side guard in `sendScreeningQuestionsToCandidate`: the
+  // send/resend buttons stay disabled until the application has reached the
+  // screening stage, so a recruiter can't fire an email the action rejects.
+  const canSend =
+    applicationStatus != null && isEligibleForScreeningSend(applicationStatus);
+  const sendDisabledReason =
+    "This candidate hasn't been approved into screening yet — screening questions can only be sent once they reach the screening stage.";
+
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
       <div className="flex items-start justify-between mb-4 gap-3">
@@ -100,7 +112,8 @@ export default function ScreeningThread({
           <button
             type="button"
             onClick={handleSend}
-            disabled={sending}
+            disabled={sending || !canSend}
+            title={canSend ? undefined : sendDisabledReason}
             className="px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {sending ? "Sending…" : "Send questions"}
@@ -110,8 +123,9 @@ export default function ScreeningThread({
           <button
             type="button"
             onClick={handleSend}
-            disabled={sending}
-            className="px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#E0F2FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200 disabled:opacity-50 whitespace-nowrap"
+            disabled={sending || !canSend}
+            title={canSend ? undefined : sendDisabledReason}
+            className="px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#E0F2FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {sending ? "Resending…" : "Resend email"}
           </button>
@@ -178,11 +192,18 @@ export default function ScreeningThread({
       )}
 
       {status === "not_sent" ? (
-        <p className="text-sm text-[#6B7280]">
-          {questions.length} question{questions.length === 1 ? "" : "s"}{" "}
-          ready to send. Click <strong>Send questions</strong> to email the
-          candidate a personal response link.
-        </p>
+        canSend ? (
+          <p className="text-sm text-[#6B7280]">
+            {questions.length} question{questions.length === 1 ? "" : "s"}{" "}
+            ready to send. Click <strong>Send questions</strong> to email the
+            candidate a personal response link.
+          </p>
+        ) : (
+          <p className="text-sm text-[#6B7280]">
+            {questions.length} question{questions.length === 1 ? "" : "s"}{" "}
+            configured. {sendDisabledReason}
+          </p>
+        )
       ) : (
         <ol className="space-y-4">
           {questions.map((q, idx) => {
