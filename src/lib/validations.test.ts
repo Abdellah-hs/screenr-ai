@@ -4,6 +4,8 @@ import {
   campaignFormSchema,
   screeningAnswerSubmissionSchema,
   parseCampaignFormData,
+  applicationStateSchema,
+  stageChangeRationaleSchema,
 } from './validations';
 
 describe('uuidSchema', () => {
@@ -171,5 +173,47 @@ describe('parseCampaignFormData', () => {
     const result = parseCampaignFormData(fd);
     expect(result.screeningCriteria).toEqual([]);
     expect(result.rubrics).toEqual([]);
+  });
+});
+
+describe('applicationStateSchema', () => {
+  it('accepts a canonical pipeline state', () => {
+    expect(applicationStateSchema.safeParse('screening_approved').success).toBe(true);
+  });
+
+  it('accepts a failure state', () => {
+    expect(applicationStateSchema.safeParse('processing_failed').success).toBe(true);
+  });
+
+  it('rejects a retired legacy value', () => {
+    expect(applicationStateSchema.safeParse('screening_q').success).toBe(false);
+  });
+
+  it('rejects a coarse CandidateStage value', () => {
+    expect(applicationStateSchema.safeParse('applied').success).toBe(false);
+  });
+
+  it('rejects an unknown value', () => {
+    expect(applicationStateSchema.safeParse('banana').success).toBe(false);
+  });
+});
+
+describe('stageChangeRationaleSchema', () => {
+  it('accepts a non-empty reason', () => {
+    const result = stageChangeRationaleSchema.safeParse('Strong interview, advancing.');
+    expect(result.success).toBe(true);
+  });
+
+  it('trims surrounding whitespace', () => {
+    const result = stageChangeRationaleSchema.safeParse('  advancing  ');
+    expect(result.success && result.data).toBe('advancing');
+  });
+
+  it('rejects an empty string', () => {
+    expect(stageChangeRationaleSchema.safeParse('').success).toBe(false);
+  });
+
+  it('rejects a whitespace-only string', () => {
+    expect(stageChangeRationaleSchema.safeParse('   ').success).toBe(false);
   });
 });

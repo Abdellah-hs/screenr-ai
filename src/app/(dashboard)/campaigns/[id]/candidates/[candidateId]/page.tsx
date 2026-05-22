@@ -8,7 +8,7 @@ import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
-import type { CandidateStage, CandidateScore } from "@/lib/constants";
+import type { CandidateScore } from "@/lib/constants";
 
 const tierColors: Record<string, string> = {
   strong: "text-[#059669] bg-[#ECFDF5]",
@@ -89,13 +89,12 @@ function ScoreCard({ score }: { score: CandidateScore }) {
             </div>
             <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all duration-200 ${
-                  factor.score >= 80
+                className={`h-full rounded-full transition-all duration-200 ${factor.score >= 80
                     ? "bg-[#22C55E]"
                     : factor.score >= 60
                       ? "bg-[#D97706]"
                       : "bg-[#DC2626]"
-                }`}
+                  }`}
                 style={{ width: `${factor.score}%` }}
               />
             </div>
@@ -182,7 +181,7 @@ export default async function CandidateDetailPage({
                 </h1>
                 <StageChanger
                   applicationId={candidateId}
-                  currentStage={candidate.stage as CandidateStage}
+                  currentState={candidate.status}
                 />
               </div>
               {candidate.current_title && (

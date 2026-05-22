@@ -75,7 +75,7 @@ vi.mock("next/cache", () => ({
   revalidatePath: mockRevalidatePath,
 }));
 
-import { decideHitlReview, syncResumesFromGmail } from "./candidates";
+import { decideHitlReview, syncResumesFromGmail, updateCandidateStage } from "./candidates";
 import { extractResumeData } from "@/lib/services/openai";
 import {
   fetchUnreadGmailResumes,
@@ -89,6 +89,8 @@ import {
   createApplicationIfNotExists,
   uploadResumeToStorage,
   logAiAudit,
+  updateApplicationStage,
+  fetchApplicationCampaignId,
 } from "@/lib/data/candidates";
 import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
 
@@ -264,6 +266,76 @@ describe("decideHitlReview", () => {
       decision: "approve",
       rationale: VALID_RATIONALE,
     });
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith(`/campaigns/${VALID_CAMPAIGN_ID}`);
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/campaigns/${VALID_CAMPAIGN_ID}/candidates/${VALID_APP_ID}`,
+    );
+  });
+});
+
+describe("updateCandidateStage", () => {
+  it("rejects unauthenticated callers before doing any work", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(
+      updateCandidateStage(VALID_APP_ID, "screening_approved", VALID_RATIONALE),
+    ).rejects.toThrow("Unauthorized");
+
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid applicationId via Zod (uuid format)", async () => {
+    await expect(
+      updateCandidateStage("not-a-uuid", "screening_approved", VALID_RATIONALE),
+    ).rejects.toThrow();
+
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a state value outside candidate_stage_enum", async () => {
+    await expect(
+      updateCandidateStage(VALID_APP_ID, "banana", VALID_RATIONALE),
+    ).rejects.toThrow();
+
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a coarse CandidateStage value such as 'applied'", async () => {
+    await expect(
+      updateCandidateStage(VALID_APP_ID, "applied", VALID_RATIONALE),
+    ).rejects.toThrow();
+
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty / whitespace-only rationale", async () => {
+    await expect(
+      updateCandidateStage(VALID_APP_ID, "screening_approved", "   "),
+    ).rejects.toThrow();
+
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+  });
+
+  it("delegates to updateApplicationStage with the validated state and trimmed rationale", async () => {
+    await updateCandidateStage(
+      VALID_APP_ID,
+      "screening_approved",
+      "  Strong fit, advancing.  ",
+    );
+
+    expect(vi.mocked(updateApplicationStage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateApplicationStage)).toHaveBeenCalledWith(
+      VALID_APP_ID,
+      "screening_approved",
+      "Strong fit, advancing.",
+    );
+  });
+
+  it("revalidates the campaign list and candidate detail paths on success", async () => {
+    vi.mocked(fetchApplicationCampaignId).mockResolvedValueOnce(VALID_CAMPAIGN_ID);
+
+    await updateCandidateStage(VALID_APP_ID, "screening_approved", VALID_RATIONALE);
 
     expect(mockRevalidatePath).toHaveBeenCalledWith(`/campaigns/${VALID_CAMPAIGN_ID}`);
     expect(mockRevalidatePath).toHaveBeenCalledWith(

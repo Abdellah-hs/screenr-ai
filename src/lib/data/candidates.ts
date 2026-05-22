@@ -391,19 +391,20 @@ export async function advanceApplicationStatus(
 }
 
 /**
- * Recruiter-driven stage change (manual override from the UI).
- * Rationale is required per the ATS state-machine rules; we default to a
- * generic label until the UI is updated to prompt for it.
+ * Recruiter-driven stage change (manual override from the UI). The caller
+ * must supply a written rationale — manual overrides without one are
+ * forbidden by the ATS state-machine rules. Whether the transition is legal
+ * from the current state is validated inside transitionApplication().
  */
 export async function updateApplicationStage(
   applicationId: string,
-  stage: CandidateStageEnum,
-  rationale?: string,
+  toState: ApplicationState,
+  rationale: string,
 ) {
   await transitionApplication({
     applicationId,
-    toState: stage as ApplicationState,
+    toState,
     actor: "recruiter",
-    rationale: rationale?.trim() || "Manual stage change (rationale not provided)",
+    rationale,
   });
 }

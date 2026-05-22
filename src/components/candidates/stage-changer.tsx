@@ -1,58 +1,82 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
-import type { CandidateStage } from "@/lib/constants";
+import {
+  APPLICATION_STATE_TRANSITIONS,
+  type ApplicationState,
+} from "@/lib/constants";
+import { Modal, ModalFooter, ModalHeader, Textarea } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
-const stages: { value: CandidateStage; label: string }[] = [
-  { value: "applied", label: "Applied" },
-  { value: "screening", label: "Screening" },
-  { value: "interview", label: "Interview" },
-  { value: "offer", label: "Offer" },
-  { value: "hired", label: "Hired" },
-  { value: "rejected", label: "Rejected" },
+const FAILURE_STATES: ApplicationState[] = [
+  "screening_expired",
+  "interview_no_show",
+  "processing_failed",
 ];
 
-const stageColors: Record<CandidateStage, string> = {
-  applied: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
-  screening: "text-[#2563EB] bg-[#EFF6FF] border-[#BFDBFE]",
-  interview: "text-[#7C3AED] bg-[#F5F3FF] border-[#DDD6FE]",
-  offer: "text-[#D97706] bg-[#FEF3C7] border-[#FDE68A]",
-  hired: "text-[#059669] bg-[#ECFDF5] border-[#A7F3D0]",
-  rejected: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
-};
+/** Turns a canonical enum value into a human label: `screening_approved` → "Screening Approved". */
+function formatStateLabel(state: ApplicationState): string {
+  return state
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/** Chip colour by state category — negative outcomes red, hired green, idle grey, in-progress sky. */
+function stateTone(state: ApplicationState): string {
+  if (state === "hired") return "text-[#059669] bg-[#ECFDF5] border-[#A7F3D0]";
+  if (state === "rejected" || state === "withdrawn" || FAILURE_STATES.includes(state)) {
+    return "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]";
+  }
+  if (state === "new" || state === "archived") {
+    return "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]";
+  }
+  return "text-[#0369A1] bg-[#F0F9FF] border-[#BAE6FD]";
+}
 
 export function StageChanger({
   applicationId,
-  currentStage,
+  currentState,
 }: {
   applicationId: string;
-  currentStage: CandidateStage;
+  currentState: ApplicationState;
 }) {
   const [open, setOpen] = useState(false);
-  const [stage, setStage] = useState(currentStage);
+  const [target, setTarget] = useState<ApplicationState | null>(null);
+  const [rationale, setRationale] = useState("");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // Keep local state in sync when the parent re-renders after a revalidate —
-  // e.g. a sibling component (ScreeningThread, pipeline buttons) advances the
-  // stage server-side, Next.js refetches the candidate, and this component
-  // gets a new currentStage prop. Without this, the old stage would stick.
-  useEffect(() => {
-    setStage(currentStage);
-  }, [currentStage]);
+  // Only legal next-states from the state machine are offered — illegal
+  // transitions can't even be selected. transitionApplication() enforces the
+  // same rule server-side as a backstop.
+  const nextStates = APPLICATION_STATE_TRANSITIONS[currentState] ?? [];
+  const isTerminal = nextStates.length === 0;
 
-  function handleSelect(newStage: CandidateStage) {
-    if (newStage === stage) {
-      setOpen(false);
-      return;
-    }
-    setError(null);
+  function pickTarget(state: ApplicationState) {
     setOpen(false);
+    setError(null);
+    setRationale("");
+    setTarget(state);
+  }
+
+  function closeModal() {
+    if (isPending) return; // don't let the modal close mid-save
+    setTarget(null);
+    setRationale("");
+    setError(null);
+  }
+
+  function handleConfirm() {
+    if (!target || rationale.trim().length === 0) return;
+    setError(null);
     startTransition(async () => {
       try {
-        await updateCandidateStage(applicationId, newStage);
-        setStage(newStage);
+        await updateCandidateStage(applicationId, target, rationale.trim());
+        // Success — revalidatePath refreshes the page with the new state.
+        setTarget(null);
+        setRationale("");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to update stage");
       }
@@ -62,53 +86,111 @@ export function StageChanger({
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
-        disabled={isPending}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md capitalize cursor-pointer transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1 ${stageColors[stage]} ${isPending ? "opacity-50" : ""}`}
+        type="button"
+        onClick={() => !isTerminal && setOpen((o) => !o)}
+        disabled={isTerminal}
+        aria-haspopup={isTerminal ? undefined : "menu"}
+        aria-expanded={isTerminal ? undefined : open}
+        title={isTerminal ? "This is a terminal state — no further transitions" : "Change stage"}
+        className={cn(
+          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-all duration-200",
+          stateTone(currentState),
+          isTerminal
+            ? "cursor-default"
+            : "cursor-pointer hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1",
+        )}
       >
-        {isPending ? "Updating..." : (stages.find((s) => s.value === stage)?.label ?? stage)}
-        <svg
-          className={`w-3 h-3 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M19 9l-7 7-7-7"
-          />
-        </svg>
+        {formatStateLabel(currentState)}
+        {!isTerminal && (
+          <svg
+            className={cn("w-3 h-3 transition-transform duration-200", open && "rotate-180")}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        )}
       </button>
 
-      {open && (
+      {open && !isTerminal && (
         <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div
-            className="fixed inset-0 z-10"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute top-full left-0 mt-1 z-20 bg-white border border-[#E5E7EB] rounded-lg py-1 min-w-[140px]">
-            {stages.map((s) => (
+            role="menu"
+            className="absolute top-full left-0 mt-1 z-20 min-w-[200px] bg-white border border-[#E5E7EB] rounded-lg py-1 shadow-lg"
+          >
+            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
+              Move to
+            </p>
+            {nextStates.map((state) => (
               <button
-                key={s.value}
-                onClick={() => handleSelect(s.value)}
-                className={`w-full text-left px-3 py-1.5 text-xs cursor-pointer transition-all duration-200 hover:bg-[#F9FAFB] ${
-                  s.value === stage
-                    ? "font-semibold text-[#0369A1]"
-                    : "text-[#4B5563]"
-                }`}
+                key={state}
+                type="button"
+                role="menuitem"
+                onClick={() => pickTarget(state)}
+                className="w-full text-left px-3 py-1.5 text-xs text-[#4B5563] cursor-pointer transition-colors hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:bg-[#F9FAFB]"
               >
-                {s.label}
+                {formatStateLabel(state)}
               </button>
             ))}
           </div>
         </>
       )}
 
-      {error && (
-        <p className="text-xs text-[#DC2626] mt-1">{error}</p>
-      )}
+      <Modal open={target !== null} onClose={closeModal}>
+        {target && (
+          <>
+            <ModalHeader>
+              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+                Change candidate stage
+              </h2>
+              <p className="mt-1 text-sm text-[#6B7280]">
+                Moving from{" "}
+                <span className="font-medium text-[#111827]">
+                  {formatStateLabel(currentState)}
+                </span>{" "}
+                to{" "}
+                <span className="font-medium text-[#111827]">
+                  {formatStateLabel(target)}
+                </span>
+                .
+              </p>
+            </ModalHeader>
+
+            <Textarea
+              label="Reason for this change"
+              placeholder="Why are you overriding the candidate's stage? This is recorded on the application's transition log."
+              value={rationale}
+              onChange={(e) => setRationale(e.target.value)}
+              rows={4}
+              autoFocus
+              disabled={isPending}
+            />
+
+            {error && <p className="mt-3 text-sm text-[#DC2626]">{error}</p>}
+
+            <ModalFooter>
+              <button
+                type="button"
+                onClick={closeModal}
+                disabled={isPending}
+                className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer transition-colors hover:bg-[#F9FAFB] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={isPending || rationale.trim().length === 0}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer transition-colors hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isPending ? "Saving…" : "Confirm change"}
+              </button>
+            </ModalFooter>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

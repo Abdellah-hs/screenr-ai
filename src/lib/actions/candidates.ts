@@ -2,7 +2,12 @@
 
 import type { gmail_v1 } from "googleapis";
 import { revalidatePath } from "next/cache";
-import { uuidSchema, candidateStageSchema, hitlReviewDecisionSchema } from "@/lib/validations";
+import {
+  uuidSchema,
+  applicationStateSchema,
+  stageChangeRationaleSchema,
+  hitlReviewDecisionSchema,
+} from "@/lib/validations";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { transitionApplication } from "@/lib/data/transitions";
@@ -242,6 +247,10 @@ export async function getCandidateById(applicationId: string) {
     current_title: parsed?.experience?.[0]?.title || null,
     current_company: parsed?.experience?.[0]?.company || null,
     stage: normalizeStage(data.status),
+    // Raw canonical pipeline state — drives the StageChanger, which offers
+    // legal next-states from APPLICATION_STATE_TRANSITIONS. `stage` above is
+    // the coarse label kept for other UI; the two are intentionally distinct.
+    status: data.status as ApplicationState,
     awaiting_human_review: data.status === "screening_review_pending",
     screening_tier: data.screening_tier || null,
     scores: buildScoresArray(data, currentResumeRubricVersion),
@@ -260,17 +269,18 @@ export async function getCandidateById(applicationId: string) {
 
 export async function updateCandidateStage(
   applicationId: string,
-  stage: string,
-  rationale?: string,
+  toState: string,
+  rationale: string,
 ) {
   await requireUserId();
   uuidSchema.parse(applicationId);
-  candidateStageSchema.parse(stage);
+  const validState = applicationStateSchema.parse(toState);
+  const validRationale = stageChangeRationaleSchema.parse(rationale);
 
   // Fetch campaign_id before updating so we can revalidate the right paths
   const campaignId = await fetchApplicationCampaignId(applicationId);
 
-  await updateApplicationStage(applicationId, stage as CandidateStageEnum, rationale);
+  await updateApplicationStage(applicationId, validState, validRationale);
 
   if (campaignId) {
     revalidatePath(`/campaigns/${campaignId}`);
