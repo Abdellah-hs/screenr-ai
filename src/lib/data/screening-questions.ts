@@ -92,9 +92,9 @@ export async function fetchApplicationsReadyForScreeningSend(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .select(selectWithCandidate as any)
     .eq("campaign_id", campaignId)
-    // `screening_q` is legacy; `screening_approved` is the canonical post-
-    // resume-scoring state. Keep both so migrated rows keep flowing.
-    .in("status", ["screening_q", "screening_approved"])
+    // `screening_approved` is the canonical post-resume-scoring state — the
+    // only state from which a candidate is ready to receive screening Qs.
+    .eq("status", "screening_approved")
     .not("resume_score", "is", null);
 
   if (error || !data) return [];
