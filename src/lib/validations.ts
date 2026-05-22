@@ -150,6 +150,20 @@ export const stageChangeRationaleSchema = z
   .trim()
   .min(1, "A reason is required for a manual stage change.");
 
+// ─── Duplicate Review Validation ────────────────────────────────────────────
+
+// HR resolving a flagged duplicate. A written rationale is mandatory —
+// merging or keeping records separate is a reviewer decision that must be
+// recorded on the flag.
+export const resolveDuplicateSchema = z.object({
+  flagId: z.string().uuid("Invalid flag ID"),
+  decision: z.enum(["approved", "rejected"]),
+  rationale: z
+    .string()
+    .trim()
+    .min(1, "A reason is required to resolve a duplicate flag."),
+});
+
 // ─── UUID Validation ────────────────────────────────────────────────────────
 
 export const uuidSchema = z.string().uuid("Invalid ID format");
