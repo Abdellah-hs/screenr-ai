@@ -2,12 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   assertResponseIsOpen,
   assertResponseNotResubmitted,
+  assertEligibleForScreeningSend,
+  isEligibleForScreeningSend,
   validateRequiredAnswersPresent,
   evaluateScreeningScoringOutcome,
   ScreeningResponseError,
+  SCREENING_SEND_ELIGIBLE_STATES,
   type ScreeningResponseStatus,
   type ScreeningScoringConfig,
 } from "./screening-response";
+import type { ApplicationState } from "@/lib/constants";
 
 const OPEN_STATUSES: ScreeningResponseStatus[] = ["pending", "sent", "responded"];
 
@@ -45,6 +49,59 @@ describe("assertResponseNotResubmitted", () => {
     expect(() => assertResponseNotResubmitted("scored")).toThrow(
       "Your answers have already been submitted. You cannot re-submit.",
     );
+  });
+});
+
+describe("assertEligibleForScreeningSend", () => {
+  it.each(SCREENING_SEND_ELIGIBLE_STATES)(
+    "does not throw for eligible state %s",
+    (status) => {
+      expect(() => assertEligibleForScreeningSend(status)).not.toThrow();
+    },
+  );
+
+  // States a candidate can be in where they have NOT yet earned a screening
+  // send: pre-screening, awaiting human approval, past screening, or terminal.
+  const INELIGIBLE_STATES: ApplicationState[] = [
+    "new",
+    "screening_review_pending",
+    "screening_completed",
+    "screening_scored",
+    "interview_scheduling",
+    "interview_scheduled",
+    "interview_completed",
+    "interview_scored",
+    "reference_check",
+    "manager_review",
+    "final_interview_scheduling",
+    "rejected",
+    "hired",
+    "withdrawn",
+    "archived",
+  ];
+
+  it.each(INELIGIBLE_STATES)("throws for ineligible state %s", (status) => {
+    expect(() => assertEligibleForScreeningSend(status)).toThrow();
+  });
+
+  it("names the offending state in the error message", () => {
+    expect(() => assertEligibleForScreeningSend("rejected")).toThrow(
+      'currently "rejected"',
+    );
+  });
+});
+
+describe("isEligibleForScreeningSend", () => {
+  it.each(SCREENING_SEND_ELIGIBLE_STATES)("returns true for %s", (status) => {
+    expect(isEligibleForScreeningSend(status)).toBe(true);
+  });
+
+  it("returns false for a pre-screening state", () => {
+    expect(isEligibleForScreeningSend("new")).toBe(false);
+  });
+
+  it("returns false for a terminal state", () => {
+    expect(isEligibleForScreeningSend("rejected")).toBe(false);
   });
 });
 

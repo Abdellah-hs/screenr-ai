@@ -127,6 +127,7 @@ export default async function CandidateDetailPage({
     getCampaignById(id),
     getCandidateById(candidateId),
     getCandidateScreeningState(candidateId).catch(() => ({
+      status: null,
       questions: [],
       response: null,
     })),
@@ -434,6 +435,7 @@ export default async function CandidateDetailPage({
 
           <ScreeningThread
             applicationId={candidateId}
+            applicationStatus={screeningState.status}
             questions={screeningState.questions}
             response={screeningState.response}
           />

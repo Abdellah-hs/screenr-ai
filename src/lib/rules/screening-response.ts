@@ -31,6 +31,49 @@ export class ScreeningResponseError extends Error {
 }
 
 /**
+ * Application states from which a recruiter may (re)send screening questions
+ * to a single candidate. Derived from the state machine: these are exactly
+ * the legal predecessors of `screening_sent` (`screening_approved` plus the
+ * legacy `screening` / `screening_q`), plus `screening_sent` itself so an
+ * expired or lost link can be resent.
+ *
+ * Every other state is ineligible — a candidate still in resume review,
+ * awaiting human approval, already past screening, or in a terminal state
+ * must NOT receive the screening email.
+ */
+export const SCREENING_SEND_ELIGIBLE_STATES = [
+  "screening_approved",
+  "screening_q",
+  "screening",
+  "screening_sent",
+] as const satisfies readonly ApplicationState[];
+
+/**
+ * Predicate form of the send guard. Used by the UI to disable the "Send
+ * questions" button for ineligible candidates; the action uses the
+ * throwing `assertEligibleForScreeningSend` below as the real boundary.
+ */
+export function isEligibleForScreeningSend(status: ApplicationState): boolean {
+  const eligible = SCREENING_SEND_ELIGIBLE_STATES as readonly ApplicationState[];
+  return eligible.includes(status);
+}
+
+/**
+ * Guard for the recruiter "send screening questions" path. The bulk sender
+ * filters ineligible candidates out at the query level; the single-candidate
+ * sender has no such filter, so this guard is what stops the screening email
+ * from reaching someone who never made it into screening. Call it BEFORE the
+ * email is dispatched — a failed post-send transition cannot un-send a mail.
+ */
+export function assertEligibleForScreeningSend(status: ApplicationState): void {
+  if (!isEligibleForScreeningSend(status)) {
+    throw new Error(
+      `Screening questions can only be sent to a candidate who has been approved into screening. This application is currently "${status}".`,
+    );
+  }
+}
+
+/**
  * Guard for the form-load path: a candidate can only open their form
  * if the response row is still accepting input.
  *   - `scored`  → already processed by the recruiter; nothing to do.

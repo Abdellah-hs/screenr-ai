@@ -1,10 +1,12 @@
 import { createClient } from "@/lib/supabase/server";
+import type { ApplicationState } from "@/lib/constants";
 import type { Json } from "@/types/database.types";
 
 export interface ApplicationForScreeningSend {
   application_id: string;
   campaign_id: string;
   candidate_id: string;
+  status: ApplicationState;
   campaign_title: string;
   candidate_name: string;
   candidate_email: string;
@@ -26,6 +28,7 @@ export async function fetchApplicationForScreeningSend(
     id,
     campaign_id,
     candidate_id,
+    status,
     campaigns!inner ( id, title, user_id ),
     candidates!inner ( id, first_name, last_name, email )
   `;
@@ -47,6 +50,7 @@ export async function fetchApplicationForScreeningSend(
     application_id: row.id,
     campaign_id: row.campaign_id,
     candidate_id: row.candidate_id,
+    status: row.status as ApplicationState,
     campaign_title: row.campaigns.title,
     candidate_name:
       `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
@@ -103,6 +107,7 @@ export async function fetchApplicationsReadyForScreeningSend(
       application_id: row.id,
       campaign_id: row.campaign_id,
       candidate_id: row.candidate_id,
+      status: row.status as ApplicationState,
       campaign_title: campaign.title,
       candidate_name:
         `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
