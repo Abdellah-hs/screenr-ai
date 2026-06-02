@@ -139,6 +139,17 @@ export interface ScoreFactor {
   score: number;
 }
 
+/**
+ * Per-criterion fail line for the mandatory-criteria knockout gate. A candidate
+ * scoring below this on ANY `is_mandatory` screening criterion is rejected
+ * regardless of their weighted overall score (see `evaluateResumeScoringOutcome`).
+ *
+ * Fixed at 30 to match the "below 30" tier-cap line already baked into the
+ * resume-scoring prompt (`src/lib/services/openai.ts`). A per-campaign,
+ * recruiter-tunable fail line is a deliberate fast-follow — see issue #64.
+ */
+export const MANDATORY_CRITERION_FAIL_LINE = 30;
+
 export interface CandidateScore {
   stage: "resume" | "screening" | "interview";
   overall: number;
