@@ -1,7 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { startVoiceSpikeSession } from "@/lib/actions/realtime";
+import { startVoiceSpikeSession, startScreeningPreviewSession } from "@/lib/actions/realtime";
+
+interface VoiceSessionProps {
+  /** When set, runs the campaign's screening script; otherwise a bare connectivity check. */
+  campaignId?: string;
+}
 
 type Status = "idle" | "connecting" | "live" | "error";
 
@@ -26,7 +31,7 @@ const STATUS_DOT: Record<Status, string> = {
  * connection straight to OpenAI: mic track up, agent audio down, a data
  * channel to kick off the greeting. No scoring, no persistence yet.
  */
-export default function VoiceSession() {
+export default function VoiceSession({ campaignId }: VoiceSessionProps = {}) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -50,7 +55,9 @@ export default function VoiceSession() {
     setError(null);
     setStatus("connecting");
     try {
-      const session = await startVoiceSpikeSession();
+      const session = campaignId
+        ? await startScreeningPreviewSession(campaignId)
+        : await startVoiceSpikeSession();
 
       const pc = new RTCPeerConnection();
       pcRef.current = pc;
