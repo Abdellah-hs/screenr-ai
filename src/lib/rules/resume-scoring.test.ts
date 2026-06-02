@@ -84,7 +84,7 @@ describe("evaluateResumeScoringOutcome", () => {
     // A criterion + its paired factor (factors are index-aligned to criteria
     // per the scoring prompt contract). Helper keeps the AAA blocks readable.
     function withCriteria(
-      criteria: { label: string; is_mandatory: boolean }[],
+      criteria: { label: string; is_mandatory: boolean; min_score?: number }[],
       factorScores: number[],
     ) {
       return {
@@ -96,6 +96,9 @@ describe("evaluateResumeScoringOutcome", () => {
             label: c.label,
             weight: Math.round(100 / criteria.length),
             is_mandatory: c.is_mandatory,
+            // Per-dimension fail line. Defaults to 30 so existing assertions
+            // (which were written against the old fixed line) still hold.
+            min_score: c.min_score ?? 30,
           })),
         }),
         result: makeResult({
@@ -212,7 +215,7 @@ describe("evaluateResumeScoringOutcome", () => {
       const config = makeConfig({
         automation_mode: "fully_auto",
         screening_threshold: 70,
-        screening_criteria: [{ id: "c1", label: "React", weight: 100, is_mandatory: true }],
+        screening_criteria: [{ id: "c1", label: "React", weight: 100, is_mandatory: true, min_score: 30 }],
       });
       const result = makeResult({ overall_score: 85, factors: [] });
 

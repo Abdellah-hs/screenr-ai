@@ -199,8 +199,8 @@ describe("generateRubricDimensions", () => {
 
 describe("scoreResumeAgainstCriteria", () => {
   const sampleCriteria = [
-    { id: "sc-1", label: "React", weight: 0.6, is_mandatory: true },
-    { id: "sc-2", label: "Tests", weight: 0.4, is_mandatory: false },
+    { id: "sc-1", label: "React", weight: 0.6, is_mandatory: true, min_score: 30 },
+    { id: "sc-2", label: "Tests", weight: 0.4, is_mandatory: false, min_score: 0 },
   ];
 
   function scorePayload(overrides: Record<string, unknown> = {}) {

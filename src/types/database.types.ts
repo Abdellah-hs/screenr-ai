@@ -316,7 +316,6 @@ export type Database = {
           interview_persona: Database["public"]["Enums"]["interview_persona_enum"]
           location: string | null
           positions: number
-          screening_criteria: Json
           screening_threshold: number
           status: Database["public"]["Enums"]["campaign_status_enum"]
           timezone: string | null
@@ -335,7 +334,6 @@ export type Database = {
           interview_persona?: Database["public"]["Enums"]["interview_persona_enum"]
           location?: string | null
           positions?: number
-          screening_criteria?: Json
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null
@@ -354,7 +352,6 @@ export type Database = {
           interview_persona?: Database["public"]["Enums"]["interview_persona_enum"]
           location?: string | null
           positions?: number
-          screening_criteria?: Json
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null
@@ -408,40 +405,40 @@ export type Database = {
       }
       duplicate_review_queue: {
         Row: {
-          id: string
           candidate_id: string
-          matched_candidate_id: string
-          match_signals: Json
-          status: string
-          reviewer_user_id: string | null
-          rationale: string | null
           created_at: string
-          updated_at: string
+          id: string
+          match_signals: Json
+          matched_candidate_id: string
+          rationale: string | null
           resolved_at: string | null
+          reviewer_user_id: string | null
+          status: string
+          updated_at: string
         }
         Insert: {
-          id?: string
           candidate_id: string
-          matched_candidate_id: string
-          match_signals?: Json
-          status?: string
-          reviewer_user_id?: string | null
-          rationale?: string | null
           created_at?: string
-          updated_at?: string
+          id?: string
+          match_signals?: Json
+          matched_candidate_id: string
+          rationale?: string | null
           resolved_at?: string | null
+          reviewer_user_id?: string | null
+          status?: string
+          updated_at?: string
         }
         Update: {
-          id?: string
           candidate_id?: string
-          matched_candidate_id?: string
-          match_signals?: Json
-          status?: string
-          reviewer_user_id?: string | null
-          rationale?: string | null
           created_at?: string
-          updated_at?: string
+          id?: string
+          match_signals?: Json
+          matched_candidate_id?: string
+          rationale?: string | null
           resolved_at?: string | null
+          reviewer_user_id?: string | null
+          status?: string
+          updated_at?: string
         }
         Relationships: [
           {
@@ -544,50 +541,6 @@ export type Database = {
             columns: ["rubric_id"]
             isOneToOne: false
             referencedRelation: "evaluation_rubrics"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      screening_criteria: {
-        Row: {
-          campaign_id: string
-          created_at: string
-          deleted_at: string | null
-          id: string
-          is_mandatory: boolean
-          label: string
-          sort_order: number
-          updated_at: string
-          weight: number
-        }
-        Insert: {
-          campaign_id: string
-          created_at?: string
-          deleted_at?: string | null
-          id?: string
-          is_mandatory?: boolean
-          label: string
-          sort_order?: number
-          updated_at?: string
-          weight?: number
-        }
-        Update: {
-          campaign_id?: string
-          created_at?: string
-          deleted_at?: string | null
-          id?: string
-          is_mandatory?: boolean
-          label?: string
-          sort_order?: number
-          updated_at?: string
-          weight?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "screening_criteria_campaign_id_fkey"
-            columns: ["campaign_id"]
-            isOneToOne: false
-            referencedRelation: "campaigns"
             referencedColumns: ["id"]
           },
         ]
@@ -752,10 +705,6 @@ export type Database = {
         | "archived"
       candidate_stage_enum:
         | "new"
-        | "manager_review"
-        | "rejected"
-        | "hired"
-        | "withdrawn"
         | "screening_review_pending"
         | "screening_approved"
         | "screening_sent"
@@ -766,11 +715,15 @@ export type Database = {
         | "interview_completed"
         | "interview_scored"
         | "reference_check"
+        | "manager_review"
         | "final_interview_scheduling"
-        | "archived"
         | "screening_expired"
         | "interview_no_show"
         | "processing_failed"
+        | "rejected"
+        | "hired"
+        | "withdrawn"
+        | "archived"
       interview_persona_enum:
         | "neutral"
         | "pressure"
@@ -919,10 +872,6 @@ export const Constants = {
       campaign_status_enum: ["draft", "active", "paused", "closed", "archived"],
       candidate_stage_enum: [
         "new",
-        "manager_review",
-        "rejected",
-        "hired",
-        "withdrawn",
         "screening_review_pending",
         "screening_approved",
         "screening_sent",
@@ -933,11 +882,15 @@ export const Constants = {
         "interview_completed",
         "interview_scored",
         "reference_check",
+        "manager_review",
         "final_interview_scheduling",
-        "archived",
         "screening_expired",
         "interview_no_show",
         "processing_failed",
+        "rejected",
+        "hired",
+        "withdrawn",
+        "archived",
       ],
       interview_persona_enum: [
         "neutral",

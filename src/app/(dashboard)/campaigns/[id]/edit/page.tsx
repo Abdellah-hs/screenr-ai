@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
 import type { Campaign } from "@/lib/constants";
-import ScreeningCriteriaEditor from "@/components/campaigns/screening-criteria-editor";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 
@@ -192,12 +191,7 @@ export default function EditCampaignPage({
           defaultInterviewPersona={campaign.interview_persona}
         />
 
-        {/* Screening Criteria */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <ScreeningCriteriaEditor initialCriteria={campaign.screening_criteria} />
-        </div>
-
-        {/* Evaluation Rubrics */}
+        {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor initialRubrics={campaign.rubrics} campaignId={campaign.id} />
         </div>

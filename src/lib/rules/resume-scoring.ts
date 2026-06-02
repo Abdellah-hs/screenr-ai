@@ -1,4 +1,3 @@
-import { MANDATORY_CRITERION_FAIL_LINE } from "@/lib/constants";
 import type { ScoreFactor, ApplicationState } from "@/lib/constants";
 import type { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
 
@@ -33,12 +32,13 @@ export interface TransitionDescriptor {
 
 /**
  * The mandatory-criteria knockout gate. Cross-references each `is_mandatory`
- * screening criterion against its paired factor score (factors are index-
- * aligned to criteria per the scoring-prompt contract) and returns the labels
- * of every mandatory criterion scoring below `MANDATORY_CRITERION_FAIL_LINE`.
+ * resume-rubric dimension against its paired factor score (factors are index-
+ * aligned to dimensions per the scoring-prompt contract) and returns the
+ * labels of every mandatory dimension scoring below its own `min_score` —
+ * the per-dimension "fail line" the recruiter set in the rubric editor.
  *
- * A criterion with no paired factor (malformed AI output: fewer factors than
- * criteria) is skipped rather than treated as a failure — we don't reject a
+ * A dimension with no paired factor (malformed AI output: fewer factors than
+ * dimensions) is skipped rather than treated as a failure — we don't reject a
  * candidate on missing evidence. The overall-threshold check still applies.
  */
 function failedMandatoryCriteria(
@@ -49,7 +49,7 @@ function failedMandatoryCriteria(
     .filter((criterion, i) => {
       if (!criterion.is_mandatory) return false;
       const factor = result.factors[i];
-      return factor !== undefined && factor.score < MANDATORY_CRITERION_FAIL_LINE;
+      return factor !== undefined && factor.score < criterion.min_score;
     })
     .map((criterion) => criterion.label);
 }
@@ -81,7 +81,7 @@ export function evaluateResumeScoringOutcome(
     const failedList = failedRequired.join(", ");
     return {
       toState: "rejected",
-      rationale: `${scoreLine} — failed required criteria (< ${MANDATORY_CRITERION_FAIL_LINE}): ${failedList} [LOW_SCORE]`,
+      rationale: `${scoreLine} — failed required criteria below their min_score: ${failedList} [LOW_SCORE]`,
     };
   }
 

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import { createCampaign } from "@/lib/actions/campaigns";
-import ScreeningCriteriaEditor from "@/components/campaigns/screening-criteria-editor";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
@@ -139,12 +138,7 @@ export default function NewCampaignPage() {
 
         <AiSettingsFields />
 
-        {/* Screening Criteria */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <ScreeningCriteriaEditor />
-        </div>
-
-        {/* Evaluation Rubrics */}
+        {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor />
         </div>

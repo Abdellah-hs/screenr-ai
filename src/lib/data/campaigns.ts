@@ -4,7 +4,6 @@ import type {
   AutomationMode,
   InterviewPersona,
   Campaign,
-  ScreeningCriterion,
   EvaluationRubric,
   RubricDimension,
   CampaignReviewer,
@@ -15,7 +14,6 @@ import type { Database } from "@/types/database.types";
 
 type CampaignInsert = Database["public"]["Tables"]["campaigns"]["Insert"];
 type CampaignUpdate = Database["public"]["Tables"]["campaigns"]["Update"];
-type ScreeningCriterionRow = Database["public"]["Tables"]["screening_criteria"]["Row"];
 type EvaluationRubricRow = Database["public"]["Tables"]["evaluation_rubrics"]["Row"];
 type RubricDimensionRow = Database["public"]["Tables"]["rubric_dimensions"]["Row"];
 type CampaignReviewerRow = Database["public"]["Tables"]["campaign_reviewers"]["Row"];
@@ -35,7 +33,6 @@ type SlaTimerInput = {
   alert_threshold_hours: number;
   escalation_threshold_hours: number;
 };
-type ScreeningCriterionInput = Omit<ScreeningCriterion, "id">;
 
 const DEFAULT_PIPELINE: PipelineStageCount[] = [
   { name: "Applied", key: "applied", count: 0 },
@@ -47,7 +44,6 @@ const DEFAULT_PIPELINE: PipelineStageCount[] = [
 
 function assembleCampaign(
   row: Record<string, unknown>,
-  screeningCriteria: ScreeningCriterion[],
   rubrics: EvaluationRubric[],
   reviewers: CampaignReviewer[],
   slaTimers: SlaTimer[]
@@ -65,7 +61,6 @@ function assembleCampaign(
     automation_mode: row.automation_mode as AutomationMode,
     screening_threshold: row.screening_threshold as number,
     interview_persona: row.interview_persona as InterviewPersona,
-    screening_criteria: screeningCriteria,
     rubrics,
     reviewers,
     sla_timers: slaTimers,
@@ -101,16 +96,14 @@ export async function fetchAllCampaigns(userId: string): Promise<Campaign[]> {
 
   const campaignIds = rows.map((r) => r.id);
 
-  const [criteriaRes, rubricsRes, dimensionsRes, reviewersRes, slaRes] =
+  const [rubricsRes, dimensionsRes, reviewersRes, slaRes] =
     await Promise.all([
-      supabase.from("screening_criteria").select("*").in("campaign_id", campaignIds).is("deleted_at", null),
       supabase.from("evaluation_rubrics").select("*").in("campaign_id", campaignIds).eq("is_active", true),
       supabase.from("rubric_dimensions").select("*").is("deleted_at", null),
       supabase.from("campaign_reviewers").select("*").in("campaign_id", campaignIds),
       supabase.from("sla_timers").select("*").in("campaign_id", campaignIds),
     ]);
 
-  const criteriaByC = groupBy(criteriaRes.data || [], "campaign_id");
   const rubricsByC = groupBy(rubricsRes.data || [], "campaign_id");
   const dimensionsByR = groupBy(dimensionsRes.data || [], "rubric_id");
   const reviewersByC = groupBy(reviewersRes.data || [], "campaign_id");
@@ -153,14 +146,7 @@ export async function fetchAllCampaigns(userId: string): Promise<Campaign[]> {
       escalation_threshold_hours: s.escalation_threshold_hours,
     }));
 
-    const criteria = ((criteriaByC[row.id] || []) as ScreeningCriterionRow[]).map((c) => ({
-      id: c.id,
-      label: c.label,
-      weight: c.weight,
-      is_mandatory: c.is_mandatory,
-    }));
-
-    return assembleCampaign(row as unknown as Record<string, unknown>, criteria, rubrics, reviewers, slaTimers);
+    return assembleCampaign(row as unknown as Record<string, unknown>, rubrics, reviewers, slaTimers);
   });
 }
 
@@ -178,8 +164,7 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
 
   if (error || !row) return null;
 
-  const [criteriaRes, rubricsRes, reviewersRes, slaRes] = await Promise.all([
-    supabase.from("screening_criteria").select("*").eq("campaign_id", id).is("deleted_at", null),
+  const [rubricsRes, reviewersRes, slaRes] = await Promise.all([
     supabase.from("evaluation_rubrics").select("*").eq("campaign_id", id).eq("is_active", true),
     supabase.from("campaign_reviewers").select("*").eq("campaign_id", id),
     supabase.from("sla_timers").select("*").eq("campaign_id", id),
@@ -228,14 +213,7 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
     escalation_threshold_hours: s.escalation_threshold_hours,
   }));
 
-  const criteria: ScreeningCriterion[] = (criteriaRes.data || []).map((c) => ({
-    id: c.id,
-    label: c.label,
-    weight: c.weight,
-    is_mandatory: c.is_mandatory,
-  }));
-
-  return assembleCampaign(row as unknown as Record<string, unknown>, criteria, rubrics, reviewers, slaTimers);
+  return assembleCampaign(row as unknown as Record<string, unknown>, rubrics, reviewers, slaTimers);
 }
 
 /**
@@ -271,22 +249,38 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
 
   if (!row) return null;
 
-  const { data: criteria } = await supabase
-    .from("screening_criteria")
-    .select("id, label, weight, is_mandatory")
+  // Resume scoring is driven by the active `resume` evaluation rubric — the
+  // single source of truth for "how to score a CV" (issue #65). Each rubric
+  // dimension maps to a scoring criterion; `min_score` is that dimension's
+  // per-criterion knockout fail line (consumed by the rule layer).
+  const { data: resumeRubric } = await supabase
+    .from("evaluation_rubrics")
+    .select("id")
     .eq("campaign_id", campaignId)
-    .is("deleted_at", null);
+    .eq("stage", "resume")
+    .eq("is_active", true)
+    .maybeSingle();
+
+  const { data: dimensions } = resumeRubric
+    ? await supabase
+        .from("rubric_dimensions")
+        .select("id, name, weight, is_mandatory, min_score, sort_order")
+        .eq("rubric_id", resumeRubric.id)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true })
+    : { data: [] };
 
   return {
     id: row.id as string,
     description: row.description as string,
     automation_mode: row.automation_mode as AutomationMode,
     screening_threshold: row.screening_threshold as number,
-    screening_criteria: (criteria || []).map((c) => ({
-      id: c.id,
-      label: c.label,
-      weight: c.weight,
-      is_mandatory: c.is_mandatory,
+    screening_criteria: (dimensions || []).map((d) => ({
+      id: d.id,
+      label: d.name,
+      weight: d.weight,
+      is_mandatory: d.is_mandatory,
+      min_score: d.min_score,
     })),
   };
 }
@@ -325,9 +319,106 @@ export async function fetchActiveRubricVersion(
 }
 
 // ─── Mutation Helpers
+
+type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Structural equality of two dimension sets, order-independent. Drives the
+ * update path's versioning decision: equal → reuse the active rubric (no new
+ * version); different → archive + bump. Exported for unit testing.
+ */
+export function dimensionsEqual(
+  a: Omit<RubricDimension, "id">[],
+  b: Omit<RubricDimension, "id">[],
+): boolean {
+  if (a.length !== b.length) return false;
+  const norm = (d: Omit<RubricDimension, "id">) =>
+    `${d.name}|${d.weight}|${d.is_mandatory}|${d.min_score}|${d.max_score}|${d.sort_order}`;
+  const as = [...a].map(norm).sort();
+  const bs = [...b].map(norm).sort();
+  return as.every((v, i) => v === bs[i]);
+}
+
+/**
+ * Persist rubrics with version history (used by the update path). For each
+ * submitted stage that has dimensions, compare against the campaign's active
+ * rubric for that stage:
+ *   - no active rubric        → insert version 1 (active)
+ *   - dimensions unchanged    → no-op (don't churn a new version on every save)
+ *   - dimensions changed      → archive the active rubric (is_active=false,
+ *     archived_at=now) and insert version+1 as the new active rubric.
+ *
+ * Never updates dimensions in place — old versions stay intact so a score
+ * stamped `rubric_version = N` remains interpretable against version N.
+ */
+async function upsertRubricsVersioned(
+  supabase: SupabaseServerClient,
+  campaignId: string,
+  rubrics: RubricInput[],
+): Promise<void> {
+  for (const rubric of rubrics) {
+    const dims = rubric.dimensions ?? [];
+
+    const { data: active } = await supabase
+      .from("evaluation_rubrics")
+      .select("id, version")
+      .eq("campaign_id", campaignId)
+      .eq("stage", rubric.stage)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    let existingDims: Omit<RubricDimension, "id">[] = [];
+    if (active) {
+      const { data: dimRows } = await supabase
+        .from("rubric_dimensions")
+        .select("name, weight, is_mandatory, min_score, max_score, sort_order")
+        .eq("rubric_id", active.id)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true });
+      existingDims = (dimRows || []) as Omit<RubricDimension, "id">[];
+    }
+
+    if (active && dimensionsEqual(existingDims, dims)) continue;
+
+    if (active) {
+      await supabase
+        .from("evaluation_rubrics")
+        .update({ is_active: false, archived_at: new Date().toISOString() })
+        .eq("id", active.id);
+    }
+
+    if (dims.length === 0) continue;
+
+    const nextVersion = (active?.version ?? 0) + 1;
+    const { data: inserted } = await supabase
+      .from("evaluation_rubrics")
+      .insert({
+        campaign_id: campaignId,
+        stage: rubric.stage,
+        version: nextVersion,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (inserted) {
+      await supabase.from("rubric_dimensions").insert(
+        dims.map((d) => ({
+          rubric_id: inserted.id,
+          name: d.name,
+          weight: d.weight,
+          is_mandatory: d.is_mandatory,
+          min_score: d.min_score,
+          max_score: d.max_score,
+          sort_order: d.sort_order,
+        })),
+      );
+    }
+  }
+}
+
 export async function insertCampaignTx(
   payload: Omit<CampaignInsert, "user_id">,
-  screeningCriteria: ScreeningCriterionInput[],
   rubrics: RubricInput[],
   slaTimers: SlaTimerInput[],
   reviewers: ReviewerInput[],
@@ -344,20 +435,8 @@ export async function insertCampaignTx(
 
   if (error || !campaign) throw new Error(error?.message || "Failed to create campaign");
 
-  // 2. Insert screening criteria
-  if (screeningCriteria.length > 0) {
-    await supabase.from("screening_criteria").insert(
-      screeningCriteria.map((c, i) => ({
-        campaign_id: campaign.id,
-        label: c.label,
-        weight: c.weight,
-        is_mandatory: c.is_mandatory,
-        sort_order: i,
-      }))
-    );
-  }
-
-  // 3. Insert rubrics and dimensions
+  // 2. Insert rubrics and dimensions — the resume rubric is the single source
+  //    of truth for CV scoring (issue #65); screening_criteria is retired.
   for (const rubric of rubrics) {
     const { data: insertedRubric } = await supabase
       .from("evaluation_rubrics")
@@ -425,7 +504,7 @@ export async function insertCampaignTx(
 export async function updateCampaignTx(
   id: string,
   payload: CampaignUpdate,
-  screeningCriteria: Omit<ScreeningCriterion, "id">[],
+  rubrics: RubricInput[],
   slaTimers: { stage: string; time_limit_hours: number; alert_threshold_hours: number; escalation_threshold_hours: number }[],
   userId: string
 ): Promise<void> {
@@ -449,19 +528,10 @@ export async function updateCampaignTx(
 
   if (error) throw new Error(error.message);
 
-  // Handle screening criteria — delete & re-insert
-  await supabase.from("screening_criteria").delete().eq("campaign_id", id);
-  if (screeningCriteria.length > 0) {
-    await supabase.from("screening_criteria").insert(
-      screeningCriteria.map((c, i) => ({
-        campaign_id: id,
-        label: c.label,
-        weight: c.weight,
-        is_mandatory: c.is_mandatory,
-        sort_order: i,
-      }))
-    );
-  }
+  // Handle evaluation rubrics — versioned, never overwritten (CLAUDE.md:
+  // "overwriting historical rubrics" is forbidden). A stage whose dimensions
+  // changed gets a fresh active version; the old one is archived.
+  await upsertRubricsVersioned(supabase, id, rubrics);
 
   // Handle SLA timers — delete & re-insert
   await supabase.from("sla_timers").delete().eq("campaign_id", id);
@@ -510,18 +580,6 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
     .single();
 
   if (error || !cloned) throw new Error(error?.message || "Failed to clone campaign");
-
-  if (source.screening_criteria.length > 0) {
-    await supabase.from("screening_criteria").insert(
-      source.screening_criteria.map((c, i) => ({
-        campaign_id: cloned.id,
-        label: c.label,
-        weight: c.weight,
-        is_mandatory: c.is_mandatory,
-        sort_order: i,
-      }))
-    );
-  }
 
   for (const rubric of source.rubrics) {
     const { data: newRubric } = await supabase

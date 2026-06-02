@@ -144,7 +144,6 @@ describe('parseCampaignFormData', () => {
     const result = parseCampaignFormData(fd);
     expect(result.title).toBe('Senior Engineer');
     expect(result.positions).toBe(2);
-    expect(result.screeningCriteria).toEqual([]);
     expect(result.rubrics).toEqual([]);
   });
 
@@ -168,10 +167,8 @@ describe('parseCampaignFormData', () => {
 
   it('returns empty arrays when JSON fields are malformed', () => {
     const fd = buildFormData();
-    fd.set('screening_criteria_json', 'not json');
     fd.set('rubrics_json', '{"wrong": "shape"}');
     const result = parseCampaignFormData(fd);
-    expect(result.screeningCriteria).toEqual([]);
     expect(result.rubrics).toEqual([]);
   });
 });

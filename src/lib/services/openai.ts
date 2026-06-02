@@ -330,7 +330,20 @@ export interface ResumeScoringEvidence {
 }
 
 /**
- * AI-scores a parsed resume against a campaign's screening criteria.
+ * A resume-scoring criterion, sourced from the active `resume` evaluation
+ * rubric's dimensions (issue #65). `min_score` is the per-criterion knockout
+ * fail line the recruiter set in the rubric editor; it is surfaced to the AI
+ * for mandatory criteria and enforced by the rule layer.
+ */
+export type ResumeScoringCriterion = {
+  label: string;
+  weight: number;
+  is_mandatory: boolean;
+  min_score: number;
+};
+
+/**
+ * AI-scores a parsed resume against a campaign's resume-rubric dimensions.
  *
  * Returns both the normalized result AND the raw output + model identifiers
  * so the caller can persist an `ai_audit_log` row per the "Mandatory AI
@@ -339,13 +352,18 @@ export interface ResumeScoringEvidence {
  */
 export async function scoreResumeAgainstCriteria(
   parsedResume: Record<string, unknown>,
-  screeningCriteria: ScreeningCriterion[],
+  screeningCriteria: ResumeScoringCriterion[],
   jobDescription: string
 ): Promise<ResumeScoringEvidence> {
   assertApiKeyConfigured();
 
   const criteriaList = screeningCriteria
-    .map((c) => `- ${c.label} (weight: ${c.weight}, mandatory: ${c.is_mandatory})`)
+    .map(
+      (c) =>
+        `- ${c.label} (weight: ${c.weight}, mandatory: ${c.is_mandatory}${
+          c.is_mandatory ? `, min pass score: ${c.min_score}` : ""
+        })`,
+    )
     .join("\n");
 
   const completion = await openai.chat.completions.parse({
@@ -364,7 +382,7 @@ Classify the candidate into a tier based on the overall score:
 - "weak": 25-49 (poor fit on most criteria)
 - "no_match": 0-24 (does not meet basic requirements)
 
-IMPORTANT: If a candidate fails ANY mandatory criterion (scores below 30), the maximum tier is "weak" regardless of overall score.
+IMPORTANT: If a candidate scores below a mandatory criterion's stated "min pass score", the maximum tier is "weak" regardless of overall score.
 
 Rules:
 - overall_score must equal the weighted sum of factor scores (rounded to nearest integer)

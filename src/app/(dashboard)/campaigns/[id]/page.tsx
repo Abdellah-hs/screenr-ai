@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
 import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import { getScreeningQuestions } from "@/lib/actions/screening-questions";
-import ScreeningCriteriaDisplay from "@/components/campaigns/screening-criteria-display";
 import RubricDisplay from "@/components/campaigns/rubric-display";
 import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
@@ -145,14 +144,7 @@ export default async function CampaignDetailPage({
         </div>
       </div>
 
-      {/* Screening Criteria */}
-      {campaign.screening_criteria.length > 0 && (
-        <div className="mb-6">
-          <ScreeningCriteriaDisplay criteria={campaign.screening_criteria} />
-        </div>
-      )}
-
-      {/* Evaluation Rubrics */}
+      {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
       {campaign.rubrics.length > 0 && (
         <div className="mb-6">
           <RubricDisplay rubrics={campaign.rubrics} />

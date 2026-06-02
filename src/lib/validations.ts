@@ -75,12 +75,9 @@ export function parseCampaignFormData(formData: FormData) {
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
   });
 
-  // Parse related JSON data with validation
-  const screeningCriteria = safeParseJsonArray(
-    formData.get("screening_criteria_json") as string,
-    z.array(screeningCriterionSchema)
-  );
-
+  // Parse related JSON data with validation. Resume scoring criteria live in
+  // the `resume` rubric (issue #65) — the standalone screening_criteria config
+  // is retired, so only `rubrics_json` is parsed here.
   const rubrics = safeParseJsonArray(
     formData.get("rubrics_json") as string,
     z.array(rubricSchema)
@@ -96,7 +93,7 @@ export function parseCampaignFormData(formData: FormData) {
     z.array(reviewerSchema)
   );
 
-  return { ...data, screeningCriteria, rubrics, slaTimers, reviewers };
+  return { ...data, rubrics, slaTimers, reviewers };
 }
 
 function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
