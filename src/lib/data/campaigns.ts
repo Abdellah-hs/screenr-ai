@@ -5,11 +5,12 @@ import type {
   InterviewPersona,
   Campaign,
   EvaluationRubric,
-  RubricDimension,
+  DimensionImportance,
   CampaignReviewer,
   SlaTimer,
   PipelineStageCount,
 } from "@/lib/constants";
+import { deriveDimensionFields } from "@/lib/rubric-weights";
 import type { Database } from "@/types/database.types";
 
 type CampaignInsert = Database["public"]["Tables"]["campaigns"]["Insert"];
@@ -19,9 +20,17 @@ type RubricDimensionRow = Database["public"]["Tables"]["rubric_dimensions"]["Row
 type CampaignReviewerRow = Database["public"]["Tables"]["campaign_reviewers"]["Row"];
 type SlaTimerRow = Database["public"]["Tables"]["sla_timers"]["Row"];
 
+// Recruiter intent only — weight/min_score/max_score are derived on write
+// via deriveDimensionFields (issue #77).
+type RubricDimensionInput = {
+  name: string;
+  importance: DimensionImportance;
+  is_mandatory: boolean;
+  sort_order: number;
+};
 type RubricInput = {
   stage: "resume" | "screening_q" | "interview";
-  dimensions?: Omit<RubricDimension, "id">[];
+  dimensions?: RubricDimensionInput[];
 };
 type ReviewerInput = {
   user_id?: string;
@@ -119,6 +128,7 @@ export async function fetchAllCampaigns(userId: string): Promise<Campaign[]> {
       dimensions: ((dimensionsByR[r.id as string] || []) as RubricDimensionRow[]).map((d) => ({
         id: d.id,
         name: d.name,
+        importance: d.importance,
         weight: d.weight,
         is_mandatory: d.is_mandatory,
         min_score: d.min_score,
@@ -186,6 +196,7 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
     dimensions: ((dimensionsByR[r.id] || []) as RubricDimensionRow[]).map((d) => ({
       id: d.id,
       name: d.name,
+      importance: d.importance,
       weight: d.weight,
       is_mandatory: d.is_mandatory,
       min_score: d.min_score,
@@ -323,17 +334,19 @@ export async function fetchActiveRubricVersion(
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
 /**
- * Structural equality of two dimension sets, order-independent. Drives the
- * update path's versioning decision: equal → reuse the active rubric (no new
- * version); different → archive + bump. Exported for unit testing.
+ * Structural equality of two dimension sets by recruiter intent (name +
+ * importance + Must-Have + order), order-independent. Weight/min_score are
+ * derived from these, so comparing intent is what decides whether an edit
+ * warrants a new rubric version. Equal → reuse the active rubric; different →
+ * archive + bump. Exported for unit testing.
  */
 export function dimensionsEqual(
-  a: Omit<RubricDimension, "id">[],
-  b: Omit<RubricDimension, "id">[],
+  a: RubricDimensionInput[],
+  b: RubricDimensionInput[],
 ): boolean {
   if (a.length !== b.length) return false;
-  const norm = (d: Omit<RubricDimension, "id">) =>
-    `${d.name}|${d.weight}|${d.is_mandatory}|${d.min_score}|${d.max_score}|${d.sort_order}`;
+  const norm = (d: RubricDimensionInput) =>
+    `${d.name}|${d.importance}|${d.is_mandatory}|${d.sort_order}`;
   const as = [...a].map(norm).sort();
   const bs = [...b].map(norm).sort();
   return as.every((v, i) => v === bs[i]);
@@ -367,15 +380,15 @@ async function upsertRubricsVersioned(
       .eq("is_active", true)
       .maybeSingle();
 
-    let existingDims: Omit<RubricDimension, "id">[] = [];
+    let existingDims: RubricDimensionInput[] = [];
     if (active) {
       const { data: dimRows } = await supabase
         .from("rubric_dimensions")
-        .select("name, weight, is_mandatory, min_score, max_score, sort_order")
+        .select("name, importance, is_mandatory, sort_order")
         .eq("rubric_id", active.id)
         .is("deleted_at", null)
         .order("sort_order", { ascending: true });
-      existingDims = (dimRows || []) as Omit<RubricDimension, "id">[];
+      existingDims = (dimRows || []) as RubricDimensionInput[];
     }
 
     if (active && dimensionsEqual(existingDims, dims)) continue;
@@ -403,9 +416,10 @@ async function upsertRubricsVersioned(
 
     if (inserted) {
       await supabase.from("rubric_dimensions").insert(
-        dims.map((d) => ({
+        deriveDimensionFields(dims).map((d) => ({
           rubric_id: inserted.id,
           name: d.name,
+          importance: d.importance,
           weight: d.weight,
           is_mandatory: d.is_mandatory,
           min_score: d.min_score,
@@ -451,9 +465,10 @@ export async function insertCampaignTx(
 
     if (insertedRubric && rubric.dimensions && rubric.dimensions.length > 0) {
       await supabase.from("rubric_dimensions").insert(
-        rubric.dimensions.map((d) => ({
+        deriveDimensionFields(rubric.dimensions).map((d) => ({
           rubric_id: insertedRubric.id,
           name: d.name,
+          importance: d.importance,
           weight: d.weight,
           is_mandatory: d.is_mandatory,
           min_score: d.min_score,
@@ -598,6 +613,7 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
         rubric.dimensions.map((d) => ({
           rubric_id: newRubric.id,
           name: d.name,
+          importance: d.importance,
           weight: d.weight,
           is_mandatory: d.is_mandatory,
           min_score: d.min_score,

@@ -36,10 +36,14 @@ export const slaTimerSchema = z.object({
 export const rubricDimensionSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1).max(200),
-  weight: z.number().min(0).max(1),
+  // Recruiter intent — the only weighting/gate inputs (issue #77). weight,
+  // min_score and max_score are DERIVED server-side from these, so they are
+  // accepted-but-ignored if the client sends them.
+  importance: z.enum(["high", "medium", "low"]),
   is_mandatory: z.boolean(),
-  min_score: z.number().int().min(0),
-  max_score: z.number().int().min(1),
+  weight: z.number().min(0).max(1).optional(),
+  min_score: z.number().int().min(0).optional(),
+  max_score: z.number().int().min(1).optional(),
   sort_order: z.number().int().min(0),
 });
 

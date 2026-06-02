@@ -500,6 +500,7 @@ export type Database = {
           created_at: string
           deleted_at: string | null
           id: string
+          importance: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory: boolean
           max_score: number
           min_score: number
@@ -513,6 +514,7 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           id?: string
+          importance?: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory?: boolean
           max_score?: number
           min_score?: number
@@ -526,6 +528,7 @@ export type Database = {
           created_at?: string
           deleted_at?: string | null
           id?: string
+          importance?: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory?: boolean
           max_score?: number
           min_score?: number
@@ -724,6 +727,7 @@ export type Database = {
         | "hired"
         | "withdrawn"
         | "archived"
+      dimension_importance_enum: "high" | "medium" | "low"
       interview_persona_enum:
         | "neutral"
         | "pressure"
@@ -892,6 +896,7 @@ export const Constants = {
         "withdrawn",
         "archived",
       ],
+      dimension_importance_enum: ["high", "medium", "low"],
       interview_persona_enum: [
         "neutral",
         "pressure",

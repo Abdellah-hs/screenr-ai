@@ -111,16 +111,16 @@ describe("generateRubricDimensions", () => {
   function fullStagesPayload() {
     return {
       resume: [
-        { name: "Years of experience", weight: 0.5, is_mandatory: true },
-        { name: "Education", weight: 0.5, is_mandatory: false },
+        { name: "Years of experience", importance: "high", is_mandatory: true },
+        { name: "Education", importance: "medium", is_mandatory: false },
       ],
       screening_q: [
-        { name: "Written clarity", weight: 0.6, is_mandatory: false },
-        { name: "Technical depth", weight: 0.4, is_mandatory: true },
+        { name: "Written clarity", importance: "high", is_mandatory: false },
+        { name: "Technical depth", importance: "medium", is_mandatory: true },
       ],
       interview: [
-        { name: "Live problem solving", weight: 0.7, is_mandatory: true },
-        { name: "Communication", weight: 0.3, is_mandatory: false },
+        { name: "Live problem solving", importance: "high", is_mandatory: true },
+        { name: "Communication", importance: "low", is_mandatory: false },
       ],
     };
   }
@@ -140,24 +140,27 @@ describe("generateRubricDimensions", () => {
     }
   });
 
-  it("rounds dimension weights and assigns sort_order in array order", async () => {
+  it("derives weight/min_score from importance + mandatory and assigns sort_order in array order", async () => {
     mockParse.mockResolvedValueOnce(
       parsedResponse({
         ...fullStagesPayload(),
         resume: [
-          { name: "Skill A", weight: 0.33333, is_mandatory: true },
-          { name: "Skill B", weight: 0.66666, is_mandatory: false },
+          { name: "Skill A", importance: "low", is_mandatory: true },
+          { name: "Skill B", importance: "high", is_mandatory: false },
         ],
       }),
     );
 
     const [resumeRubric] = await generateRubricDimensions("desc", "campaign-1");
 
-    expect(resumeRubric.dimensions[0].weight).toBe(0.33);
-    expect(resumeRubric.dimensions[1].weight).toBe(0.67);
+    // points: low=1, high=3 → total 4 → 0.25 / 0.75
+    expect(resumeRubric.dimensions[0].weight).toBe(0.25);
+    expect(resumeRubric.dimensions[1].weight).toBe(0.75);
     expect(resumeRubric.dimensions[0].sort_order).toBe(0);
     expect(resumeRubric.dimensions[1].sort_order).toBe(1);
-    expect(resumeRubric.dimensions[0].min_score).toBe(0);
+    // mandatory → fail line 30; non-mandatory → 0
+    expect(resumeRubric.dimensions[0].min_score).toBe(30);
+    expect(resumeRubric.dimensions[1].min_score).toBe(0);
     expect(resumeRubric.dimensions[0].max_score).toBe(100);
     expect(resumeRubric.dimensions[0].id).toMatch(/^dim-/);
   });

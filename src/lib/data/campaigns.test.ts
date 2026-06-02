@@ -1,14 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { dimensionsEqual } from "./campaigns";
-import type { RubricDimension } from "@/lib/constants";
+import type { DimensionImportance } from "@/lib/constants";
 
-function dim(overrides: Partial<Omit<RubricDimension, "id">> = {}): Omit<RubricDimension, "id"> {
+type Intent = {
+  name: string;
+  importance: DimensionImportance;
+  is_mandatory: boolean;
+  sort_order: number;
+};
+
+function dim(overrides: Partial<Intent> = {}): Intent {
   return {
     name: "React",
-    weight: 0.5,
+    importance: "high",
     is_mandatory: true,
-    min_score: 30,
-    max_score: 100,
     sort_order: 0,
     ...overrides,
   };
@@ -29,9 +34,16 @@ describe("dimensionsEqual", () => {
     expect(dimensionsEqual(a, b)).toBe(true);
   });
 
-  it("returns false when a field changed (min_score)", () => {
-    const a = [dim({ min_score: 30 })];
-    const b = [dim({ min_score: 50 })];
+  it("returns false when importance changed", () => {
+    const a = [dim({ importance: "high" })];
+    const b = [dim({ importance: "low" })];
+
+    expect(dimensionsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when Must-Have changed", () => {
+    const a = [dim({ is_mandatory: true })];
+    const b = [dim({ is_mandatory: false })];
 
     expect(dimensionsEqual(a, b)).toBe(false);
   });

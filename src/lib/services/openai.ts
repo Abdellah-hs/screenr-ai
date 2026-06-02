@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod/v4";
 import type { ScreeningCriterion, EvaluationRubric } from "@/lib/constants";
+import { deriveDimensionFields } from "@/lib/rubric-weights";
 import type { ResumeScoreResult } from "@/lib/rules/resume-scoring";
 
 const openai = new OpenAI({
@@ -70,7 +71,7 @@ const ScreeningCriteriaResponseSchema = z.object({
 
 const RubricDimensionAiSchema = z.object({
   name: z.string(),
-  weight: z.number(),
+  importance: z.enum(["high", "medium", "low"]),
   is_mandatory: z.boolean(),
 });
 
@@ -257,9 +258,9 @@ export async function generateRubricDimensions(
 
 Rules:
 - Each stage should have 4-6 dimensions
-- Weights within each stage must sum to 1.0
-- Each weight is between 0.05 and 0.35
-- Mark 1-3 dimensions per stage as mandatory
+- Rate each dimension's importance as "high", "medium", or "low" (how much it should count toward the stage score). Use a spread — not everything is "high".
+- Mark 1-3 dimensions per stage as mandatory ("Must Have" — failing it should knock the candidate out)
+- importance and mandatory are independent: a dimension can be a mandatory "Must Have" yet only "low" importance
 - Dimension names should be specific to the role
 - Keep names concise (2-5 words)
 - Resume dimensions focus on qualifications on paper
@@ -305,14 +306,24 @@ Rules:
     stage,
     version: 1,
     is_active: true,
-    dimensions: parsed[stage].map((d, i) => ({
+    // The AI returns intent (importance + mandatory); the numeric weight /
+    // fail line / scale are derived from it, same as a hand-built rubric.
+    dimensions: deriveDimensionFields(
+      parsed[stage].map((d, i) => ({
+        importance: d.importance,
+        is_mandatory: d.is_mandatory,
+        name: d.name,
+        sort_order: i,
+      })),
+    ).map((d) => ({
       id: generateId("dim"),
       name: d.name,
-      weight: Math.round(d.weight * 100) / 100,
+      importance: d.importance,
+      weight: d.weight,
       is_mandatory: d.is_mandatory,
-      min_score: 0,
-      max_score: 100,
-      sort_order: i,
+      min_score: d.min_score,
+      max_score: d.max_score,
+      sort_order: d.sort_order,
     })),
     created_at: now,
     archived_at: null,

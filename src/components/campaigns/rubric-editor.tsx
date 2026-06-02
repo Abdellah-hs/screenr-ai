@@ -32,8 +32,11 @@ function createEmptyDimension(): RubricDimension {
   return {
     id: `dim-${Math.random().toString(36).slice(2, 11)}`,
     name: "",
-    weight: 0,
+    importance: "medium",
     is_mandatory: false,
+    // Derived server-side from importance/is_mandatory on save (issue #77) —
+    // these are placeholders the editor never asks the recruiter to set.
+    weight: 0,
     min_score: 0,
     max_score: 100,
     sort_order: 0,
@@ -60,8 +63,6 @@ export default function RubricEditor({
 
   const activeRubric = rubrics.find((r) => r.stage === activeTab);
   const dimensions = activeRubric?.dimensions ?? [];
-  const totalWeight = dimensions.reduce((sum, d) => sum + d.weight, 0);
-  const weightOk = dimensions.length === 0 || (totalWeight >= 0.95 && totalWeight <= 1.05);
 
   function updateRubricDimensions(stage: PipelineStage, newDimensions: RubricDimension[]) {
     setRubrics((prev) =>
@@ -177,21 +178,6 @@ export default function RubricEditor({
         })}
       </div>
 
-      {/* Weight Indicator */}
-      {dimensions.length > 0 && (
-        <div className="flex justify-end">
-          <span
-            className={`text-xs font-medium px-2 py-0.5 rounded ${
-              weightOk
-                ? "bg-green-100 text-green-700"
-                : "bg-amber-100 text-amber-700"
-            }`}
-          >
-            Stage weight: {(totalWeight * 100).toFixed(0)}%
-          </span>
-        </div>
-      )}
-
       {/* Dimensions */}
       {dimensions.length === 0 && (
         <p className="text-sm text-[#6B7280]">
@@ -203,61 +189,49 @@ export default function RubricEditor({
         {dimensions.map((dim) => (
           <div
             key={dim.id}
-            className="flex flex-wrap items-center gap-3 p-3 bg-[#F0F9FF] rounded-lg border border-[#E2E8F0]"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 bg-[#F0F9FF] rounded-lg border border-[#E2E8F0]"
           >
             <input
               type="text"
               value={dim.name}
               onChange={(e) => updateDimension(dim.id, "name", e.target.value)}
               placeholder="Dimension name"
+              aria-label="Dimension name"
               className="flex-1 min-w-[180px] px-3 py-1.5 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200"
             />
+
             <div className="flex items-center gap-1.5">
-              <label className="text-xs text-[#6B7280] whitespace-nowrap">Weight</label>
-              <input
-                type="number"
-                value={dim.weight}
-                onChange={(e) =>
-                  updateDimension(dim.id, "weight", parseFloat(e.target.value) || 0)
-                }
-                min={0}
-                max={1}
-                step={0.05}
-                className="w-20 px-2 py-1.5 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 text-center"
+              <span className="text-xs text-[#6B7280] whitespace-nowrap">Type</span>
+              <SegmentedControl
+                ariaLabel={`Type for ${dim.name || "dimension"}`}
+                value={dim.is_mandatory ? "must" : "nice"}
+                onChange={(v) => updateDimension(dim.id, "is_mandatory", v === "must")}
+                options={[
+                  { value: "must", label: "Must have" },
+                  { value: "nice", label: "Nice to have" },
+                ]}
               />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-[#6B7280] whitespace-nowrap">Pass ≥</label>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={dim.min_score}
-                onChange={(e) =>
-                  updateDimension(dim.id, "min_score", parseInt(e.target.value))
-                }
-                className="w-24 accent-[#0369A1] cursor-pointer"
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-[#6B7280] whitespace-nowrap">Importance</span>
+              <SegmentedControl
+                ariaLabel={`Importance for ${dim.name || "dimension"}`}
+                value={dim.importance}
+                onChange={(v) => updateDimension(dim.id, "importance", v)}
+                options={[
+                  { value: "high", label: "High" },
+                  { value: "medium", label: "Med" },
+                  { value: "low", label: "Low" },
+                ]}
               />
-              <span className="text-xs font-semibold text-[#0C4A6E] w-10 text-center">
-                {dim.min_score}/100
-              </span>
             </div>
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={dim.is_mandatory}
-                onChange={(e) =>
-                  updateDimension(dim.id, "is_mandatory", e.target.checked)
-                }
-                className="w-4 h-4 rounded border-[#D1D5DB] text-[#0369A1] cursor-pointer focus:ring-[#0369A1] focus-visible:ring-2"
-              />
-              <span className="text-xs text-[#6B7280] whitespace-nowrap">Required</span>
-            </label>
+
             <button
               type="button"
               onClick={() => removeDimension(dim.id)}
-              className="p-1.5 text-[#6B7280] cursor-pointer rounded-lg hover:text-[#DC2626] hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-all duration-200"
+              className="ml-auto p-1.5 text-[#6B7280] cursor-pointer rounded-lg hover:text-[#DC2626] hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-all duration-200"
+              aria-label={`Remove ${dim.name || "dimension"}`}
               title="Remove dimension"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -267,6 +241,12 @@ export default function RubricEditor({
           </div>
         ))}
       </div>
+
+      {dimensions.length > 0 && (
+        <p className="text-xs text-[#6B7280]">
+          Weighting is set automatically from each dimension&apos;s importance. &ldquo;Must have&rdquo; dimensions knock a candidate out if they fail them.
+        </p>
+      )}
 
       <button
         type="button"
@@ -284,6 +264,52 @@ export default function RubricEditor({
         name="rubrics_json"
         value={JSON.stringify(rubrics)}
       />
+    </div>
+  );
+}
+
+interface SegmentedControlProps<T extends string> {
+  value: T;
+  onChange: (value: T) => void;
+  options: { value: T; label: string }[];
+  ariaLabel: string;
+}
+
+/**
+ * Compact single-select control. Selection is signalled by background AND
+ * weight AND aria-pressed — never colour alone — so it stays usable for
+ * colour-blind and keyboard/screen-reader users.
+ */
+function SegmentedControl<T extends string>({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: SegmentedControlProps<T>) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      className="inline-flex rounded-lg border border-[#E2E8F0] bg-white p-0.5"
+    >
+      {options.map((opt) => {
+        const selected = opt.value === value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(opt.value)}
+            className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] ${
+              selected
+                ? "bg-[#0369A1] text-white shadow-sm"
+                : "text-[#6B7280] hover:text-[#0C4A6E] hover:bg-[#F0F9FF]"
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

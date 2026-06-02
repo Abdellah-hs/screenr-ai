@@ -1,4 +1,4 @@
-import type { EvaluationRubric } from "@/lib/constants";
+import type { EvaluationRubric, DimensionImportance } from "@/lib/constants";
 
 interface RubricDisplayProps {
   rubrics: EvaluationRubric[];
@@ -8,6 +8,18 @@ const STAGE_LABELS: Record<string, string> = {
   resume: "Resume",
   screening_q: "Screening Questions",
   interview: "Interview",
+};
+
+const IMPORTANCE_LABELS: Record<DimensionImportance, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
+const IMPORTANCE_STYLES: Record<DimensionImportance, string> = {
+  high: "bg-[#0369A1] text-white",
+  medium: "bg-[#E0F2FE] text-[#0C4A6E]",
+  low: "bg-[#F1F5F9] text-[#64748B]",
 };
 
 export default function RubricDisplay({ rubrics }: RubricDisplayProps) {
@@ -38,18 +50,16 @@ export default function RubricDisplay({ rubrics }: RubricDisplayProps) {
                     </span>
                     {dim.is_mandatory && (
                       <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-red-100 text-red-700">
-                        Required
+                        Must have
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-4">
-                    <span className="text-xs text-[#6B7280]">
-                      {dim.min_score}-{dim.max_score}
-                    </span>
-                    <span className="text-sm font-medium text-[#6B7280]">
-                      {(dim.weight * 100).toFixed(0)}%
-                    </span>
-                  </div>
+                  <span
+                    className={`inline-flex px-2 py-0.5 text-xs font-medium rounded ${IMPORTANCE_STYLES[dim.importance]}`}
+                    title="Importance"
+                  >
+                    {IMPORTANCE_LABELS[dim.importance]}
+                  </span>
                 </div>
               ))}
             </div>

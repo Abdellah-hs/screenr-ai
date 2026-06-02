@@ -13,15 +13,39 @@ export interface ScreeningCriterion {
   is_mandatory: boolean;
 }
 
+/**
+ * How much a rubric dimension counts toward the weighted stage score. The
+ * recruiter picks one of these three levels; the system derives the numeric
+ * `weight` from it (see `deriveDimensionFields`). Recruiters never set raw
+ * weights — see the two-decision rubric model (issue #77).
+ */
+export type DimensionImportance = "high" | "medium" | "low";
+
 export interface RubricDimension {
   id: string;
   name: string;
-  weight: number;
+  /** Recruiter intent. Source of truth for the derived `weight`. */
+  importance: DimensionImportance;
+  /** "Must Have" — failing this dimension is a knockout (drives the gate). */
   is_mandatory: boolean;
+  /** Derived from `importance`, normalized so a rubric's weights sum to ~1. */
+  weight: number;
+  /** Derived: knockout fail line — 30 when mandatory, else 0. */
   min_score: number;
+  /** Derived: always 100. */
   max_score: number;
   sort_order: number;
 }
+
+/** Importance → relative points, normalized into `weight` across a rubric. */
+export const IMPORTANCE_POINTS: Record<DimensionImportance, number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+/** Internal knockout fail line applied to every "Must Have" dimension. */
+export const MANDATORY_FAIL_LINE = 30;
 
 export interface EvaluationRubric {
   id: string;
