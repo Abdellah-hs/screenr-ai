@@ -11,16 +11,19 @@
  *  Override with OPENAI_REALTIME_MODEL if OpenAI bumps the id (e.g. gpt-realtime-2). */
 export const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
 
-/** Default agent voice. */
-export const REALTIME_VOICE = "alloy";
+/** Default agent voice. "marin"/"cedar" are the natural GA voices; "alloy" et al.
+ *  sound robotic. Override with OPENAI_REALTIME_VOICE. */
+export const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || "marin";
 
-/** Spike (#81) instructions — a bare connectivity/mic check, no scoring. The
- *  real screening script (#82) replaces this with the campaign questions. */
+/** Spike (#81) instructions — a short but genuinely conversational mic check. */
 const SPIKE_INSTRUCTIONS =
-  "You are Screenr AI's voice assistant running a quick connection test. " +
-  "Greet the candidate warmly, tell them this is a short microphone check for " +
-  "the screening step, ask them to say hello back, and confirm you can hear " +
-  "them. Keep it under 20 seconds and friendly.";
+  "You are Screenr AI's friendly voice assistant. Speak naturally and warmly, " +
+  "like a real person, with normal human pacing — never robotic or rushed. " +
+  "Greet the candidate, tell them this is a quick voice check, then have a short " +
+  "natural back-and-forth: ask how their day is going and one light follow-up " +
+  "about what they say. Listen carefully; if you do not clearly understand them, " +
+  "politely ask them to repeat instead of guessing. Then thank them and say the " +
+  "check is complete.";
 
 export interface ScreeningQuestionForVoice {
   prompt: string;
@@ -110,7 +113,27 @@ export async function createRealtimeSession(
         type: "realtime",
         model: REALTIME_MODEL,
         instructions: opts.instructions ?? SPIKE_INSTRUCTIONS,
-        audio: { output: { voice: REALTIME_VOICE } },
+        audio: {
+          input: {
+            // Transcribe the candidate's speech (also the transcript we'll
+            // persist + score in #83/#84).
+            transcription: { model: "whisper-1" },
+            // Clean up laptop/phone mic noise so words aren't misheard.
+            noise_reduction: { type: "near_field" },
+            // Server VAD with a longer silence window so the agent waits for
+            // the candidate to actually finish before responding (fixes the
+            // "doesn't understand / talks over me" feel).
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 900,
+              create_response: true,
+              interrupt_response: true,
+            },
+          },
+          output: { voice: REALTIME_VOICE },
+        },
       },
     }),
   });
