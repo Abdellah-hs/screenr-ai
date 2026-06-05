@@ -136,11 +136,23 @@ export interface ScoredAnswerRow {
   rationale: string | null;
 }
 
+/** One spoken turn of a voice-screening call, in conversation order. */
+export interface VoiceTranscriptTurn {
+  role: "agent" | "candidate";
+  text: string;
+  /** ISO timestamp the turn was captured client-side. */
+  at: string;
+}
+
 export interface ScreeningResponseRow {
   id: string;
   application_id: string;
   status: "pending" | "sent" | "responded" | "scored" | "expired";
   answers: ScoredAnswerRow[];
+  /** Voice-screening transcript (#83); empty for legacy text-form responses. */
+  transcript: VoiceTranscriptTurn[];
+  /** Optional recorded-audio pointer in Supabase Storage; null until wired. */
+  audio_url: string | null;
   overall_score: number | null;
   overall_rationale: string | null;
   sent_at: string | null;
@@ -331,6 +343,59 @@ export async function saveCandidateAnswers(
   if (error) {
     throw new Error(
       `Failed to save candidate answers: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
+/**
+ * Persist a completed voice-screening call (#83): the captured transcript and
+ * a `responded` status. The voice equivalent of `saveCandidateAnswers` — the
+ * recruiter's score action (#84) reads the transcript instead of typed text.
+ */
+export async function saveVoiceTranscript(
+  applicationId: string,
+  transcript: VoiceTranscriptTurn[]
+): Promise<void> {
+  const supabase = await createClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+
+  const { error } = await db
+    .from("screening_question_responses")
+    .update({
+      status: "responded",
+      transcript,
+      responded_at: new Date().toISOString(),
+    })
+    .eq("application_id", applicationId);
+
+  if (error) {
+    throw new Error(
+      `Failed to save voice transcript: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
+/**
+ * Mark a screening response as `expired` (#83): the candidate never completed
+ * the voice call before the deadline. The matching application transition to
+ * `screening_expired` is the action's job — this only flips the response row.
+ */
+export async function markScreeningResponseExpired(
+  applicationId: string
+): Promise<void> {
+  const supabase = await createClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+
+  const { error } = await db
+    .from("screening_question_responses")
+    .update({ status: "expired" })
+    .eq("application_id", applicationId);
+
+  if (error) {
+    throw new Error(
+      `Failed to expire screening response: ${error.message ?? JSON.stringify(error)}`
     );
   }
 }

@@ -14,7 +14,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve(mockSupabase)),
 }));
 
-import { saveAnswerScores } from "./screening-questions";
+import {
+  saveAnswerScores,
+  saveVoiceTranscript,
+  markScreeningResponseExpired,
+  type VoiceTranscriptTurn,
+} from "./screening-questions";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -163,5 +168,54 @@ describe("saveAnswerScores", () => {
 
     await expect(saveAnswerScores(validArgs)).rejects.toThrow(/Screening scored but audit log write failed/);
     expect(mockResponseUpdate).toHaveBeenCalled();
+  });
+});
+
+describe("saveVoiceTranscript", () => {
+  const transcript: VoiceTranscriptTurn[] = [
+    { role: "agent", text: "Tell me about a scaling problem you solved.", at: "2026-06-03T10:00:00.000Z" },
+    { role: "candidate", text: "We sharded the orders table by tenant.", at: "2026-06-03T10:00:09.000Z" },
+  ];
+
+  it("writes the transcript and flips the row to responded", async () => {
+    await saveVoiceTranscript("app-1", transcript);
+
+    expect(mockFrom).toHaveBeenCalledWith("screening_question_responses");
+    expect(mockResponseUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "responded", transcript }),
+    );
+    expect(mockUpdateEq).toHaveBeenCalledWith("application_id", "app-1");
+  });
+
+  it("stamps responded_at on the row", async () => {
+    await saveVoiceTranscript("app-1", transcript);
+
+    const payload = mockResponseUpdate.mock.calls[0][0];
+    expect(payload.responded_at).toEqual(expect.any(String));
+  });
+
+  it("throws when the update fails", async () => {
+    mockUpdateEq.mockResolvedValueOnce({ error: { message: "RLS denied" } });
+
+    await expect(saveVoiceTranscript("app-1", transcript)).rejects.toThrow(
+      /Failed to save voice transcript: RLS denied/,
+    );
+  });
+});
+
+describe("markScreeningResponseExpired", () => {
+  it("flips the row to expired for the given application", async () => {
+    await markScreeningResponseExpired("app-1");
+
+    expect(mockResponseUpdate).toHaveBeenCalledWith({ status: "expired" });
+    expect(mockUpdateEq).toHaveBeenCalledWith("application_id", "app-1");
+  });
+
+  it("throws when the update fails", async () => {
+    mockUpdateEq.mockResolvedValueOnce({ error: { message: "RLS denied" } });
+
+    await expect(markScreeningResponseExpired("app-1")).rejects.toThrow(
+      /Failed to expire screening response: RLS denied/,
+    );
   });
 });

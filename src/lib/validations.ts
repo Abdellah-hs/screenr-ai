@@ -192,6 +192,24 @@ export const screeningAnswerSubmissionSchema = z.object({
   answers: z.array(screeningAnswerSchema).min(1, "No answers submitted").max(15),
 });
 
+// ─── Voice Screening (#83) ──────────────────────────────────────────────────
+
+export const voiceTranscriptTurnSchema = z.object({
+  role: z.enum(["agent", "candidate"]),
+  text: z.string().min(1, "Empty transcript turn").max(10000, "Transcript turn is too long"),
+  at: z.string().min(1, "Missing turn timestamp"),
+});
+
+export const voiceScreeningSubmissionSchema = z.object({
+  token: z.string().min(10).max(2000),
+  // A finished call always has at least one turn; an empty transcript is a
+  // capture failure and is reported via the failure action, not submitted here.
+  transcript: z
+    .array(voiceTranscriptTurnSchema)
+    .min(1, "No transcript was captured for this call.")
+    .max(500, "Transcript is too long"),
+});
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 
 // Recruiter approve/reject decision on a screening_review_pending application.

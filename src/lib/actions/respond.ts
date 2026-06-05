@@ -4,7 +4,10 @@ import { headers } from "next/headers";
 import { z } from "zod/v4";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import { screeningAnswerSubmissionSchema } from "@/lib/validations";
+import {
+  screeningAnswerSubmissionSchema,
+  voiceScreeningSubmissionSchema,
+} from "@/lib/validations";
 import {
   fetchApplicationForResponse,
   fetchApplicationCampaignId,
@@ -13,14 +16,29 @@ import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
   saveCandidateAnswers,
+  saveVoiceTranscript,
+  markScreeningResponseExpired,
   type ScreeningQuestionRow,
+  type VoiceTranscriptTurn,
 } from "@/lib/data/screening-questions";
 import {
   assertResponseIsOpen,
   assertResponseNotResubmitted,
+  isResponseExpired,
   validateRequiredAnswersPresent,
+  ScreeningResponseError,
 } from "@/lib/rules/screening-response";
+import {
+  createRealtimeSession,
+  buildScreeningInstructions,
+  type RealtimeSession,
+} from "@/lib/services/realtime";
 import { transitionApplication } from "@/lib/data/transitions";
+
+const VOICE_RATE_LIMIT = {
+  maxRequests: 10,
+  windowMs: 10 * 60 * 1000,
+} as const;
 
 async function getClientIp(): Promise<string> {
   const h = await headers();
@@ -170,6 +188,180 @@ export async function submitScreeningAnswers(input: {
       err instanceof Error ? err.message : err,
     );
   }
+
+  return { ok: true };
+}
+
+// ─── Voice Screening (#83) ──────────────────────────────────────────────────
+
+/**
+ * Best-effort transition. The candidate has already left (call ended, or page
+ * unloaded), so a transition failure must never surface to them — it's logged
+ * and the recruiter can advance the application manually.
+ */
+async function tryTransition(
+  applicationId: string,
+  toState: Parameters<typeof transitionApplication>[0]["toState"],
+  rationale: string,
+): Promise<void> {
+  try {
+    await transitionApplication({ applicationId, toState, actor: "system", rationale });
+  } catch (err) {
+    console.error(
+      `Failed to transition ${applicationId} → ${toState}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Mint an ephemeral OpenAI Realtime session for a candidate to take their
+ * voice screening on `/respond/[token]` (#83). The candidate-facing twin of
+ * the recruiter-only `startScreeningPreviewSession`: gated on a verified
+ * screening token (candidates have no account) and IP-rate-limited.
+ *
+ * Lazy expiry: if the deadline has passed, the response is expired and the
+ * application transitioned to `screening_expired` rather than minting a call.
+ */
+export async function startCandidateVoiceScreening(
+  token: string,
+): Promise<RealtimeSession> {
+  const { application_id } = verifyResponseToken(token);
+
+  const ip = await getClientIp();
+  checkRateLimit(ip, { name: "voice-screening-start", ...VOICE_RATE_LIMIT });
+
+  const app = await fetchApplicationForResponse(application_id);
+  if (!app) {
+    throw new ScreeningResponseError(
+      "This link is no longer active. Please contact the hiring team for a new one.",
+    );
+  }
+
+  const response = await fetchScreeningResponseByApplicationId(application_id);
+  if (!response) {
+    throw new ScreeningResponseError(
+      "This link is no longer active. Please contact the hiring team for a new one.",
+    );
+  }
+
+  if (
+    isResponseExpired(
+      response.expires_at ? new Date(response.expires_at) : null,
+      new Date(),
+    )
+  ) {
+    await expireScreeningResponse(application_id);
+    throw new ScreeningResponseError(
+      "This link has expired. Please contact the hiring team for a new one.",
+    );
+  }
+
+  assertResponseIsOpen(response.status);
+
+  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
+  if (questions.length === 0) {
+    throw new ScreeningResponseError(
+      "No screening questions are configured for this role.",
+    );
+  }
+
+  const instructions = buildScreeningInstructions({
+    jobTitle: app.campaign_title,
+    questions: questions.map((q) => ({ prompt: q.prompt, is_required: q.is_required })),
+  });
+
+  return createRealtimeSession({ instructions });
+}
+
+/** Expire the response row and best-effort transition the application. */
+async function expireScreeningResponse(applicationId: string): Promise<void> {
+  await markScreeningResponseExpired(applicationId);
+  await tryTransition(
+    applicationId,
+    "screening_expired",
+    "Screening deadline passed before the candidate completed the voice call",
+  );
+}
+
+/**
+ * Persist a completed voice screening call (#83): store the captured
+ * transcript and advance `screening_sent → screening_completed`. The
+ * recruiter's scoring action (#84) reads the transcript from here.
+ *
+ * Token-gated + IP-rate-limited, mirroring `submitScreeningAnswers`. An empty
+ * transcript is rejected by the schema — a no-transcript call is a capture
+ * failure and goes through `reportVoiceScreeningFailure` instead.
+ */
+export async function submitVoiceScreening(input: {
+  token: string;
+  transcript: VoiceTranscriptTurn[];
+}): Promise<{ ok: true }> {
+  let parsed;
+  try {
+    parsed = voiceScreeningSubmissionSchema.parse(input);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      throw new Error(err.issues[0]?.message ?? "Invalid submission");
+    }
+    throw err;
+  }
+
+  const { application_id } = verifyResponseToken(parsed.token);
+
+  const ip = await getClientIp();
+  checkRateLimit(ip, { name: "voice-screening-submit", ...VOICE_RATE_LIMIT });
+
+  const existing = await fetchScreeningResponseByApplicationId(application_id);
+  if (!existing) {
+    throw new ScreeningResponseError(
+      "This link is no longer active. Please contact the hiring team for a new one.",
+    );
+  }
+
+  assertResponseNotResubmitted(existing.status);
+
+  await saveVoiceTranscript(application_id, parsed.transcript);
+
+  await tryTransition(
+    application_id,
+    "screening_completed",
+    "Candidate completed the voice screening call",
+  );
+
+  return { ok: true };
+}
+
+/**
+ * Explicit failure path for a voice call that ended without a usable
+ * transcript (Realtime error, or capture produced nothing). Never silent:
+ * `processing_failed` is legal only from `screening_completed`, so we record
+ * the completion of the attempt first, then the failure — the transitions log
+ * carries the full story. Best-effort, since the candidate has already left.
+ */
+export async function reportVoiceScreeningFailure(input: {
+  token: string;
+}): Promise<{ ok: true }> {
+  const { application_id } = verifyResponseToken(input.token);
+
+  const ip = await getClientIp();
+  checkRateLimit(ip, { name: "voice-screening-submit", ...VOICE_RATE_LIMIT });
+
+  const existing = await fetchScreeningResponseByApplicationId(application_id);
+  if (!existing) {
+    throw new ScreeningResponseError(
+      "This link is no longer active. Please contact the hiring team for a new one.",
+    );
+  }
+
+  assertResponseNotResubmitted(existing.status);
+
+  await tryTransition(application_id, "screening_completed", "Voice screening call ended");
+  await tryTransition(
+    application_id,
+    "processing_failed",
+    "Voice screening produced no usable transcript (capture/Realtime error)",
+  );
 
   return { ok: true };
 }

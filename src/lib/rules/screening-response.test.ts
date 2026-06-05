@@ -4,6 +4,7 @@ import {
   assertResponseNotResubmitted,
   assertEligibleForScreeningSend,
   isEligibleForScreeningSend,
+  isResponseExpired,
   validateRequiredAnswersPresent,
   evaluateScreeningScoringOutcome,
   ScreeningResponseError,
@@ -14,6 +15,30 @@ import {
 import type { ApplicationState } from "@/lib/constants";
 
 const OPEN_STATUSES: ScreeningResponseStatus[] = ["pending", "sent", "responded"];
+
+describe("isResponseExpired", () => {
+  const deadline = new Date("2026-06-03T12:00:00.000Z");
+
+  it("returns true when now is past the deadline", () => {
+    const now = new Date("2026-06-03T12:00:01.000Z");
+    expect(isResponseExpired(deadline, now)).toBe(true);
+  });
+
+  it("returns false when now is before the deadline", () => {
+    const now = new Date("2026-06-03T11:59:59.000Z");
+    expect(isResponseExpired(deadline, now)).toBe(false);
+  });
+
+  it("returns false exactly at the deadline (boundary is not yet expired)", () => {
+    const now = new Date("2026-06-03T12:00:00.000Z");
+    expect(isResponseExpired(deadline, now)).toBe(false);
+  });
+
+  it("never expires when there is no deadline", () => {
+    const now = new Date("2099-01-01T00:00:00.000Z");
+    expect(isResponseExpired(null, now)).toBe(false);
+  });
+});
 
 describe("assertResponseIsOpen", () => {
   it.each(OPEN_STATUSES)("does not throw when status is %s", (status) => {

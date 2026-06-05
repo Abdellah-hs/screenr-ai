@@ -1,7 +1,13 @@
 import { loadResponseContext } from "@/lib/actions/respond";
 import RespondForm from "./respond-form";
+import VoiceScreening from "@/components/realtime/voice-screening";
 
 export const dynamic = "force-dynamic";
+
+// Voice is the canonical screening modality (#80). The legacy text form stays
+// available as a fallback behind NEXT_PUBLIC_SCREENING_MODE=text until the
+// voice path clears QA — see docs/voice-screening.md.
+const TEXT_FALLBACK = process.env.NEXT_PUBLIC_SCREENING_MODE === "text";
 
 export default async function RespondPage({
   params,
@@ -73,17 +79,33 @@ export default async function RespondPage({
     );
   }
 
+  if (TEXT_FALLBACK) {
+    return (
+      <RespondForm
+        token={token}
+        campaignTitle={ctx.campaign_title}
+        questions={ctx.questions.map((q) => ({
+          id: q.id,
+          prompt: q.prompt,
+          is_required: q.is_required,
+        }))}
+        initialAnswers={ctx.existing_answers}
+        expiresAt={ctx.expires_at.toISOString()}
+      />
+    );
+  }
+
   return (
-    <RespondForm
-      token={token}
-      campaignTitle={ctx.campaign_title}
-      questions={ctx.questions.map((q) => ({
-        id: q.id,
-        prompt: q.prompt,
-        is_required: q.is_required,
-      }))}
-      initialAnswers={ctx.existing_answers}
-      expiresAt={ctx.expires_at.toISOString()}
-    />
+    <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4 sm:p-6">
+      <div className="max-w-md w-full space-y-4">
+        <div>
+          <h1 className="text-lg font-semibold text-[#111827]">Voice screening</h1>
+          <p className="text-sm text-[#6B7280]">
+            A short spoken interview for <strong>{ctx.campaign_title}</strong>.
+          </p>
+        </div>
+        <VoiceScreening token={token} campaignTitle={ctx.campaign_title} />
+      </div>
+    </div>
   );
 }

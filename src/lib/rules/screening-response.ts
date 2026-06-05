@@ -103,6 +103,22 @@ export function assertResponseNotResubmitted(status: ScreeningResponseStatus): v
   }
 }
 
+/**
+ * Pure deadline check for voice screening (#83). A response is expired once
+ * `now` is past `expires_at`. A null deadline (no expiry set) never expires.
+ *
+ * The caller reads this, and if true, flips the response row to `expired` and
+ * transitions the application `screening_sent → screening_expired`. Kept pure
+ * (no Date.now() inside) so tests pin both sides of the boundary.
+ */
+export function isResponseExpired(
+  expiresAt: Date | null,
+  now: Date,
+): boolean {
+  if (expiresAt === null) return false;
+  return now.getTime() > expiresAt.getTime();
+}
+
 interface QuestionWithRequiredFlag {
   id: string;
   is_required: boolean;

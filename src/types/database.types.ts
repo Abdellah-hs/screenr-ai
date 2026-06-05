@@ -552,6 +552,7 @@ export type Database = {
         Row: {
           answers: Json
           application_id: string
+          audio_url: string | null
           created_at: string
           expires_at: string | null
           id: string
@@ -562,11 +563,13 @@ export type Database = {
           scored_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["screening_response_status_enum"]
+          transcript: Json
           updated_at: string
         }
         Insert: {
           answers?: Json
           application_id: string
+          audio_url?: string | null
           created_at?: string
           expires_at?: string | null
           id?: string
@@ -577,11 +580,13 @@ export type Database = {
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
+          transcript?: Json
           updated_at?: string
         }
         Update: {
           answers?: Json
           application_id?: string
+          audio_url?: string | null
           created_at?: string
           expires_at?: string | null
           id?: string
@@ -592,6 +597,7 @@ export type Database = {
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
+          transcript?: Json
           updated_at?: string
         }
         Relationships: [
