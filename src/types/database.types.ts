@@ -306,6 +306,7 @@ export type Database = {
       }
       campaigns: {
         Row: {
+          application_email: string | null
           automation_mode: Database["public"]["Enums"]["automation_mode_enum"]
           created_at: string
           deadline: string | null
@@ -324,6 +325,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          application_email?: string | null
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null
@@ -342,6 +344,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          application_email?: string | null
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null

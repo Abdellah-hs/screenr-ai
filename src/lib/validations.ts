@@ -17,6 +17,9 @@ export const campaignFormSchema = z.object({
   automation_mode: z.enum(automationModeValues),
   screening_threshold: z.number().int().min(0).max(100),
   interview_persona: z.enum(interviewPersonaValues),
+  // Address applicants send CVs to (a plus-alias of the connected inbox). The
+  // resume sync filters Gmail on this; null means "not set" (campaign can't sync).
+  application_email: z.email("Enter a valid email address").max(254).nullable(),
 });
 
 export const screeningCriterionSchema = z.object({
@@ -77,6 +80,7 @@ export function parseCampaignFormData(formData: FormData) {
     automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
     screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
+    application_email: (formData.get("application_email") as string)?.trim() || null,
   });
 
   // Parse related JSON data with validation. Resume scoring criteria live in

@@ -42,11 +42,28 @@ describe('campaignFormSchema', () => {
     automation_mode: 'human_in_loop' as const,
     screening_threshold: 70,
     interview_persona: 'neutral' as const,
+    application_email: null,
   };
 
   it('accepts a fully valid campaign', () => {
     const result = campaignFormSchema.safeParse(validCampaign);
     expect(result.success).toBe(true);
+  });
+
+  it('accepts a valid application_email (plus-alias)', () => {
+    const result = campaignFormSchema.safeParse({
+      ...validCampaign,
+      application_email: 'careers+eng@company.com',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a malformed application_email', () => {
+    const result = campaignFormSchema.safeParse({
+      ...validCampaign,
+      application_email: 'not-an-email',
+    });
+    expect(result.success).toBe(false);
   });
 
   it('rejects a campaign with an empty title', () => {
@@ -170,6 +187,18 @@ describe('parseCampaignFormData', () => {
     fd.set('rubrics_json', '{"wrong": "shape"}');
     const result = parseCampaignFormData(fd);
     expect(result.rubrics).toEqual([]);
+  });
+
+  it('trims and keeps a provided application_email', () => {
+    const fd = buildFormData({ application_email: '  careers+eng@company.com  ' });
+    const result = parseCampaignFormData(fd);
+    expect(result.application_email).toBe('careers+eng@company.com');
+  });
+
+  it('maps a missing application_email to null', () => {
+    const fd = buildFormData();
+    const result = parseCampaignFormData(fd);
+    expect(result.application_email).toBeNull();
   });
 });
 

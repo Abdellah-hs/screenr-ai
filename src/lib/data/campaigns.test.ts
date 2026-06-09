@@ -1,5 +1,19 @@
-import { describe, it, expect } from "vitest";
-import { dimensionsEqual } from "./campaigns";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+
+// Supabase chain mock for the query helpers:
+//   from("campaigns").select(...).eq("id", …).eq("user_id", …).is("deleted_at", null).single()
+const mockSingle = vi.fn();
+const mockIs = vi.fn(() => ({ single: mockSingle }));
+const mockEqUser = vi.fn(() => ({ is: mockIs }));
+const mockEqId = vi.fn(() => ({ eq: mockEqUser }));
+const mockSelect = vi.fn(() => ({ eq: mockEqId }));
+const mockFrom = vi.fn(() => ({ select: mockSelect }));
+
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: vi.fn(() => Promise.resolve({ from: mockFrom })),
+}));
+
+import { dimensionsEqual, fetchCampaignApplicationEmail } from "./campaigns";
 import type { DimensionImportance } from "@/lib/constants";
 
 type Intent = {
@@ -57,5 +71,37 @@ describe("dimensionsEqual", () => {
 
   it("treats two empty sets as equal", () => {
     expect(dimensionsEqual([], [])).toBe(true);
+  });
+});
+
+describe("fetchCampaignApplicationEmail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the address scoped to the campaign and owning user", async () => {
+    mockSingle.mockResolvedValue({
+      data: { application_email: "careers+eng@company.com" },
+      error: null,
+    });
+
+    const result = await fetchCampaignApplicationEmail("camp-1", "user-1");
+
+    expect(result).toBe("careers+eng@company.com");
+    expect(mockFrom).toHaveBeenCalledWith("campaigns");
+    expect(mockEqId).toHaveBeenCalledWith("id", "camp-1");
+    expect(mockEqUser).toHaveBeenCalledWith("user_id", "user-1");
+  });
+
+  it("returns null when the campaign has no address set", async () => {
+    mockSingle.mockResolvedValue({ data: { application_email: null }, error: null });
+
+    expect(await fetchCampaignApplicationEmail("camp-1", "user-1")).toBeNull();
+  });
+
+  it("returns null when the campaign is missing or not owned by the user", async () => {
+    mockSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
+
+    expect(await fetchCampaignApplicationEmail("camp-1", "user-1")).toBeNull();
   });
 });

@@ -112,10 +112,17 @@ export function createGmailClient(refreshToken: string): gmail_v1.Gmail {
 export async function fetchUnreadGmailResumes(
   gmail: gmail_v1.Gmail,
   maxResults: number = 5,
+  toAddress?: string,
 ) {
+  // Scope to the campaign's application alias when provided so one campaign's
+  // sync only pulls its own applicants out of the shared inbox. Gmail's `to:`
+  // matches plus-aliases (careers+eng@…) delivered to the connected mailbox.
+  const base = "is:unread has:attachment (filename:pdf OR filename:docx)";
+  const q = toAddress ? `to:${toAddress} ${base}` : base;
+
   const res = await gmail.users.messages.list({
     userId: "me",
-    q: "is:unread has:attachment (filename:pdf OR filename:docx)",
+    q,
     maxResults,
   });
 

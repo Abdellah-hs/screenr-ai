@@ -67,6 +67,7 @@ function assembleCampaign(
     deadline: (row.deadline as string) || null,
     location: (row.location as string) || null,
     timezone: (row.timezone as string) || null,
+    application_email: (row.application_email as string) || null,
     automation_mode: row.automation_mode as AutomationMode,
     screening_threshold: row.screening_threshold as number,
     interview_persona: row.interview_persona as InterviewPersona,
@@ -244,6 +245,26 @@ export async function verifyCampaignOwnership(
     .is("deleted_at", null)
     .single();
   return Boolean(data);
+}
+
+/**
+ * The address applicants send CVs to for this campaign (a plus-alias of the
+ * recruiter's connected inbox). Returns null when unset. Scoped to user_id, so
+ * it doubles as an ownership gate for the resume sync. SELECT-only.
+ */
+export async function fetchCampaignApplicationEmail(
+  campaignId: string,
+  userId: string
+): Promise<string | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("campaigns")
+    .select("application_email")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .single();
+  return data?.application_email ?? null;
 }
 
 // ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
@@ -589,6 +610,8 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
       automation_mode: source.automation_mode,
       screening_threshold: source.screening_threshold,
       interview_persona: source.interview_persona,
+      // application_email intentionally NOT copied: one alias routes to one
+      // campaign per recruiter (unique index), so a clone starts unset.
       user_id: userId,
     })
     .select()

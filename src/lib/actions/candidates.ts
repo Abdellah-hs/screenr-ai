@@ -45,7 +45,11 @@ import {
   saveResumeScore,
   fetchApplicationCampaignId,
 } from "@/lib/data/candidates";
-import { fetchCampaignScoringConfig, fetchActiveRubricVersion } from "@/lib/data/campaigns";
+import {
+  fetchCampaignScoringConfig,
+  fetchActiveRubricVersion,
+  fetchCampaignApplicationEmail,
+} from "@/lib/data/campaigns";
 
 // Rules
 import {
@@ -83,10 +87,24 @@ export async function syncResumesFromGmail(campaignId: string) {
       };
     }
 
+    // Resolve the campaign's application alias. Without one we refuse to sync
+    // rather than pull the entire shared inbox into this campaign — that would
+    // mix other roles' applicants in. The lookup is user-scoped, so it also
+    // gates ownership of the campaign.
+    const applicationEmail = await fetchCampaignApplicationEmail(campaignId, userId);
+    if (!applicationEmail) {
+      return {
+        success: false,
+        count: 0,
+        message:
+          "No application email set for this campaign. Add one in the campaign settings to sync its resumes.",
+      };
+    }
+
     const gmail = createGmailClient(connection.refresh_token);
 
-    // Find up to 5 recent unread emails with supported attachment types
-    const messages = await fetchUnreadGmailResumes(gmail, 5);
+    // Find up to 5 recent unread emails addressed to this campaign's alias
+    const messages = await fetchUnreadGmailResumes(gmail, 5, applicationEmail);
 
     if (messages.length === 0) {
       return { success: true, count: 0, message: "No new unread resumes found in Gmail." };

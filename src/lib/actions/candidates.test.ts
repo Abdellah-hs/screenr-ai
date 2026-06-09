@@ -58,6 +58,7 @@ vi.mock("@/lib/actions/screening-questions", () => ({
 
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
+  fetchCampaignApplicationEmail: vi.fn(),
 }));
 
 vi.mock("@/lib/services/gmail", () => ({
@@ -104,7 +105,7 @@ import {
   updateApplicationStage,
   fetchApplicationCampaignId,
 } from "@/lib/data/candidates";
-import { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
+import { fetchCampaignScoringConfig, fetchCampaignApplicationEmail } from "@/lib/data/campaigns";
 
 beforeEach(() => {
   mockRequireUserId.mockReset();
@@ -472,6 +473,9 @@ describe("syncResumesFromGmail", () => {
 
     // No scoring config configured for this campaign — skip the scoring path.
     vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
+
+    // Campaign has an application alias so the sync proceeds past the guard.
+    vi.mocked(fetchCampaignApplicationEmail).mockResolvedValue("careers+eng@company.com");
   });
 
   it("returns a friendly message and does no work when no Gmail is connected", async () => {
@@ -484,6 +488,30 @@ describe("syncResumesFromGmail", () => {
     expect(result.message).toMatch(/no gmail connected/i);
     expect(vi.mocked(createGmailClient)).not.toHaveBeenCalled();
     expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
+  });
+
+  it("refuses to sync when the campaign has no application email set", async () => {
+    vi.mocked(fetchCampaignApplicationEmail).mockResolvedValueOnce(null);
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(result.success).toBe(false);
+    expect(result.count).toBe(0);
+    expect(result.message).toMatch(/application email/i);
+    expect(vi.mocked(createGmailClient)).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
+  });
+
+  it("scopes the Gmail search to the campaign's application email", async () => {
+    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload());
+
+    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(vi.mocked(fetchUnreadGmailResumes)).toHaveBeenCalledWith(
+      fakeGmail,
+      expect.any(Number),
+      "careers+eng@company.com",
+    );
   });
 
   it("skips messages where the AI could not extract an email and marks them read", async () => {

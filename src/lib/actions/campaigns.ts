@@ -49,7 +49,7 @@ export async function createCampaign(formData: FormData) {
   const {
     title, description, department, positions, status, deadline, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
-    interview_persona: interviewPersona,
+    interview_persona: interviewPersona, application_email: applicationEmail,
     rubrics, slaTimers, reviewers
   } = parseCampaignFormData(formData);
 
@@ -65,6 +65,7 @@ export async function createCampaign(formData: FormData) {
       automation_mode: automationMode,
       screening_threshold: screeningThreshold,
       interview_persona: interviewPersona,
+      application_email: applicationEmail,
     },
     rubrics,
     slaTimers,
@@ -86,7 +87,7 @@ export async function updateCampaign(id: string, formData: FormData) {
   const {
     title, description, department, positions, status, deadline, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
-    interview_persona: interviewPersona,
+    interview_persona: interviewPersona, application_email: applicationEmail,
     rubrics, slaTimers
   } = parseCampaignFormData(formData);
 
@@ -103,6 +104,7 @@ export async function updateCampaign(id: string, formData: FormData) {
       automation_mode: automationMode,
       screening_threshold: screeningThreshold,
       interview_persona: interviewPersona,
+      application_email: applicationEmail,
     },
     rubrics,
     slaTimers,
