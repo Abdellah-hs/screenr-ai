@@ -22,7 +22,7 @@ const pipelineStageKeys: { name: string; key: CandidateStage }[] = [
   { name: "Applied", key: "applied" },
   { name: "Screening", key: "screening" },
   { name: "Interview", key: "interview" },
-  { name: "Offer", key: "offer" },
+  { name: "Final Interview", key: "final_interview" },
   { name: "Hired", key: "hired" },
 ];
 

@@ -69,7 +69,7 @@ export interface CampaignReviewer {
 }
 
 export interface SlaTimer {
-  stage: PipelineStage | "applied" | "offer" | "hired";
+  stage: PipelineStage | "applied" | "final_interview" | "hired";
   time_limit_hours: number;
   alert_threshold_hours: number;
   escalation_threshold_hours: number;
@@ -148,13 +148,13 @@ export const PIPELINE_STAGES: { name: string; key: string }[] = [
   { name: "Applied", key: "applied" },
   { name: "Screening", key: "screening" },
   { name: "Interview", key: "interview" },
-  { name: "Offer", key: "offer" },
+  { name: "Final Interview", key: "final_interview" },
   { name: "Hired", key: "hired" },
 ];
 
 // ─── Candidate Types ────────────────────────────────────────────────────────
 
-export type CandidateStage = "applied" | "screening" | "interview" | "offer" | "hired" | "rejected";
+export type CandidateStage = "applied" | "screening" | "interview" | "final_interview" | "hired" | "rejected";
 export type ScreeningTier = "strong" | "moderate" | "weak";
 
 export interface ScoreFactor {
@@ -213,7 +213,7 @@ export const CANDIDATE_STAGES: { name: string; key: CandidateStage }[] = [
   { name: "Applied", key: "applied" },
   { name: "Screening", key: "screening" },
   { name: "Interview", key: "interview" },
-  { name: "Offer", key: "offer" },
+  { name: "Final Interview", key: "final_interview" },
   { name: "Hired", key: "hired" },
 ];
 
@@ -221,7 +221,7 @@ export const STAGE_COLORS: Record<CandidateStage, string> = {
   applied: "bg-gray-100 text-gray-700",
   screening: "bg-blue-100 text-blue-700",
   interview: "bg-purple-100 text-purple-700",
-  offer: "bg-amber-100 text-amber-700",
+  final_interview: "bg-amber-100 text-amber-700",
   hired: "bg-green-100 text-green-700",
   rejected: "bg-red-100 text-red-700",
 };
@@ -238,7 +238,7 @@ export const TIER_LABELS: Record<ScreeningTier, string> = {
   weak: "Weak",
 };
 
-export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "offer", "hired"];
+export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "final_interview", "hired"];
 
 // ─── Application State Machine ──────────────────────────────────────────────
 // The DB enum `candidate_stage_enum` is the source of truth for an
@@ -337,7 +337,7 @@ export type TransitionActor = "system" | "ai" | "recruiter";
  *     The separate "Pending review" flag (awaiting_human_review) surfaces
  *     that they need action; approval moves them to **Screening**.
  *   - Post-interview states (`manager_review`, `final_interview_scheduling`)
- *     map to **Offer** — the closest coarse bucket before Hired.
+ *     map to **Final Interview** — the HR + manager final round before Hired.
  *   - Failure / withdrawn / archived states map to **Rejected**: they're out
  *     of the active funnel and the coarse model has no dedicated bucket.
  */
@@ -356,8 +356,8 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   interview_scored: "interview",
   reference_check: "interview",
 
-  manager_review: "offer",
-  final_interview_scheduling: "offer",
+  manager_review: "final_interview",
+  final_interview_scheduling: "final_interview",
 
   hired: "hired",
 

@@ -8,7 +8,7 @@ const stageColors: Record<CandidateStage, string> = {
   applied: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
   screening: "text-[#2563EB] bg-[#EFF6FF] border-[#BFDBFE]",
   interview: "text-[#7C3AED] bg-[#F5F3FF] border-[#DDD6FE]",
-  offer: "text-[#D97706] bg-[#FEF3C7] border-[#FDE68A]",
+  final_interview: "text-[#D97706] bg-[#FEF3C7] border-[#FDE68A]",
   hired: "text-[#059669] bg-[#ECFDF5] border-[#A7F3D0]",
   rejected: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
 };
@@ -23,7 +23,7 @@ const stageLabels: Record<CandidateStage, string> = {
   applied: "Applied",
   screening: "Screening",
   interview: "Interview",
-  offer: "Offer",
+  final_interview: "Final Interview",
   hired: "Hired",
   rejected: "Rejected",
 };
@@ -115,7 +115,7 @@ export default function CandidateTable({
               : []),
             { key: "screening", label: "Screening" },
             { key: "interview", label: "Interview" },
-            { key: "offer", label: "Offer" },
+            { key: "final_interview", label: "Final Interview" },
             { key: "hired", label: "Hired" },
             { key: "rejected", label: "Rejected" },
           ] as { key: string; label: string }[]

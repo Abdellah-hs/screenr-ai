@@ -69,7 +69,7 @@ describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
     "applied",
     "screening",
     "interview",
-    "offer",
+    "final_interview",
     "hired",
     "rejected",
   ]);
