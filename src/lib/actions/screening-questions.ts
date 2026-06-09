@@ -10,7 +10,9 @@ import {
 import {
   generateQuestionsForRole,
   scoreAnswers,
+  scoreTranscript,
 } from "@/lib/services/screening-questions";
+import { analyzeTranscriptCadence } from "@/lib/screening/transcript-cadence";
 import { fetchCampaignScoringConfig, fetchActiveRubricVersion, verifyCampaignOwnership } from "@/lib/data/campaigns";
 import type { gmail_v1 } from "googleapis";
 import { sendEmail } from "@/lib/services/email";
@@ -316,18 +318,59 @@ export async function scoreScreeningAnswers(
     answer_text: a.answer_text ?? "",
   }));
 
+  // Voice screening (#84) persists a spoken transcript instead of typed
+  // answers; a non-empty transcript means this was a voice call. The two
+  // modalities differ only in how the AI score is produced — everything below
+  // (persistence + the decision rule) is identical.
+  const transcript = response.transcript ?? [];
+  const isVoice = transcript.length > 0;
+  const questionsForScoring = questions.map((q) => ({
+    id: q.id,
+    prompt: q.prompt,
+    is_required: q.is_required,
+  }));
+
   const [evidence, rubricVersion] = await Promise.all([
-    scoreAnswers({
-      jobDescription: config.description,
-      questions: questions.map((q) => ({
-        id: q.id,
-        prompt: q.prompt,
-        is_required: q.is_required,
-      })),
-      answers: answerInputs,
-    }),
+    isVoice
+      ? scoreTranscript({
+          jobDescription: config.description,
+          questions: questionsForScoring,
+          transcript,
+        })
+      : scoreAnswers({
+          jobDescription: config.description,
+          questions: questionsForScoring,
+          answers: answerInputs,
+        }),
     fetchActiveRubricVersion(app.campaign_id, "screening_q"),
   ]);
+
+  // Soft "reads-as-scripted" cadence signal (#84): evidence for the recruiter,
+  // NEVER an input to the advancement decision below (Control > AI > Data).
+  // Pure + cheap, so computed unconditionally; only surfaced for voice.
+  const cadence = analyzeTranscriptCadence(transcript);
+
+  const inputSnapshot = isVoice
+    ? {
+        modality: "voice",
+        question_count: questions.length,
+        question_ids: questions.map((q) => q.id),
+        transcript_turns: transcript.length,
+        cadence_signal: {
+          scripted_signal: cadence.scripted_signal,
+          median_response_seconds: cadence.median_response_seconds,
+          measured_responses: cadence.measured_responses,
+          rationale: cadence.rationale,
+        },
+        job_description_length: config.description.length,
+      }
+    : {
+        modality: "text",
+        question_count: questions.length,
+        question_ids: questions.map((q) => q.id),
+        answered_count: answerInputs.filter((a) => a.answer_text.trim().length > 0).length,
+        job_description_length: config.description.length,
+      };
 
   await saveAnswerScores({
     applicationId,
@@ -340,12 +383,7 @@ export async function scoreScreeningAnswers(
       model: evidence.model,
       promptVersion: evidence.promptVersion,
       rawOutput: evidence.rawOutput,
-      inputSnapshot: {
-        question_count: questions.length,
-        question_ids: questions.map((q) => q.id),
-        answered_count: answerInputs.filter((a) => a.answer_text.trim().length > 0).length,
-        job_description_length: config.description.length,
-      },
+      inputSnapshot,
     },
   });
 

@@ -104,7 +104,11 @@ export default async function RespondPage({
             A short spoken interview for <strong>{ctx.campaign_title}</strong>.
           </p>
         </div>
-        <VoiceScreening token={token} campaignTitle={ctx.campaign_title} />
+        <VoiceScreening
+          token={token}
+          campaignTitle={ctx.campaign_title}
+          expiresAt={ctx.expires_at.toISOString()}
+        />
       </div>
     </div>
   );

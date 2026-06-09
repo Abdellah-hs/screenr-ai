@@ -8,7 +8,8 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { scoreAnswers } from "./screening-questions";
+import { scoreAnswers, scoreTranscript } from "./screening-questions";
+import type { VoiceTranscriptTurn } from "@/lib/data/screening-questions";
 
 function aiResponse(payload: unknown) {
   return {
@@ -107,6 +108,87 @@ describe("scoreAnswers", () => {
 
     await expect(
       scoreAnswers({ jobDescription: "JD", questions: sampleQuestions, answers: sampleAnswers }),
+    ).rejects.toThrow("OpenAI returned an empty response");
+  });
+});
+
+const sampleTranscript: VoiceTranscriptTurn[] = [
+  { role: "agent", text: "Walk me through a hard system design.", at: "2026-06-03T10:00:00.000Z" },
+  { role: "candidate", text: "I led the migration of our monolith to services...", at: "2026-06-03T10:00:08.000Z" },
+  { role: "agent", text: "What's your debugging approach?", at: "2026-06-03T10:01:00.000Z" },
+  { role: "candidate", text: "I start with logs and reproduce locally...", at: "2026-06-03T10:01:07.000Z" },
+];
+
+describe("scoreTranscript", () => {
+  it("returns the same evidence shape as scoreAnswers, tagged with the voice prompt version", async () => {
+    const payload = answerPayload({ overall_score: 68 });
+    mockCreate.mockResolvedValueOnce(aiResponse(payload));
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.overall_score).toBe(68);
+    expect(evidence.rawOutput).toBe(JSON.stringify(payload));
+    expect(evidence.model).toBe("gpt-4o-mini");
+    expect(evidence.promptVersion).toBe("v1_voice_screening_scoring");
+  });
+
+  it("sends the spoken transcript to the model", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(answerPayload()));
+
+    await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    const userMessage = mockCreate.mock.calls[0][0].messages.find(
+      (m: { role: string }) => m.role === "user",
+    ).content as string;
+    expect(userMessage).toContain("I led the migration of our monolith");
+    expect(userMessage).toContain("Walk me through a hard system design.");
+  });
+
+  it("clamps and rounds scores into 0..100", async () => {
+    mockCreate.mockResolvedValueOnce(
+      aiResponse(
+        answerPayload({
+          overall_score: 130,
+          answers: [
+            { question_id: "q-1", score: 240, rationale: "x" },
+            { question_id: "q-2", score: -10, rationale: "y" },
+          ],
+        }),
+      ),
+    );
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.overall_score).toBe(100);
+    expect(evidence.result.answers.map((a) => a.score)).toEqual([100, 0]);
+  });
+
+  it("throws when OPENAI_API_KEY is not configured", async () => {
+    delete process.env.OPENAI_API_KEY;
+
+    await expect(
+      scoreTranscript({ jobDescription: "JD", questions: sampleQuestions, transcript: sampleTranscript }),
+    ).rejects.toThrow("OPENAI_API_KEY is not configured");
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("throws when the AI returns an empty content string", async () => {
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: "" } }] });
+
+    await expect(
+      scoreTranscript({ jobDescription: "JD", questions: sampleQuestions, transcript: sampleTranscript }),
     ).rejects.toThrow("OpenAI returned an empty response");
   });
 });

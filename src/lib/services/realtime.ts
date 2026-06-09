@@ -73,7 +73,7 @@ export function buildScreeningInstructions(ctx: ScreeningInstructionContext): st
     "- If an answer is vague, generic, or sounds read off a script, probe deeper with a pointed specific question before moving on." + resumeLine,
     "- Stay neutral: do not reveal scores, do not say whether an answer is right or wrong, and do not give feedback or hints.",
     "- One question at a time. Let them finish. If they go silent or ask you to repeat, briefly rephrase.",
-    "- Keep the whole call focused (about 5–8 minutes). When the required topics are covered, thank them warmly and tell them the hiring team will follow up by email. Then end.",
+    "- Keep the whole call focused (about 5 minutes). When the required topics are covered, thank them warmly and tell them the hiring team will follow up by email. Then end.",
     "",
     "Begin by briefly greeting the candidate, confirming you can hear each other, and asking your first question.",
   ].join("\n");

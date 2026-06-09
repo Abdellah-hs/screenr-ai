@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { ScreeningCriterion } from "@/lib/constants";
+import type { VoiceTranscriptTurn } from "@/lib/data/screening-questions";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -92,6 +93,7 @@ export interface AnswerScoringResult {
 
 export const SCREENING_SCORING_MODEL = "gpt-4o-mini";
 export const SCREENING_SCORING_PROMPT_VERSION = "v1_screening_scoring";
+export const SCREENING_VOICE_SCORING_PROMPT_VERSION = "v1_voice_screening_scoring";
 
 export interface AnswerScoringEvidence {
   result: AnswerScoringResult;
@@ -177,11 +179,21 @@ ${qaPairs}`,
     throw new Error("OpenAI returned an empty response for answer scoring");
   }
 
+  return {
+    result: normalizeScoringResult(content),
+    rawOutput: content,
+    model: SCREENING_SCORING_MODEL,
+    promptVersion: SCREENING_SCORING_PROMPT_VERSION,
+  };
+}
+
+/** Clamp/round the model's JSON into a normalized, 0..100 result. Shared by the
+ * text-answer and voice-transcript scorers so both persist identical evidence. */
+function normalizeScoringResult(content: string): AnswerScoringResult {
   const parsed = JSON.parse(content) as AnswerScoringResult;
 
-  const overall = Math.max(0, Math.min(100, Math.round(parsed.overall_score)));
-  const result: AnswerScoringResult = {
-    overall_score: overall,
+  return {
+    overall_score: Math.max(0, Math.min(100, Math.round(parsed.overall_score))),
     overall_rationale: parsed.overall_rationale || "No rationale provided.",
     answers: (parsed.answers || []).map((a) => ({
       question_id: String(a.question_id),
@@ -189,11 +201,92 @@ ${qaPairs}`,
       rationale: String(a.rationale || ""),
     })),
   };
+}
+
+/**
+ * AI-scores a candidate's voice-screening call (#84) against the screening
+ * questions, reading the spoken transcript instead of typed answers.
+ *
+ * The candidate answers a question whenever it comes up in conversation — not
+ * in neat per-question slots — so the model is asked to locate each question's
+ * evidence across the whole transcript and cite a short spoken excerpt in its
+ * rationale (PRD 3.4.3: scores must trace back to the transcript). Returns the
+ * same `AnswerScoringEvidence` shape as `scoreAnswers`, so the action persists
+ * scores and runs the unchanged decision rule identically for both modalities.
+ */
+export async function scoreTranscript(params: {
+  jobDescription: string;
+  questions: { id: string; prompt: string; is_required: boolean }[];
+  transcript: VoiceTranscriptTurn[];
+}): Promise<AnswerScoringEvidence> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const { jobDescription, questions, transcript } = params;
+
+  const questionList = questions
+    .map((q) => `- [${q.id}]${q.is_required ? " (required)" : ""} ${q.prompt}`)
+    .join("\n");
+
+  const conversation = transcript
+    .map((t) => `${t.role === "agent" ? "Interviewer" : "Candidate"}: ${t.text}`)
+    .join("\n");
+
+  const response = await openai.chat.completions.create({
+    model: SCREENING_SCORING_MODEL,
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert ATS evaluator scoring a spoken screening interview from its transcript. The interviewer asked a fixed set of questions (with unscripted follow-ups); the candidate answered conversationally. For each listed question, find the candidate's relevant spoken evidence anywhere in the transcript and score it 0-100 based on:
+- Relevance and specificity (did they actually address the question?)
+- Concrete evidence (examples, metrics, outcomes)
+- Depth of reasoning
+- Alignment with the role
+
+Then compute an overall_score as the simple average of per-question scores (0-100, rounded).
+
+If a required question was never meaningfully addressed in the transcript, score it below 30.
+
+Return JSON in this exact format:
+{
+  "overall_score": number,
+  "overall_rationale": "2-3 sentence summary of the candidate's screening performance",
+  "answers": [
+    { "question_id": "string", "score": number, "rationale": "1-2 sentences citing a short transcript excerpt" }
+  ]
+}
+
+Rules:
+- answers array must have exactly one entry per listed question, in the same order
+- question_id must match the listed id verbatim
+- every rationale must quote or paraphrase a specific moment from the transcript`,
+      },
+      {
+        role: "user",
+        content: `## Job Description
+${jobDescription}
+
+## Screening Questions
+${questionList}
+
+## Interview Transcript
+${conversation}`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("OpenAI returned an empty response for transcript scoring");
+  }
 
   return {
-    result,
+    result: normalizeScoringResult(content),
     rawOutput: content,
     model: SCREENING_SCORING_MODEL,
-    promptVersion: SCREENING_SCORING_PROMPT_VERSION,
+    promptVersion: SCREENING_VOICE_SCORING_PROMPT_VERSION,
   };
 }

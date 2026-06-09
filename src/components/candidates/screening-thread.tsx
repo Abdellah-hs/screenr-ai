@@ -6,11 +6,17 @@ import {
   scoreScreeningAnswers,
 } from "@/lib/actions/screening-questions";
 import { isEligibleForScreeningSend } from "@/lib/rules/screening-response";
+import {
+  analyzeTranscriptCadence,
+  type ScriptedSignal,
+} from "@/lib/screening/transcript-cadence";
+import { Badge, type BadgeProps } from "@/components/ui";
 import type { ApplicationState } from "@/lib/constants";
 import type {
   ScoredAnswerRow,
   ScreeningQuestionRow,
   ScreeningResponseRow,
+  VoiceTranscriptTurn,
 } from "@/lib/data/screening-questions";
 
 interface ScreeningThreadProps {
@@ -90,6 +96,8 @@ export default function ScreeningThread({
   for (const a of response?.answers ?? []) {
     answersById.set(a.question_id, a);
   }
+  const transcript = response?.transcript ?? [];
+  const isVoice = transcript.length > 0;
 
   // Mirror the server-side guard in `sendScreeningQuestionsToCandidate`: the
   // send/resend buttons stay disabled until the application has reached the
@@ -191,6 +199,10 @@ export default function ScreeningThread({
         </div>
       )}
 
+      {isVoice && (
+        <TranscriptReview transcript={transcript} audioUrl={response?.audio_url ?? null} />
+      )}
+
       {status === "not_sent" ? (
         canSend ? (
           <p className="text-sm text-[#6B7280]">
@@ -225,12 +237,18 @@ export default function ScreeningThread({
                   )}
                 </p>
 
-                {answer?.answer_text ? (
+                {answer?.answer_text || (isVoice && answer?.score != null) ? (
                   <div className="mt-2 p-3 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]">
-                    <p className="text-sm text-[#374151] whitespace-pre-wrap leading-relaxed">
-                      {answer.answer_text}
-                    </p>
-                    {answer.score != null && (
+                    {answer?.answer_text ? (
+                      <p className="text-sm text-[#374151] whitespace-pre-wrap leading-relaxed">
+                        {answer.answer_text}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-[#9CA3AF] italic">
+                        Answered in the voice interview — see the transcript above.
+                      </p>
+                    )}
+                    {answer?.score != null && (
                       <div className="mt-3 pt-3 border-t border-[#E5E7EB]">
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs font-medium text-[#6B7280]">
@@ -261,6 +279,86 @@ export default function ScreeningThread({
         </ol>
       )}
     </div>
+  );
+}
+
+const SCRIPTED_SIGNAL: Record<
+  ScriptedSignal,
+  { variant: BadgeProps["variant"]; label: string }
+> = {
+  low: { variant: "active", label: "Low" },
+  medium: { variant: "paused", label: "Medium" },
+  high: { variant: "closed", label: "High" },
+};
+
+/**
+ * Recruiter-facing review of a voice-screening call (#85): the spoken
+ * transcript, an optional audio playback, and the soft "reads-as-scripted"
+ * cadence signal recomputed from the transcript. The signal is a nudge for the
+ * reviewer, never a score — that contract lives in the scoring action.
+ */
+function TranscriptReview({
+  transcript,
+  audioUrl,
+}: {
+  transcript: VoiceTranscriptTurn[];
+  audioUrl: string | null;
+}) {
+  const cadence = analyzeTranscriptCadence(transcript);
+  const signal = SCRIPTED_SIGNAL[cadence.scripted_signal];
+
+  return (
+    <details open className="mb-4 rounded-lg border border-[#E5E7EB] bg-white">
+      <summary className="flex items-center justify-between gap-3 cursor-pointer select-none px-3 py-2.5 list-none">
+        <span className="text-xs font-semibold text-[#0369A1] uppercase tracking-wider">
+          Voice Transcript
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] text-[#6B7280]">Reads-as-scripted</span>
+          <Badge variant={signal.variant} title={cadence.rationale}>
+            {signal.label}
+          </Badge>
+        </span>
+      </summary>
+
+      <div className="px-3 pb-3 space-y-3">
+        <p className="text-[11px] text-[#9CA3AF] leading-relaxed">{cadence.rationale}</p>
+
+        {audioUrl && (
+          <div>
+            <span className="block text-[11px] font-medium text-[#6B7280] mb-1">Recording</span>
+            <audio controls src={audioUrl} className="w-full" />
+          </div>
+        )}
+
+        <ol className="space-y-2">
+          {transcript.map((turn, i) => {
+            const isAgent = turn.role === "agent";
+            return (
+              <li
+                key={`${turn.at}-${i}`}
+                className={`rounded-lg border p-2.5 ${
+                  isAgent
+                    ? "border-[#BAE6FD] bg-[#F0F9FF]"
+                    : "border-[#E5E7EB] bg-[#F9FAFB]"
+                }`}
+              >
+                <span
+                  className={`block text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${
+                    isAgent ? "text-[#0369A1]" : "text-[#6B7280]"
+                  }`}
+                >
+                  {isAgent ? "Interviewer" : "Candidate"}
+                </span>
+                <p className="text-sm text-[#374151] leading-relaxed whitespace-pre-wrap">
+                  {turn.text}
+                </p>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </details>
   );
 }
 
