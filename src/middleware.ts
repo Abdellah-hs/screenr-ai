@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isProtectedPath } from "@/lib/auth/route-protection";
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -34,9 +35,7 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isAuthPage = request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/signup";
-  const isProtectedPage =
-    request.nextUrl.pathname.startsWith("/campaigns") ||
-    request.nextUrl.pathname.startsWith("/admin");
+  const isProtectedPage = isProtectedPath(request.nextUrl.pathname);
 
   // Protect dashboard routes - redirect to /login if not authenticated
   if (!user && isProtectedPage) {
