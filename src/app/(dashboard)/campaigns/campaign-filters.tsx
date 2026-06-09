@@ -106,6 +106,7 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                   <th scope="col" className="px-6 py-4">Department</th>
                   <th scope="col" className="px-6 py-4">Created</th>
                   <th scope="col" className="px-6 py-4">Status</th>
+                  <th scope="col" className="px-6 py-4">Candidates</th>
                   <th scope="col" className="px-6 py-4 text-center"></th>
                 </tr>
               </thead>
@@ -136,6 +137,17 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                       <span className={`inline-flex px-2.5 py-1 text-xs font-medium border rounded-md capitalize ${statusColors[campaign.status ?? "draft"]}`}>
                         {campaign.status}
                       </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <Link
+                        href={`/campaigns/${campaign.id}/candidates`}
+                        className="inline-flex items-center gap-1.5 text-sm font-medium text-[#2563EB] hover:underline"
+                      >
+                        <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+                        </svg>
+                        Show candidates
+                      </Link>
                     </td>
                     <td className="px-6 py-4 text-center text-[#9CA3AF] cursor-pointer hover:text-[#111827]">
                       <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" /></svg>

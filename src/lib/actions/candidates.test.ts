@@ -10,12 +10,16 @@ const {
   mockFetchCandidateById,
   mockTransitionApplication,
   mockRevalidatePath,
+  mockFetchGmailConnection,
+  mockSendScreeningQuestions,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockCheckRateLimit: vi.fn(),
   mockFetchCandidateById: vi.fn(),
   mockTransitionApplication: vi.fn(),
   mockRevalidatePath: vi.fn(),
+  mockFetchGmailConnection: vi.fn(),
+  mockSendScreeningQuestions: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -46,6 +50,12 @@ vi.mock("@/lib/data/transitions", () => ({
   transitionApplication: mockTransitionApplication,
 }));
 
+// decideHitlReview auto-sends screening questions on approval via this action;
+// mock it so the unit under test stays focused on the approval decision.
+vi.mock("@/lib/actions/screening-questions", () => ({
+  sendScreeningQuestionsToCandidate: mockSendScreeningQuestions,
+}));
+
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
 }));
@@ -56,14 +66,15 @@ vi.mock("@/lib/services/gmail", () => ({
   getGmailAttachmentBuffer: vi.fn(),
   markGmailMessageAsRead: vi.fn(),
   isSupportedResumeMimeType: vi.fn().mockReturnValue(true),
+  createGmailClient: vi.fn(),
 }));
 
-vi.mock("@/lib/services/pdf", () => ({
-  parsePdf: vi.fn(),
+vi.mock("@/lib/data/integrations", () => ({
+  fetchGmailConnection: mockFetchGmailConnection,
 }));
 
-vi.mock("@/lib/services/docx", () => ({
-  parseDocx: vi.fn(),
+vi.mock("@/lib/services/marker", () => ({
+  extractMarkdownWithMarker: vi.fn(),
 }));
 
 vi.mock("@/lib/services/openai", () => ({
@@ -82,8 +93,9 @@ import {
   getGmailMessage,
   getGmailAttachmentBuffer,
   markGmailMessageAsRead,
+  createGmailClient,
 } from "@/lib/services/gmail";
-import { parsePdf } from "@/lib/services/pdf";
+import { extractMarkdownWithMarker } from "@/lib/services/marker";
 import {
   upsertCandidate,
   createApplicationIfNotExists,
@@ -100,6 +112,8 @@ beforeEach(() => {
   mockFetchCandidateById.mockReset();
   mockTransitionApplication.mockReset();
   mockRevalidatePath.mockReset();
+  mockFetchGmailConnection.mockReset();
+  mockSendScreeningQuestions.mockReset();
 
   // Default happy-path setup — individual tests override what they need.
   mockRequireUserId.mockResolvedValue("user-1");
@@ -109,6 +123,7 @@ beforeEach(() => {
     status: "screening_review_pending",
   });
   mockTransitionApplication.mockResolvedValue(undefined);
+  mockSendScreeningQuestions.mockResolvedValue({ sent: true });
 });
 
 afterEach(() => {
@@ -226,7 +241,45 @@ describe("decideHitlReview", () => {
       actor: "recruiter",
       rationale: VALID_RATIONALE,
     });
-    expect(result).toEqual({ success: true, decision: "approve" });
+    expect(result).toEqual({
+      success: true,
+      decision: "approve",
+      screeningEmailSent: true,
+      screeningWarning: undefined,
+    });
+  });
+
+  it("on approve: auto-sends the screening questions to the candidate", async () => {
+    await decideHitlReview({
+      applicationId: VALID_APP_ID,
+      decision: "approve",
+      rationale: VALID_RATIONALE,
+    });
+
+    expect(mockSendScreeningQuestions).toHaveBeenCalledTimes(1);
+    expect(mockSendScreeningQuestions).toHaveBeenCalledWith(VALID_APP_ID);
+  });
+
+  it("on approve: still approves and returns a warning when the auto-send fails", async () => {
+    const sendError = "This campaign has no screening questions configured. Set them up first.";
+    mockSendScreeningQuestions.mockRejectedValueOnce(new Error(sendError));
+
+    const result = await decideHitlReview({
+      applicationId: VALID_APP_ID,
+      decision: "approve",
+      rationale: VALID_RATIONALE,
+    });
+
+    // The approval transition must have happened despite the send failing.
+    expect(mockTransitionApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ toState: "screening_approved" }),
+    );
+    expect(result).toEqual({
+      success: true,
+      decision: "approve",
+      screeningEmailSent: false,
+      screeningWarning: sendError,
+    });
   });
 
   it("on reject: transitions to rejected as recruiter with the rationale", async () => {
@@ -243,7 +296,22 @@ describe("decideHitlReview", () => {
       actor: "recruiter",
       rationale: VALID_RATIONALE,
     });
-    expect(result).toEqual({ success: true, decision: "reject" });
+    expect(result).toEqual({
+      success: true,
+      decision: "reject",
+      screeningEmailSent: false,
+      screeningWarning: undefined,
+    });
+  });
+
+  it("on reject: never sends screening questions", async () => {
+    await decideHitlReview({
+      applicationId: VALID_APP_ID,
+      decision: "reject",
+      rationale: VALID_RATIONALE,
+    });
+
+    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
   });
 
   it("checks the hitl-review rate limit against the authenticated user", async () => {
@@ -346,9 +414,11 @@ describe("updateCandidateStage", () => {
 
 describe("syncResumesFromGmail", () => {
   const PDF_MIME = "application/pdf";
+  const fakeGmail = { __brand: "gmail-client" } as never;
 
   function resumePayload(overrides: Record<string, unknown> = {}) {
     return {
+      document_type: "cv" as const,
       first_name: "Alice",
       last_name: "Smith",
       headline: null,
@@ -357,6 +427,7 @@ describe("syncResumesFromGmail", () => {
       phone: "+1-555-0100",
       location: "NYC",
       linkedin_url: null,
+      github_url: null,
       portfolio_url: null,
       skills: ["React"],
       languages: [],
@@ -369,6 +440,10 @@ describe("syncResumesFromGmail", () => {
   }
 
   beforeEach(() => {
+    // A connected inbox + a Gmail client built from its refresh token.
+    mockFetchGmailConnection.mockResolvedValue({ refresh_token: "rt-1" });
+    vi.mocked(createGmailClient).mockReturnValue(fakeGmail);
+
     // Single message, single PDF attachment, fetchable buffer.
     vi.mocked(fetchUnreadGmailResumes).mockResolvedValue([{ id: "msg-1" }]);
     vi.mocked(getGmailMessage).mockResolvedValue({
@@ -383,7 +458,12 @@ describe("syncResumesFromGmail", () => {
       },
     });
     vi.mocked(getGmailAttachmentBuffer).mockResolvedValue(Buffer.from("fake-pdf"));
-    vi.mocked(parsePdf).mockResolvedValue("Alice's resume text");
+    vi.mocked(extractMarkdownWithMarker).mockResolvedValue({
+      markdown: "Alice's resume text",
+      pageCount: 1,
+      parseQualityScore: 0.95,
+      costBreakdown: null,
+    });
 
     vi.mocked(uploadResumeToStorage).mockResolvedValue("campaigns/c1/alice.pdf");
     vi.mocked(createApplicationIfNotExists).mockResolvedValue("app-1");
@@ -394,6 +474,18 @@ describe("syncResumesFromGmail", () => {
     vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
   });
 
+  it("returns a friendly message and does no work when no Gmail is connected", async () => {
+    mockFetchGmailConnection.mockResolvedValueOnce(null);
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(result.success).toBe(false);
+    expect(result.count).toBe(0);
+    expect(result.message).toMatch(/no gmail connected/i);
+    expect(vi.mocked(createGmailClient)).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
+  });
+
   it("skips messages where the AI could not extract an email and marks them read", async () => {
     vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload({ email: null }));
 
@@ -401,7 +493,7 @@ describe("syncResumesFromGmail", () => {
 
     expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
     expect(vi.mocked(createApplicationIfNotExists)).not.toHaveBeenCalled();
-    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith("msg-1");
+    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
     expect(result.count).toBe(0);
   });
 
@@ -415,7 +507,33 @@ describe("syncResumesFromGmail", () => {
       expect.objectContaining({ email: "alice@example.com" }),
     );
     expect(vi.mocked(createApplicationIfNotExists)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith("msg-1");
+    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
     expect(result.count).toBe(1);
+  });
+
+  it("skips a document the AI classifies as a non-CV (e.g. motivation letter) and marks it read", async () => {
+    vi.mocked(extractResumeData).mockResolvedValueOnce(
+      resumePayload({ document_type: "motivation_letter" }),
+    );
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
+    expect(vi.mocked(createApplicationIfNotExists)).not.toHaveBeenCalled();
+    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
+    expect(result.success).toBe(true);
+    expect(result.count).toBe(0);
+  });
+
+  it("skips an attachment when Marker extraction throws, without aborting the sync", async () => {
+    vi.mocked(extractMarkdownWithMarker).mockRejectedValueOnce(new Error("Marker timed out"));
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(vi.mocked(extractResumeData)).not.toHaveBeenCalled();
+    expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
+    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
+    expect(result.success).toBe(true);
+    expect(result.count).toBe(0);
   });
 });

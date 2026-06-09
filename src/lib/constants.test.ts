@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   APPLICATION_STATE_TRANSITIONS,
+  APPLICATION_STAGE_BUCKET,
+  toCandidateStage,
   type ApplicationState,
+  type CandidateStage,
 } from "./constants";
 
 const ALL_STATES = Object.keys(
@@ -58,6 +61,84 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
 
   it("keeps archived a terminal state with no outbound transitions", () => {
     expect(APPLICATION_STATE_TRANSITIONS.archived).toEqual([]);
+  });
+});
+
+describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
+  const VALID_BUCKETS = new Set<CandidateStage>([
+    "applied",
+    "screening",
+    "interview",
+    "offer",
+    "hired",
+    "rejected",
+  ]);
+
+  it("maps every application state to a coarse bucket (exhaustive)", () => {
+    for (const state of ALL_STATES) {
+      expect(
+        APPLICATION_STAGE_BUCKET[state],
+        `unmapped state: ${state}`,
+      ).toBeDefined();
+    }
+  });
+
+  it("only ever maps to one of the six valid CandidateStage buckets", () => {
+    for (const state of ALL_STATES) {
+      expect(
+        VALID_BUCKETS.has(APPLICATION_STAGE_BUCKET[state]),
+        `${state} → ${APPLICATION_STAGE_BUCKET[state]} is not a valid bucket`,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps an approved candidate visible under Screening (the reported bug)", () => {
+    expect(toCandidateStage("screening_approved")).toBe("screening");
+  });
+
+  it("keeps every screening-phase state under Screening", () => {
+    for (const state of [
+      "screening_approved",
+      "screening_sent",
+      "screening_completed",
+      "screening_scored",
+    ] as ApplicationState[]) {
+      expect(toCandidateStage(state)).toBe("screening");
+    }
+  });
+
+  it("keeps a brand-new application and a pending review under Applied", () => {
+    expect(toCandidateStage("new")).toBe("applied");
+    expect(toCandidateStage("screening_review_pending")).toBe("applied");
+  });
+
+  it("groups every interview-track state under Interview", () => {
+    for (const state of [
+      "interview_scheduling",
+      "interview_scheduled",
+      "interview_completed",
+      "interview_scored",
+      "reference_check",
+    ] as ApplicationState[]) {
+      expect(toCandidateStage(state)).toBe("interview");
+    }
+  });
+
+  it("treats terminal failure and withdrawal states as Rejected for the funnel", () => {
+    for (const state of [
+      "rejected",
+      "withdrawn",
+      "screening_expired",
+      "interview_no_show",
+      "processing_failed",
+      "archived",
+    ] as ApplicationState[]) {
+      expect(toCandidateStage(state)).toBe("rejected");
+    }
+  });
+
+  it("falls back to Applied for an unknown status string", () => {
+    expect(toCandidateStage("not_a_real_state")).toBe("applied");
   });
 });
 

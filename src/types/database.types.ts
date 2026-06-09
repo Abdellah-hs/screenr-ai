@@ -495,6 +495,39 @@ export type Database = {
           },
         ]
       }
+      gmail_connections: {
+        Row: {
+          connected_at: string
+          created_at: string
+          email: string
+          id: string
+          refresh_token: string
+          scope: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          connected_at?: string
+          created_at?: string
+          email: string
+          id?: string
+          refresh_token: string
+          scope?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          connected_at?: string
+          created_at?: string
+          email?: string
+          id?: string
+          refresh_token?: string
+          scope?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       rubric_dimensions: {
         Row: {
           created_at: string

@@ -27,6 +27,7 @@ import { upsertCandidate, saveResumeScore } from "./candidates";
 import type { ParsedResumeData } from "@/lib/services/openai";
 
 const baseResume: ParsedResumeData & { email: string } = {
+  document_type: "cv",
   first_name: "Alice",
   last_name: "Smith",
   headline: null,
@@ -34,6 +35,7 @@ const baseResume: ParsedResumeData & { email: string } = {
   email: "alice@example.com",
   phone: "+1-555-1111",
   linkedin_url: "",
+  github_url: "",
   portfolio_url: "",
   location: "NYC",
   skills: [],

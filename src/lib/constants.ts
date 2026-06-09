@@ -323,3 +323,57 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
 
 export type TransitionActor = "system" | "ai" | "recruiter";
 
+/**
+ * Collapses a granular `ApplicationState` into one of the six coarse
+ * `CandidateStage` buckets the pipeline UI renders (funnel cards, stage
+ * pills, the stage badge). Exhaustive by construction: adding a new
+ * `ApplicationState` without mapping it here is a compile error, so a
+ * candidate can never silently fall outside every bucket.
+ *
+ * Mapping rationale:
+ *   - `screening_review_pending` stays under **Applied** — the resume is
+ *     scored but the recruiter hasn't approved them *into* screening yet.
+ *     The separate "Pending review" flag (awaiting_human_review) surfaces
+ *     that they need action; approval moves them to **Screening**.
+ *   - Post-interview states (`manager_review`, `final_interview_scheduling`)
+ *     map to **Offer** — the closest coarse bucket before Hired.
+ *   - Failure / withdrawn / archived states map to **Rejected**: they're out
+ *     of the active funnel and the coarse model has no dedicated bucket.
+ */
+export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> = {
+  new: "applied",
+  screening_review_pending: "applied",
+
+  screening_approved: "screening",
+  screening_sent: "screening",
+  screening_completed: "screening",
+  screening_scored: "screening",
+
+  interview_scheduling: "interview",
+  interview_scheduled: "interview",
+  interview_completed: "interview",
+  interview_scored: "interview",
+  reference_check: "interview",
+
+  manager_review: "offer",
+  final_interview_scheduling: "offer",
+
+  hired: "hired",
+
+  rejected: "rejected",
+  withdrawn: "rejected",
+  screening_expired: "rejected",
+  interview_no_show: "rejected",
+  processing_failed: "rejected",
+  archived: "rejected",
+};
+
+/**
+ * Map an application's canonical pipeline state to its coarse stage bucket.
+ * Falls back to `applied` for any value outside the state machine (defensive
+ * — the DB enum and `ApplicationState` are the source of truth).
+ */
+export function toCandidateStage(status: string): CandidateStage {
+  return APPLICATION_STAGE_BUCKET[status as ApplicationState] ?? "applied";
+}
+

@@ -1,6 +1,7 @@
 import type { ApplicationState } from "@/lib/constants";
 import { fetchApplicationEmailContext } from "@/lib/data/candidates";
 import { sendEmail } from "@/lib/services/email";
+import { getRecruiterGmailClient } from "./gmail-sender";
 import { buildAdvanceScreeningEmail } from "@/lib/services/email-templates/advance-screening";
 import { buildRejectScreeningEmail } from "@/lib/services/email-templates/reject-screening";
 import type { BuiltEmail } from "@/lib/services/email-templates/shared";
@@ -33,15 +34,17 @@ function buildTransitionEmail(
 
 /**
  * Best-effort candidate notification for a state transition. Call it from an
- * action AFTER a successful transitionApplication().
+ * action AFTER a successful transitionApplication(), passing the acting
+ * recruiter's `userId` — the email is sent from their connected inbox.
  *
  * It never throws: the transition is already durable, so a failed email must
- * not roll it back or surface as an error to the recruiter. Failures are
- * logged for observability instead.
+ * not roll it back or surface as an error to the recruiter. A missing Gmail
+ * connection is one such failure — logged, not propagated.
  */
 export async function sendTransitionNotification(
   applicationId: string,
   toState: ApplicationState,
+  userId: string,
 ): Promise<void> {
   try {
     const ctx = await fetchApplicationEmailContext(applicationId);
@@ -53,7 +56,8 @@ export async function sendTransitionNotification(
     });
     if (!email) return; // no notification configured for this state
 
-    await sendEmail({
+    const gmail = await getRecruiterGmailClient(userId);
+    await sendEmail(gmail, {
       to: ctx.candidateEmail,
       subject: email.subject,
       html: email.html,

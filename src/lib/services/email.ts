@@ -1,4 +1,4 @@
-import { getGmailClient } from "./gmail";
+import type { gmail_v1 } from "googleapis";
 
 export interface SendEmailParams {
   to: string;
@@ -9,16 +9,19 @@ export interface SendEmailParams {
 }
 
 /**
- * Send an email via the Gmail API using the same OAuth2 credentials
- * that drive resume ingestion. The "From" address is whatever the
- * authenticated Google account is; `fromName` controls the display name.
+ * Send an email via the Gmail API. The `gmail` client is built from the
+ * recruiter's connected inbox (see `getRecruiterGmailClient`) — the "From"
+ * address is that connected Google account; `fromName` controls the display
+ * name. Injecting the client (rather than reading an env account) keeps
+ * outbound mail on the same mailbox as inbound resume sync.
  *
  * Returns the Gmail messageId so callers can log or reference it.
  */
-export async function sendEmail(params: SendEmailParams): Promise<string> {
+export async function sendEmail(
+  gmail: gmail_v1.Gmail,
+  params: SendEmailParams,
+): Promise<string> {
   const { to, subject, html, text, fromName = "Screenr AI" } = params;
-
-  const gmail = getGmailClient();
 
   // Build a minimal multipart/alternative MIME message. The Gmail API
   // accepts a base64url-encoded raw RFC 2822 message.
@@ -69,7 +72,7 @@ export async function sendEmail(params: SendEmailParams): Promise<string> {
       oauthError.includes("Token has been expired or revoked")
     ) {
       throw new Error(
-        "Gmail authorization has expired. The recruiter needs to regenerate GOOGLE_REFRESH_TOKEN — see the screening-questions setup guide."
+        "Your connected Gmail authorization has expired or was revoked. Reconnect your inbox in Settings → Integrations."
       );
     }
     if (oauthError.includes("invalid_client")) {

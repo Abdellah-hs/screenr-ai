@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCampaignById } from "@/lib/actions/campaigns";
+import { getCampaignById, getResumeCriteriaCount } from "@/lib/actions/campaigns";
 import { getCandidateById } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { ScoreResumeButton } from "@/components/candidates/score-resume-button";
@@ -9,6 +9,7 @@ import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
 import type { CandidateScore } from "@/lib/constants";
+import type { ParsedResumeData } from "@/lib/services/openai";
 
 const tierColors: Record<string, string> = {
   strong: "text-[#059669] bg-[#ECFDF5]",
@@ -116,13 +117,78 @@ function ScoreCard({ score }: { score: CandidateScore }) {
   );
 }
 
+function ChipGroup({ label, items }: { label: string; items: string[] }) {
+  // Dedupe case-insensitively (the AI sometimes repeats a skill/tool), keeping
+  // the first-seen spelling. Empty groups render nothing.
+  const seen = new Set<string>();
+  const unique = items.filter((item) => {
+    const key = item.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (unique.length === 0) return null;
+
+  return (
+    <div>
+      <p className="text-xs text-[#6B7280] mb-2">{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {unique.map((item, i) => (
+          <span
+            key={`${item}-${i}`}
+            className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-[#F0F9FF] text-[#0369A1]"
+          >
+            {item}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExperienceEntry({ exp }: { exp: ParsedResumeData["experience"][number] }) {
+  const heading = [exp.title, exp.company].filter(Boolean).join(" · ");
+  return (
+    <div className="border-l-2 border-[#E0F2FE] pl-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-semibold text-[#0C4A6E] min-w-0 break-words">{heading || "Role"}</p>
+        {exp.duration && (
+          <span className="text-xs text-[#9CA3AF] shrink-0 whitespace-nowrap">
+            {exp.duration}
+          </span>
+        )}
+      </div>
+      {exp.description && (
+        <p className="text-sm text-[#4B5563] mt-1 leading-relaxed">{exp.description}</p>
+      )}
+    </div>
+  );
+}
+
+function EducationEntry({ edu }: { edu: ParsedResumeData["education"][number] }) {
+  const years = [edu.year_start, edu.year_end].filter(Boolean).join(" – ");
+  return (
+    <div className="border-l-2 border-[#E0F2FE] pl-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-semibold text-[#0C4A6E] min-w-0 break-words">
+          {edu.institution || "Institution"}
+        </p>
+        {years && (
+          <span className="text-xs text-[#9CA3AF] shrink-0 whitespace-nowrap">{years}</span>
+        )}
+      </div>
+      {edu.degree && <p className="text-sm text-[#4B5563] mt-0.5">{edu.degree}</p>}
+    </div>
+  );
+}
+
 export default async function CandidateDetailPage({
   params,
 }: {
   params: Promise<{ id: string; candidateId: string }>;
 }) {
   const { id, candidateId } = await params;
-  const [campaign, candidate, screeningState] = await Promise.all([
+  const [campaign, candidate, screeningState, resumeCriteriaCount] = await Promise.all([
     getCampaignById(id),
     getCandidateById(candidateId),
     getCandidateScreeningState(candidateId).catch(() => ({
@@ -130,11 +196,16 @@ export default async function CandidateDetailPage({
       questions: [],
       response: null,
     })),
+    getResumeCriteriaCount(id).catch(() => 0),
   ]);
+
+  const hasResumeCriteria = resumeCriteriaCount > 0;
 
   if (!campaign || !candidate) {
     notFound();
   }
+
+  const parsed = candidate.parsed_data;
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -184,11 +255,10 @@ export default async function CandidateDetailPage({
                   currentState={candidate.status}
                 />
               </div>
-              {candidate.current_title && (
+              {(parsed?.headline || candidate.current_title) && (
                 <p className="text-sm text-[#6B7280] mt-0.5">
-                  {candidate.current_title}
-                  {candidate.current_company &&
-                    ` at ${candidate.current_company}`}
+                  {parsed?.headline ??
+                    `${candidate.current_title}${candidate.current_company ? ` at ${candidate.current_company}` : ""}`}
                 </p>
               )}
             </div>
@@ -196,7 +266,11 @@ export default async function CandidateDetailPage({
         </div>
         <div className="flex items-center gap-2">
           {candidate.scores.length === 0 && (
-            <ScoreResumeButton applicationId={candidateId} />
+            <ScoreResumeButton
+              applicationId={candidateId}
+              disabled={!hasResumeCriteria}
+              disabledHint="Add screening criteria to this campaign to enable scoring."
+            />
           )}
           <Link
             href={`/campaigns/${id}/candidates`}
@@ -209,7 +283,7 @@ export default async function CandidateDetailPage({
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left column — Info + Resume */}
-        <div className="lg:col-span-1 space-y-6">
+        <div className="lg:col-span-1 space-y-6 min-w-0">
           {/* Contact */}
           <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
             <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
@@ -264,6 +338,32 @@ export default async function CandidateDetailPage({
                 </a>
               )}
 
+              {/* Location */}
+              {parsed?.location && (
+                <div className="flex items-center gap-2.5">
+                  <svg
+                    className="w-4 h-4 text-[#9CA3AF] shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"
+                    />
+                  </svg>
+                  <span className="text-sm text-[#4B5563]">{parsed.location}</span>
+                </div>
+              )}
+
               {/* LinkedIn — clickable external link */}
               {candidate.linkedin_url && (
                 <a
@@ -281,6 +381,40 @@ export default async function CandidateDetailPage({
                   </svg>
                   <span className="text-sm text-[#4B5563] group-hover:text-[#0369A1] transition-all duration-200">
                     LinkedIn Profile
+                  </span>
+                  <svg
+                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                    />
+                  </svg>
+                </a>
+              )}
+
+              {/* GitHub — clickable external link */}
+              {parsed?.github_url && (
+                <a
+                  href={parsed.github_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2.5 group cursor-pointer"
+                >
+                  <svg
+                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.513 11.513 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222 0 1.606-.014 2.898-.014 3.293 0 .322.216.694.825.576C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+                  </svg>
+                  <span className="text-sm text-[#4B5563] group-hover:text-[#0369A1] transition-all duration-200">
+                    GitHub Profile
                   </span>
                   <svg
                     className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
@@ -365,6 +499,18 @@ export default async function CandidateDetailPage({
             </div>
           </div>
 
+          {/* Summary / About */}
+          {parsed?.summary && (
+            <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
+              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-3">
+                About
+              </h2>
+              <p className="text-sm text-[#4B5563] leading-relaxed whitespace-pre-line">
+                {parsed.summary}
+              </p>
+            </div>
+          )}
+
           {/* Resume */}
           <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
             <div className="flex items-center justify-between mb-4">
@@ -396,40 +542,44 @@ export default async function CandidateDetailPage({
               )}
             </div>
             <div className="space-y-4">
-              <div>
-                <p className="text-xs text-[#6B7280] mb-1">Education</p>
-                <p className="text-sm text-[#0C4A6E]">
-                  {candidate.resume.education}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-[#6B7280] mb-1">Experience</p>
-                <p className="text-sm text-[#0C4A6E]">
-                  {candidate.resume.experience_years} year
-                  {candidate.resume.experience_years !== 1 ? "s" : ""}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-[#6B7280] mb-2">Skills</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {candidate.resume.skills.map((skill: string) => (
-                    <span
-                      key={skill}
-                      className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-[#F0F9FF] text-[#0369A1]"
-                    >
-                      {skill}
-                    </span>
-                  ))}
-                </div>
-              </div>
+              <ChipGroup label="Skills" items={parsed?.skills ?? candidate.resume.skills} />
+              <ChipGroup label="Languages" items={parsed?.languages ?? []} />
+              <ChipGroup label="Certifications" items={parsed?.certifications ?? []} />
+              <ChipGroup label="Interests" items={parsed?.interests ?? []} />
             </div>
           </div>
         </div>
 
-        {/* Right column — Scores + Screening thread */}
-        <div className="lg:col-span-2 space-y-4">
+        {/* Right column — Background + Screening + Scores */}
+        <div className="lg:col-span-2 space-y-4 min-w-0">
           {candidate.awaiting_human_review && (
             <HitlReviewPanel applicationId={candidateId} />
+          )}
+
+          {parsed && parsed.experience.length > 0 && (
+            <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
+              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
+                Experience
+              </h2>
+              <div className="space-y-4">
+                {parsed.experience.map((exp, i) => (
+                  <ExperienceEntry key={i} exp={exp} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {parsed && parsed.education.length > 0 && (
+            <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
+              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
+                Education
+              </h2>
+              <div className="space-y-4">
+                {parsed.education.map((edu, i) => (
+                  <EducationEntry key={i} edu={edu} />
+                ))}
+              </div>
+            </div>
           )}
 
           <ScreeningThread
@@ -459,9 +609,37 @@ export default async function CandidateDetailPage({
                   />
                 </svg>
               </div>
-              <p className="text-sm text-[#6B7280]">
-                No scores yet. This candidate hasn&apos;t been evaluated.
-              </p>
+              {hasResumeCriteria ? (
+                <p className="text-sm text-[#6B7280]">
+                  No scores yet. This candidate hasn&apos;t been evaluated.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-[#6B7280]">
+                    No criteria configured for this campaign — add screening
+                    criteria to enable scoring.
+                  </p>
+                  <Link
+                    href={`/campaigns/${id}/edit`}
+                    className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] rounded-lg cursor-pointer hover:bg-[#E0F2FE] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
+                  >
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    Add screening criteria
+                  </Link>
+                </>
+              )}
             </div>
           ) : (
             candidate.scores.map((score: CandidateScore, i: number) => (

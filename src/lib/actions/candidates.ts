@@ -12,6 +12,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { transitionApplication } from "@/lib/data/transitions";
 import { sendTransitionNotification } from "./transition-notifications";
+import { sendScreeningQuestionsToCandidate } from "./screening-questions";
 
 // Services
 import {
@@ -20,9 +21,10 @@ import {
   getGmailAttachmentBuffer,
   markGmailMessageAsRead,
   isSupportedResumeMimeType,
+  createGmailClient,
 } from "@/lib/services/gmail";
-import { parsePdf } from "@/lib/services/pdf";
-import { parseDocx } from "@/lib/services/docx";
+import { fetchGmailConnection } from "@/lib/data/integrations";
+import { extractMarkdownWithMarker } from "@/lib/services/marker";
 import {
   extractResumeData,
   scoreResumeAgainstCriteria,
@@ -51,7 +53,8 @@ import {
   type CampaignScoringConfig,
   type ResumeScoreResult,
 } from "@/lib/rules/resume-scoring";
-import type { ApplicationState, Candidate, CandidateScore, CandidateStage, ScoreFactor, ScreeningTier } from "@/lib/constants";
+import { toCandidateStage } from "@/lib/constants";
+import type { ApplicationState, Candidate, CandidateScore, ScoreFactor, ScreeningTier } from "@/lib/constants";
 import type { Database } from "@/types/database.types";
 
 type ApplicationRow = Database["public"]["Tables"]["applications"]["Row"];
@@ -69,8 +72,21 @@ export async function syncResumesFromGmail(campaignId: string) {
     // Rate limit: 5 Gmail syncs per 10 minutes per user
     checkRateLimit(userId, { name: "gmail-sync", maxRequests: 5, windowMs: 10 * 60 * 1000 });
 
+    // Resolve the recruiter's connected inbox. No connection → nothing to sync;
+    // return a friendly message pointing them at Settings rather than throwing.
+    const connection = await fetchGmailConnection(userId);
+    if (!connection) {
+      return {
+        success: false,
+        count: 0,
+        message: "No Gmail connected. Connect an inbox in Settings to sync resumes.",
+      };
+    }
+
+    const gmail = createGmailClient(connection.refresh_token);
+
     // Find up to 5 recent unread emails with supported attachment types
-    const messages = await fetchUnreadGmailResumes(5);
+    const messages = await fetchUnreadGmailResumes(gmail, 5);
 
     if (messages.length === 0) {
       return { success: true, count: 0, message: "No new unread resumes found in Gmail." };
@@ -82,7 +98,7 @@ export async function syncResumesFromGmail(campaignId: string) {
       if (!msg.id) continue;
 
       // Get the full message
-      const msgData = await getGmailMessage(msg.id);
+      const msgData = await getGmailMessage(gmail, msg.id);
       const parts: gmail_v1.Schema$MessagePart[] = msgData.payload?.parts || [];
       const resumeParts = parts.filter(
         (p) => p.mimeType && isSupportedResumeMimeType(p.mimeType) && p.filename
@@ -92,17 +108,39 @@ export async function syncResumesFromGmail(campaignId: string) {
         if (!part.body?.attachmentId) continue;
 
         // Fetch attachment data
-        const fileBuffer = await getGmailAttachmentBuffer(msg.id, part.body.attachmentId);
+        const fileBuffer = await getGmailAttachmentBuffer(gmail, msg.id, part.body.attachmentId);
         if (!fileBuffer) continue;
 
         // 1. Upload to Supabase Storage
         const resumeUrl = await uploadResumeToStorage(campaignId, part.filename || "resume.pdf", fileBuffer);
 
-        // 2. Parse attachment to text locally
-        const textContent = await parseAttachment(part.mimeType || "", fileBuffer);
+        // 2. Extract markdown via Datalab Marker (layout-aware OCR; one provider
+        //    handles both PDF and DOCX). Marker failures (unreachable, status
+        //    failed, timeout) are non-blocking: warn and skip this attachment so
+        //    the sync never bubbles a 500. The message is marked read by the
+        //    outer loop, retiring it.
+        let textContent: string;
+        try {
+          textContent = (await extractMarkdownWithMarker(fileBuffer, part.mimeType || "")).markdown;
+        } catch (markerErr) {
+          console.warn(
+            `syncResumesFromGmail: Marker extraction failed for ${part.filename ?? "(unnamed attachment)"} — skipping.`,
+            markerErr,
+          );
+          continue;
+        }
 
-        // 3. Extract JSON out of text using OpenAI
+        // 3. Extract structured data + classify the document using OpenAI.
         const structuredData = await extractResumeData(textContent);
+
+        // Skip non-CV documents (e.g. a motivation letter sent in the same
+        // thread). We only ingest CVs. Marked read at the end of the outer loop.
+        if (structuredData.document_type !== "cv") {
+          console.warn(
+            `syncResumesFromGmail: skipping ${part.filename ?? "(unnamed attachment)"} — document_type=${structuredData.document_type}.`,
+          );
+          continue;
+        }
 
         // Skip resumes the AI could not extract an email from — the candidates
         // table requires email NOT NULL, and inventing one would violate the
@@ -138,7 +176,7 @@ export async function syncResumesFromGmail(campaignId: string) {
           if (scored) {
             const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
             await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
-            await sendTransitionNotification(applicationId, decision.toState);
+            await sendTransitionNotification(applicationId, decision.toState, userId);
           }
         } catch (scoreErr) {
           console.error("Resume scoring failed (non-blocking):", scoreErr);
@@ -148,7 +186,7 @@ export async function syncResumesFromGmail(campaignId: string) {
       }
 
       // Mark the email as READ so we don't process it again
-      await markGmailMessageAsRead(msg.id);
+      await markGmailMessageAsRead(gmail, msg.id);
     }
 
     revalidatePath(`/campaigns/${campaignId}`);
@@ -179,17 +217,6 @@ function buildScoresArray(
   }];
 }
 
-function normalizeStage(status: string): CandidateStage {
-  return (status === "new" ? "applied" : status) as CandidateStage;
-}
-
-async function parseAttachment(mimeType: string, fileBuffer: Buffer): Promise<string> {
-  if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-    return parseDocx(fileBuffer);
-  }
-  return parsePdf(fileBuffer);
-}
-
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
 
 export async function getCandidatesByCampaignId(campaignId: string): Promise<Candidate[]> {
@@ -210,7 +237,7 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       phone: app.candidates.phone,
       current_title: parsed?.experience?.[0]?.title || null,
       current_company: parsed?.experience?.[0]?.company || null,
-      stage: normalizeStage(app.status),
+      stage: toCandidateStage(app.status),
       awaiting_human_review: app.status === "screening_review_pending",
       scores: buildScoresArray(app, currentResumeRubricVersion),
       resume: {
@@ -248,7 +275,7 @@ export async function getCandidateById(applicationId: string) {
     phone: candidateRecord.phone,
     current_title: parsed?.experience?.[0]?.title || null,
     current_company: parsed?.experience?.[0]?.company || null,
-    stage: normalizeStage(data.status),
+    stage: toCandidateStage(data.status),
     // Raw canonical pipeline state — drives the StageChanger, which offers
     // legal next-states from APPLICATION_STATE_TRANSITIONS. `stage` above is
     // the coarse label kept for other UI; the two are intentionally distinct.
@@ -274,7 +301,7 @@ export async function updateCandidateStage(
   toState: string,
   rationale: string,
 ) {
-  await requireUserId();
+  const userId = await requireUserId();
   uuidSchema.parse(applicationId);
   const validState = applicationStateSchema.parse(toState);
   const validRationale = stageChangeRationaleSchema.parse(rationale);
@@ -284,7 +311,7 @@ export async function updateCandidateStage(
 
   await updateApplicationStage(applicationId, validState, validRationale);
 
-  await sendTransitionNotification(applicationId, validState);
+  await sendTransitionNotification(applicationId, validState, userId);
 
   if (campaignId) {
     revalidatePath(`/campaigns/${campaignId}`);
@@ -384,12 +411,38 @@ export async function decideHitlReview(input: {
     rationale: parsed.rationale,
   });
 
-  await sendTransitionNotification(parsed.applicationId, toState);
+  await sendTransitionNotification(parsed.applicationId, toState, userId);
+
+  // On approval, email the candidate their screening questions immediately so
+  // the recruiter doesn't have to remember a separate "send" step. The send
+  // re-checks ownership + eligibility and advances screening_approved →
+  // screening_sent on success. Degrade gracefully: a campaign with no
+  // questions configured (or any send failure) must NOT undo the approval —
+  // the candidate stays approved and the recruiter can send manually. The
+  // returned warning explains why no email went out.
+  let screeningEmailSent = false;
+  let screeningWarning: string | undefined;
+  if (parsed.decision === "approve") {
+    try {
+      await sendScreeningQuestionsToCandidate(parsed.applicationId);
+      screeningEmailSent = true;
+    } catch (err) {
+      screeningWarning =
+        err instanceof Error
+          ? err.message
+          : "Approved, but the screening questions could not be sent automatically.";
+    }
+  }
 
   revalidatePath(`/campaigns/${data.campaign_id}`);
   revalidatePath(`/campaigns/${data.campaign_id}/candidates/${parsed.applicationId}`);
 
-  return { success: true, decision: parsed.decision };
+  return {
+    success: true,
+    decision: parsed.decision,
+    screeningEmailSent,
+    screeningWarning,
+  };
 }
 
 /**
@@ -413,7 +466,7 @@ export async function scoreResume(applicationId: string) {
     if (scored) {
       const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
       await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
-      await sendTransitionNotification(applicationId, decision.toState);
+      await sendTransitionNotification(applicationId, decision.toState, userId);
     }
 
     revalidatePath(`/campaigns/${data.campaign_id}`);

@@ -12,6 +12,11 @@ export function HitlReviewPanel({ applicationId }: { applicationId: string }) {
   const [decision, setDecision] = useState<Decision | null>(null);
   const [rationale, setRationale] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Set when approval succeeded but the screening questions could NOT be
+  // auto-sent (e.g. the campaign has none configured). We pause on it so the
+  // recruiter sees the reason — the panel unmounts on refresh, so a transient
+  // toast would be lost.
+  const [warning, setWarning] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function open(d: Decision) {
@@ -27,16 +32,29 @@ export function HitlReviewPanel({ applicationId }: { applicationId: string }) {
     setError(null);
   }
 
+  function acknowledgeWarning() {
+    setWarning(null);
+    setDecision(null);
+    setRationale("");
+    router.refresh();
+  }
+
   function submit() {
     if (!decision) return;
     setError(null);
     startTransition(async () => {
       try {
-        await decideHitlReview({
+        const result = await decideHitlReview({
           applicationId,
           decision,
           rationale: rationale.trim(),
         });
+        // Approval that couldn't auto-send its questions: hold the modal open
+        // and show why, instead of silently refreshing into a half-done state.
+        if (decision === "approve" && result.screeningWarning) {
+          setWarning(result.screeningWarning);
+          return;
+        }
         setDecision(null);
         setRationale("");
         router.refresh();
@@ -94,59 +112,91 @@ export function HitlReviewPanel({ applicationId }: { applicationId: string }) {
         </button>
       </div>
 
-      <Modal open={decision !== null} onClose={close}>
-        <ModalHeader>
-          <h2 className="text-lg font-semibold text-[#0C4A6E]">
-            {isApprove ? "Approve for screening" : "Reject application"}
-          </h2>
-          <p className="text-sm text-[#6B7280] mt-1">
-            Add a short rationale. This is recorded on the audit trail.
-          </p>
-        </ModalHeader>
+      <Modal open={decision !== null} onClose={warning ? acknowledgeWarning : close}>
+        {warning ? (
+          <>
+            <ModalHeader>
+              <h2 className="text-lg font-semibold text-[#92400E]">
+                Approved — but no email was sent
+              </h2>
+              <p className="text-sm text-[#6B7280] mt-1">
+                The candidate is now approved for screening. The screening
+                questions could not be emailed automatically:
+              </p>
+            </ModalHeader>
 
-        <textarea
-          value={rationale}
-          onChange={(e) => setRationale(e.target.value)}
-          disabled={isPending}
-          rows={4}
-          placeholder={
-            isApprove
-              ? "e.g. Strong relevant experience; want to see screening answers."
-              : "e.g. Background does not match required stack; declining."
-          }
-          className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] outline-none resize-y"
-        />
+            <p className="text-sm text-[#B45309] bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-3">
+              {warning}
+            </p>
 
-        {error && (
-          <p className="text-xs text-[#DC2626] mt-2">{error}</p>
+            <ModalFooter>
+              <button
+                type="button"
+                onClick={acknowledgeWarning}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] transition-colors"
+              >
+                Got it
+              </button>
+            </ModalFooter>
+          </>
+        ) : (
+          <>
+            <ModalHeader>
+              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+                {isApprove ? "Approve for screening" : "Reject application"}
+              </h2>
+              <p className="text-sm text-[#6B7280] mt-1">
+                {isApprove
+                  ? "Approving emails the candidate their screening questions right away. Add a short rationale — it's recorded on the audit trail."
+                  : "Add a short rationale. This is recorded on the audit trail."}
+              </p>
+            </ModalHeader>
+
+            <textarea
+              value={rationale}
+              onChange={(e) => setRationale(e.target.value)}
+              disabled={isPending}
+              rows={4}
+              placeholder={
+                isApprove
+                  ? "e.g. Strong relevant experience; want to see screening answers."
+                  : "e.g. Background does not match required stack; declining."
+              }
+              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] outline-none resize-y"
+            />
+
+            {error && (
+              <p className="text-xs text-[#DC2626] mt-2">{error}</p>
+            )}
+
+            <ModalFooter>
+              <button
+                type="button"
+                onClick={close}
+                disabled={isPending}
+                className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={isPending || rationale.trim().length < 10}
+                className={`px-4 py-2 text-sm font-medium text-white rounded-lg cursor-pointer transition-colors disabled:opacity-50 ${
+                  isApprove
+                    ? "bg-[#059669] hover:bg-[#047857]"
+                    : "bg-[#DC2626] hover:bg-[#B91C1C]"
+                }`}
+              >
+                {isPending
+                  ? "Submitting..."
+                  : isApprove
+                    ? "Confirm approval"
+                    : "Confirm rejection"}
+              </button>
+            </ModalFooter>
+          </>
         )}
-
-        <ModalFooter>
-          <button
-            type="button"
-            onClick={close}
-            disabled={isPending}
-            className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={isPending || rationale.trim().length < 10}
-            className={`px-4 py-2 text-sm font-medium text-white rounded-lg cursor-pointer transition-colors disabled:opacity-50 ${
-              isApprove
-                ? "bg-[#059669] hover:bg-[#047857]"
-                : "bg-[#DC2626] hover:bg-[#B91C1C]"
-            }`}
-          >
-            {isPending
-              ? "Submitting..."
-              : isApprove
-                ? "Confirm approval"
-                : "Confirm rejection"}
-          </button>
-        </ModalFooter>
       </Modal>
     </div>
   );

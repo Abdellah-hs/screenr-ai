@@ -11,6 +11,7 @@ import {
   insertCampaignTx,
   updateCampaignTx,
   cloneCampaignTx,
+  fetchCampaignScoringConfig,
 } from "@/lib/data/campaigns";
 
 // ─── GET all campaigns ───────────────────────────────────────────────────────
@@ -25,6 +26,18 @@ export async function getCampaigns(): Promise<Campaign[]> {
 export async function getCampaignById(id: string): Promise<Campaign | null> {
   const userId = await requireUserId();
   return fetchCampaignById(id, userId);
+}
+
+// ─── Resume scoring criteria count ───────────────────────────────────────────
+// Resume scoring grades a CV against the campaign's active "resume" rubric
+// dimensions. Zero criteria → scoring is skipped (no score). The candidate UI
+// uses this to explain the absence of a score instead of failing silently.
+
+export async function getResumeCriteriaCount(campaignId: string): Promise<number> {
+  const userId = await requireUserId();
+  uuidSchema.parse(campaignId);
+  const config = await fetchCampaignScoringConfig(campaignId, userId);
+  return config?.screening_criteria.length ?? 0;
 }
 
 // ─── CREATE campaign ─────────────────────────────────────────────────────────

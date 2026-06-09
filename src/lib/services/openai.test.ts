@@ -329,6 +329,7 @@ describe("scoreResumeAgainstCriteria", () => {
 describe("extractResumeData", () => {
   function fullResume(overrides: Record<string, unknown> = {}) {
     return {
+      document_type: "cv",
       first_name: "Alice",
       last_name: "Smith",
       headline: "Senior Frontend Engineer",
@@ -371,6 +372,26 @@ describe("extractResumeData", () => {
     expect(result.email).toBe("alice@example.com");
     expect(result.skills).toEqual(["React", "TypeScript"]);
     expect(result.experience[0].company).toBe("Acme");
+  });
+
+  it("round-trips the document_type classification field", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume({ document_type: "motivation_letter" })));
+
+    const result = await extractResumeData("Dear hiring manager...");
+
+    expect(result.document_type).toBe("motivation_letter");
+  });
+
+  it("instructs the model to classify the document type up-front", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(fullResume()));
+
+    await extractResumeData("any resume");
+
+    const call = mockParse.mock.calls[0][0];
+    const systemMessage = call.messages.find((m: { role: string }) => m.role === "system");
+    expect(systemMessage.content).toContain("document_type");
+    expect(systemMessage.content).toContain("motivation_letter");
+    expect(systemMessage.content.toLowerCase()).toContain("classify");
   });
 
   it("round-trips the new headline / summary / languages / interests / certifications fields", async () => {

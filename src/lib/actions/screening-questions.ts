@@ -12,7 +12,9 @@ import {
   scoreAnswers,
 } from "@/lib/services/screening-questions";
 import { fetchCampaignScoringConfig, fetchActiveRubricVersion, verifyCampaignOwnership } from "@/lib/data/campaigns";
+import type { gmail_v1 } from "googleapis";
 import { sendEmail } from "@/lib/services/email";
+import { getRecruiterGmailClient } from "./gmail-sender";
 import { buildScreeningQuestionsEmail } from "@/lib/services/email-templates/screening-questions";
 import { signResponseToken } from "@/lib/auth/screening-token";
 import { requireUserId } from "@/lib/auth/guards";
@@ -107,6 +109,7 @@ export async function saveScreeningQuestions(
 const RESPONSE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 async function buildAndSendOne(params: {
+  gmail: gmail_v1.Gmail;
   applicationId: string;
   campaignTitle: string;
   candidateName: string;
@@ -115,6 +118,7 @@ async function buildAndSendOne(params: {
   origin: string;
 }): Promise<void> {
   const {
+    gmail,
     applicationId,
     campaignTitle,
     candidateName,
@@ -145,7 +149,7 @@ async function buildAndSendOne(params: {
     questionCount: questions.length,
   });
 
-  await sendEmail({
+  await sendEmail(gmail, {
     to: candidateEmail,
     subject,
     html,
@@ -218,8 +222,10 @@ export async function sendScreeningQuestionsToCandidate(
     );
   }
 
+  const gmail = await getRecruiterGmailClient(userId);
   const origin = await getOrigin();
   await buildAndSendOne({
+    gmail,
     applicationId: app.application_id,
     campaignTitle: app.campaign_title,
     candidateName: app.candidate_name,
@@ -365,7 +371,7 @@ export async function scoreScreeningAnswers(
         actor: "system",
         rationale: decision.rationale,
       });
-      await sendTransitionNotification(applicationId, decision.toState);
+      await sendTransitionNotification(applicationId, decision.toState, userId);
     } catch (err) {
       console.error(
         `Failed to transition ${applicationId} → ${decision.toState}:`,
@@ -411,6 +417,7 @@ export async function sendScreeningQuestionsBulk(
     return { sent: 0, failed: 0, errors: ["No candidates are ready to receive screening questions."] };
   }
 
+  const gmail = await getRecruiterGmailClient(userId);
   const origin = await getOrigin();
   let sent = 0;
   let failed = 0;
@@ -419,6 +426,7 @@ export async function sendScreeningQuestionsBulk(
   for (const app of applications) {
     try {
       await buildAndSendOne({
+        gmail,
         applicationId: app.application_id,
         campaignTitle: app.campaign_title,
         candidateName: app.candidate_name,
