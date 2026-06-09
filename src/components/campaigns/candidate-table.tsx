@@ -20,7 +20,7 @@ const tierColors: Record<string, string> = {
 };
 
 const stageLabels: Record<CandidateStage, string> = {
-  applied: "Applied",
+  applied: "New",
   screening: "Screening",
   interview: "Interview",
   final_interview: "Final Interview",
@@ -109,7 +109,7 @@ export default function CandidateTable({
         {(
           [
             { key: "all", label: "All" },
-            { key: "applied", label: "Applied" },
+            { key: "applied", label: "New" },
             ...(showPendingReview
               ? [{ key: "pending_review", label: "Pending review" }]
               : []),

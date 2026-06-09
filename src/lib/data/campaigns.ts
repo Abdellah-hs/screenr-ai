@@ -44,7 +44,7 @@ type SlaTimerInput = {
 };
 
 const DEFAULT_PIPELINE: PipelineStageCount[] = [
-  { name: "Applied", key: "applied", count: 0 },
+  { name: "New", key: "applied", count: 0 },
   { name: "Screening", key: "screening", count: 0 },
   { name: "Interview", key: "interview", count: 0 },
   { name: "Final Interview", key: "final_interview", count: 0 },

@@ -19,7 +19,7 @@ const statusColors: Record<string, string> = {
 };
 
 const pipelineStageKeys: { name: string; key: CandidateStage }[] = [
-  { name: "Applied", key: "applied" },
+  { name: "New", key: "applied" },
   { name: "Screening", key: "screening" },
   { name: "Interview", key: "interview" },
   { name: "Final Interview", key: "final_interview" },

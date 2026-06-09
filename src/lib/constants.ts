@@ -145,7 +145,7 @@ export const INTERVIEW_PERSONAS: { value: InterviewPersona; label: string; descr
 ];
 
 export const PIPELINE_STAGES: { name: string; key: string }[] = [
-  { name: "Applied", key: "applied" },
+  { name: "New", key: "applied" },
   { name: "Screening", key: "screening" },
   { name: "Interview", key: "interview" },
   { name: "Final Interview", key: "final_interview" },
@@ -210,7 +210,7 @@ export interface Candidate {
 // ─── Candidate Config ───────────────────────────────────────────────────────
 
 export const CANDIDATE_STAGES: { name: string; key: CandidateStage }[] = [
-  { name: "Applied", key: "applied" },
+  { name: "New", key: "applied" },
   { name: "Screening", key: "screening" },
   { name: "Interview", key: "interview" },
   { name: "Final Interview", key: "final_interview" },
