@@ -59,6 +59,59 @@ export async function fetchApplicationForScreeningSend(
   };
 }
 
+export interface ScreeningScoringContext {
+  campaign_id: string;
+  candidate_id: string;
+  owner_user_id: string;
+  description: string | null;
+  automation_mode: "fully_auto" | "human_in_loop";
+  screening_threshold: number;
+}
+
+/**
+ * Resolve everything the scorer needs from an `application_id` alone — the
+ * campaign's scoring config plus its owner — WITHOUT a user-session scope.
+ *
+ * The voice auto-scoring path runs inside the candidate's token-verified
+ * request, where there is no recruiter session; the verified screening token is
+ * the authorization, so this read is intentionally unscoped (the data layer
+ * carries no auth — that is the caller's job, per the layered contract). The
+ * recruiter-triggered path still uses the user-scoped `fetchCampaignScoringConfig`.
+ */
+export async function fetchScoringContextByApplicationId(
+  applicationId: string
+): Promise<ScreeningScoringContext | null> {
+  const supabase = await createClient();
+
+  const selectWithCampaign = `
+    candidate_id,
+    campaign_id,
+    campaigns!inner ( user_id, description, automation_mode, screening_threshold )
+  `;
+  const { data, error } = await supabase
+    .from("applications")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(selectWithCampaign as any)
+    .eq("id", applicationId)
+    .single();
+
+  if (error || !data) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = data as any;
+  const campaign = row.campaigns;
+  if (!campaign?.user_id) return null;
+
+  return {
+    campaign_id: row.campaign_id,
+    candidate_id: row.candidate_id,
+    owner_user_id: campaign.user_id,
+    description: campaign.description ?? null,
+    automation_mode: campaign.automation_mode,
+    screening_threshold: campaign.screening_threshold,
+  };
+}
+
 /**
  * All applications in a campaign that are ready to receive screening
  * questions: they've been resume-scored, they're still in an early stage,

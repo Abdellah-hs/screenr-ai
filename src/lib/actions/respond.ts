@@ -15,12 +15,14 @@ import {
 import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
+  fetchScoringContextByApplicationId,
   saveCandidateAnswers,
   saveVoiceTranscript,
   markScreeningResponseExpired,
   type ScreeningQuestionRow,
   type VoiceTranscriptTurn,
 } from "@/lib/data/screening-questions";
+import { runScreeningScoring } from "./score-screening-response";
 import {
   assertResponseIsOpen,
   assertResponseNotResubmitted,
@@ -215,6 +217,41 @@ async function tryTransition(
 }
 
 /**
+ * Best-effort auto-scoring right after a completed voice call — so a recruiter
+ * no longer has to click "Score answers". Runs in the candidate's token-verified
+ * request, where there is no recruiter session, so it resolves the campaign
+ * config + owner from the application alone. A failure must never surface to the
+ * candidate (they've already left): the transcript is persisted and the response
+ * stays `responded`, so a recruiter can still score manually. The advancement
+ * decision stays rule-driven inside `runScreeningScoring` (Control > AI > Data).
+ */
+async function autoScoreScreening(applicationId: string): Promise<void> {
+  try {
+    const ctx = await fetchScoringContextByApplicationId(applicationId);
+    if (!ctx?.description) {
+      console.warn(
+        `autoScoreScreening: skipping ${applicationId} — campaign has no job description to score against.`,
+      );
+      return;
+    }
+    await runScreeningScoring({
+      applicationId,
+      campaignId: ctx.campaign_id,
+      candidateId: ctx.candidate_id,
+      ownerUserId: ctx.owner_user_id,
+      description: ctx.description,
+      automation_mode: ctx.automation_mode,
+      screening_threshold: ctx.screening_threshold,
+    });
+  } catch (err) {
+    console.error(
+      `autoScoreScreening failed for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
  * Mint an ephemeral OpenAI Realtime session for a candidate to take their
  * voice screening on `/respond/[token]` (#83). The candidate-facing twin of
  * the recruiter-only `startScreeningPreviewSession`: gated on a verified
@@ -328,6 +365,11 @@ export async function submitVoiceScreening(input: {
     "screening_completed",
     "Candidate completed the voice screening call",
   );
+
+  // Score the call immediately — no recruiter click required. Best-effort and
+  // awaited so the score lands before the candidate's "done" screen; failures
+  // are logged, never surfaced (the recruiter can still score manually).
+  await autoScoreScreening(application_id);
 
   return { ok: true };
 }

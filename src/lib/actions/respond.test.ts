@@ -12,11 +12,16 @@ vi.mock("@/lib/data/candidates", () => ({
 vi.mock("@/lib/data/screening-questions", () => ({
   fetchScreeningQuestionsByCampaignId: vi.fn(),
   fetchScreeningResponseByApplicationId: vi.fn(),
+  fetchScoringContextByApplicationId: vi.fn(),
   saveCandidateAnswers: vi.fn(),
   saveVoiceTranscript: vi.fn(),
   markScreeningResponseExpired: vi.fn(),
 }));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplication: vi.fn() }));
+// Auto-scoring core is exercised by its own callers' tests; here we only assert
+// the voice submit path triggers it. (Also avoids the OpenAI client this module
+// instantiates at import.)
+vi.mock("./score-screening-response", () => ({ runScreeningScoring: vi.fn() }));
 // Partial mock: keep the real buildScreeningInstructions, stub the network call.
 vi.mock("@/lib/services/realtime", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/services/realtime")>()),
@@ -34,6 +39,7 @@ import { fetchApplicationForResponse } from "@/lib/data/candidates";
 import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
+  fetchScoringContextByApplicationId,
   saveVoiceTranscript,
   markScreeningResponseExpired,
   type ScreeningResponseRow,
@@ -41,6 +47,7 @@ import {
 } from "@/lib/data/screening-questions";
 import { transitionApplication } from "@/lib/data/transitions";
 import { createRealtimeSession } from "@/lib/services/realtime";
+import { runScreeningScoring } from "./score-screening-response";
 
 const mockCheckRateLimit = vi.mocked(checkRateLimit);
 const mockVerifyToken = vi.mocked(verifyResponseToken);
@@ -51,6 +58,17 @@ const mockSaveTranscript = vi.mocked(saveVoiceTranscript);
 const mockMarkExpired = vi.mocked(markScreeningResponseExpired);
 const mockTransition = vi.mocked(transitionApplication);
 const mockCreateSession = vi.mocked(createRealtimeSession);
+const mockFetchScoringContext = vi.mocked(fetchScoringContextByApplicationId);
+const mockRunScoring = vi.mocked(runScreeningScoring);
+
+const SCORING_CONTEXT = {
+  campaign_id: "camp-1",
+  candidate_id: "cand-1",
+  owner_user_id: "user-1",
+  description: "We need a backend engineer who can scale systems.",
+  automation_mode: "human_in_loop" as const,
+  screening_threshold: 70,
+};
 
 const APP_ID = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "tok_abcdefghij";
@@ -89,6 +107,8 @@ beforeEach(() => {
   mockFetchQuestions.mockResolvedValue([{ id: "q1", prompt: "Describe a scaling problem you solved.", is_required: true } as any]);
   mockCreateSession.mockResolvedValue(SESSION);
   mockTransition.mockResolvedValue(undefined);
+  mockFetchScoringContext.mockResolvedValue(SCORING_CONTEXT);
+  mockRunScoring.mockResolvedValue({ overall_score: 72 });
 });
 
 describe("startCandidateVoiceScreening", () => {
@@ -159,6 +179,35 @@ describe("submitVoiceScreening", () => {
 
     await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
     expect(mockSaveTranscript).toHaveBeenCalled();
+  });
+
+  it("auto-scores the call with the campaign's resolved config (no recruiter click)", async () => {
+    await submitVoiceScreening({ token: TOKEN, transcript });
+
+    expect(mockRunScoring).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: APP_ID,
+        campaignId: "camp-1",
+        candidateId: "cand-1",
+        ownerUserId: "user-1",
+        automation_mode: "human_in_loop",
+        screening_threshold: 70,
+      }),
+    );
+  });
+
+  it("still succeeds for the candidate when auto-scoring throws", async () => {
+    mockRunScoring.mockRejectedValue(new Error("OpenAI down"));
+
+    await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript);
+  });
+
+  it("skips auto-scoring when the campaign has no job description", async () => {
+    mockFetchScoringContext.mockResolvedValue({ ...SCORING_CONTEXT, description: null });
+
+    await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    expect(mockRunScoring).not.toHaveBeenCalled();
   });
 });
 

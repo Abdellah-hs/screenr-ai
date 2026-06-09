@@ -6,6 +6,9 @@ const mockResponseSelect = vi.fn();
 const mockSelectEq = vi.fn();
 const mockSelectMaybeSingle = vi.fn();
 const mockAuditInsert = vi.fn();
+const mockAppSelect = vi.fn();
+const mockAppEq = vi.fn();
+const mockAppSingle = vi.fn();
 const mockFrom = vi.fn();
 
 const mockSupabase = { from: mockFrom };
@@ -18,6 +21,7 @@ import {
   saveAnswerScores,
   saveVoiceTranscript,
   markScreeningResponseExpired,
+  fetchScoringContextByApplicationId,
   type VoiceTranscriptTurn,
 } from "./screening-questions";
 
@@ -44,11 +48,29 @@ beforeEach(() => {
 
   mockAuditInsert.mockResolvedValue({ error: null });
 
+  // applications join chain: from("applications").select(...).eq("id", id).single()
+  mockAppSelect.mockReturnValue({ eq: mockAppEq });
+  mockAppEq.mockReturnValue({ single: mockAppSingle });
+  mockAppSingle.mockResolvedValue({
+    data: {
+      candidate_id: "cand-1",
+      campaign_id: "camp-1",
+      campaigns: {
+        user_id: "user-1",
+        description: "We need a backend engineer who can scale systems.",
+        automation_mode: "human_in_loop",
+        screening_threshold: 70,
+      },
+    },
+    error: null,
+  });
+
   mockFrom.mockImplementation((table: string) => {
     if (table === "screening_question_responses") {
       return { update: mockResponseUpdate, select: mockResponseSelect };
     }
     if (table === "ai_audit_log") return { insert: mockAuditInsert };
+    if (table === "applications") return { select: mockAppSelect };
     throw new Error(`Unexpected supabase.from(${table})`);
   });
 });
@@ -200,6 +222,38 @@ describe("saveVoiceTranscript", () => {
     await expect(saveVoiceTranscript("app-1", transcript)).rejects.toThrow(
       /Failed to save voice transcript: RLS denied/,
     );
+  });
+});
+
+describe("fetchScoringContextByApplicationId", () => {
+  it("flattens the application + campaign join into a scoring context", async () => {
+    const ctx = await fetchScoringContextByApplicationId("app-1");
+
+    expect(mockFrom).toHaveBeenCalledWith("applications");
+    expect(mockAppEq).toHaveBeenCalledWith("id", "app-1");
+    expect(ctx).toEqual({
+      campaign_id: "camp-1",
+      candidate_id: "cand-1",
+      owner_user_id: "user-1",
+      description: "We need a backend engineer who can scale systems.",
+      automation_mode: "human_in_loop",
+      screening_threshold: 70,
+    });
+  });
+
+  it("returns null when the application is not found", async () => {
+    mockAppSingle.mockResolvedValueOnce({ data: null, error: { message: "no rows" } });
+
+    expect(await fetchScoringContextByApplicationId("missing")).toBeNull();
+  });
+
+  it("returns null when the joined campaign has no owner", async () => {
+    mockAppSingle.mockResolvedValueOnce({
+      data: { candidate_id: "cand-1", campaign_id: "camp-1", campaigns: { user_id: null } },
+      error: null,
+    });
+
+    expect(await fetchScoringContextByApplicationId("app-1")).toBeNull();
   });
 });
 

@@ -7,13 +7,9 @@ import {
   uuidSchema,
   screeningQuestionsArraySchema,
 } from "@/lib/validations";
-import {
-  generateQuestionsForRole,
-  scoreAnswers,
-  scoreTranscript,
-} from "@/lib/services/screening-questions";
-import { analyzeTranscriptCadence } from "@/lib/screening/transcript-cadence";
-import { fetchCampaignScoringConfig, fetchActiveRubricVersion, verifyCampaignOwnership } from "@/lib/data/campaigns";
+import { generateQuestionsForRole } from "@/lib/services/screening-questions";
+import { fetchCampaignScoringConfig, verifyCampaignOwnership } from "@/lib/data/campaigns";
+import { runScreeningScoring } from "./score-screening-response";
 import type { gmail_v1 } from "googleapis";
 import { sendEmail } from "@/lib/services/email";
 import { getRecruiterGmailClient } from "./gmail-sender";
@@ -22,11 +18,7 @@ import { signResponseToken } from "@/lib/auth/screening-token";
 import { requireUserId } from "@/lib/auth/guards";
 import type { ApplicationState } from "@/lib/constants";
 import { transitionApplication } from "@/lib/data/transitions";
-import { sendTransitionNotification } from "./transition-notifications";
-import {
-  assertEligibleForScreeningSend,
-  evaluateScreeningScoringOutcome,
-} from "@/lib/rules/screening-response";
+import { assertEligibleForScreeningSend } from "@/lib/rules/screening-response";
 import {
   fetchScreeningQuestionsByCampaignId,
   replaceScreeningQuestions,
@@ -34,7 +26,6 @@ import {
   fetchApplicationForScreeningSend,
   fetchApplicationsReadyForScreeningSend,
   fetchScreeningResponseByApplicationId,
-  saveAnswerScores,
   type ScreeningQuestionRow,
   type ScreeningResponseRow,
 } from "@/lib/data/screening-questions";
@@ -294,9 +285,8 @@ export async function scoreScreeningAnswers(
     windowMs: 5 * 60 * 1000,
   });
 
-  const [response, questions, config] = await Promise.all([
+  const [response, config] = await Promise.all([
     fetchScreeningResponseByApplicationId(applicationId),
-    fetchScreeningQuestionsByCampaignId(app.campaign_id),
     fetchCampaignScoringConfig(app.campaign_id, userId),
   ]);
 
@@ -313,116 +303,17 @@ export async function scoreScreeningAnswers(
     throw new Error("Campaign is missing a job description — can't score without context.");
   }
 
-  const answerInputs = (response.answers ?? []).map((a) => ({
-    question_id: a.question_id,
-    answer_text: a.answer_text ?? "",
-  }));
-
-  // Voice screening (#84) persists a spoken transcript instead of typed
-  // answers; a non-empty transcript means this was a voice call. The two
-  // modalities differ only in how the AI score is produced — everything below
-  // (persistence + the decision rule) is identical.
-  const transcript = response.transcript ?? [];
-  const isVoice = transcript.length > 0;
-  const questionsForScoring = questions.map((q) => ({
-    id: q.id,
-    prompt: q.prompt,
-    is_required: q.is_required,
-  }));
-
-  const [evidence, rubricVersion] = await Promise.all([
-    isVoice
-      ? scoreTranscript({
-          jobDescription: config.description,
-          questions: questionsForScoring,
-          transcript,
-        })
-      : scoreAnswers({
-          jobDescription: config.description,
-          questions: questionsForScoring,
-          answers: answerInputs,
-        }),
-    fetchActiveRubricVersion(app.campaign_id, "screening_q"),
-  ]);
-
-  // Soft "reads-as-scripted" cadence signal (#84): evidence for the recruiter,
-  // NEVER an input to the advancement decision below (Control > AI > Data).
-  // Pure + cheap, so computed unconditionally; only surfaced for voice.
-  const cadence = analyzeTranscriptCadence(transcript);
-
-  const inputSnapshot = isVoice
-    ? {
-        modality: "voice",
-        question_count: questions.length,
-        question_ids: questions.map((q) => q.id),
-        transcript_turns: transcript.length,
-        cadence_signal: {
-          scripted_signal: cadence.scripted_signal,
-          median_response_seconds: cadence.median_response_seconds,
-          measured_responses: cadence.measured_responses,
-          rationale: cadence.rationale,
-        },
-        job_description_length: config.description.length,
-      }
-    : {
-        modality: "text",
-        question_count: questions.length,
-        question_ids: questions.map((q) => q.id),
-        answered_count: answerInputs.filter((a) => a.answer_text.trim().length > 0).length,
-        job_description_length: config.description.length,
-      };
-
-  await saveAnswerScores({
+  // The scoring itself (AI evidence + rule-driven transitions) is shared with
+  // the candidate-triggered voice auto-score — see `runScreeningScoring`.
+  return runScreeningScoring({
     applicationId,
     campaignId: app.campaign_id,
     candidateId: app.candidate_id,
-    overall: { score: evidence.result.overall_score, rationale: evidence.result.overall_rationale },
-    perAnswer: evidence.result.answers,
-    rubricVersion,
-    audit: {
-      model: evidence.model,
-      promptVersion: evidence.promptVersion,
-      rawOutput: evidence.rawOutput,
-      inputSnapshot,
-    },
+    ownerUserId: userId,
+    description: config.description,
+    automation_mode: config.automation_mode,
+    screening_threshold: config.screening_threshold,
   });
-
-  // Rule layer decides the chain of transitions from the persisted score
-  // evidence + campaign config. HITL stops at screening_scored; auto-mode
-  // chains through to interview_scheduling (pass) or rejected (fail).
-  // Best-effort: scores are durable; if a transition fails we stop the
-  // chain (subsequent steps would be illegal from a stuck state) and let
-  // the recruiter advance manually.
-  const decisions = evaluateScreeningScoringOutcome(
-    { overall_score: evidence.result.overall_score },
-    {
-      automation_mode: config.automation_mode,
-      screening_threshold: config.screening_threshold,
-    },
-  );
-
-  for (const decision of decisions) {
-    try {
-      await transitionApplication({
-        applicationId,
-        toState: decision.toState,
-        actor: "system",
-        rationale: decision.rationale,
-      });
-      await sendTransitionNotification(applicationId, decision.toState, userId);
-    } catch (err) {
-      console.error(
-        `Failed to transition ${applicationId} → ${decision.toState}:`,
-        err instanceof Error ? err.message : err,
-      );
-      break;
-    }
-  }
-
-  revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
-  revalidatePath(`/campaigns/${app.campaign_id}`);
-
-  return { overall_score: evidence.result.overall_score };
 }
 
 /**
