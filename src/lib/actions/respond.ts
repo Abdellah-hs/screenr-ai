@@ -253,9 +253,8 @@ async function autoScoreScreening(applicationId: string): Promise<void> {
 
 /**
  * Mint an ephemeral OpenAI Realtime session for a candidate to take their
- * voice screening on `/respond/[token]` (#83). The candidate-facing twin of
- * the recruiter-only `startScreeningPreviewSession`: gated on a verified
- * screening token (candidates have no account) and IP-rate-limited.
+ * voice screening on `/respond/[token]` (#83). Gated on a verified screening
+ * token (candidates have no account) and IP-rate-limited.
  *
  * Lazy expiry: if the deadline has passed, the response is expired and the
  * application transitioned to `screening_expired` rather than minting a call.
