@@ -767,7 +767,6 @@ export type Database = {
         | "processing_failed"
         | "rejected"
         | "hired"
-        | "withdrawn"
         | "archived"
       dimension_importance_enum: "high" | "medium" | "low"
       interview_persona_enum:
@@ -935,7 +934,6 @@ export const Constants = {
         "processing_failed",
         "rejected",
         "hired",
-        "withdrawn",
         "archived",
       ],
       dimension_importance_enum: ["high", "medium", "low"],

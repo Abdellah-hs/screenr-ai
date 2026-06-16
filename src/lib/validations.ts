@@ -143,7 +143,6 @@ const applicationStateValues = [
   "processing_failed",
   "rejected",
   "hired",
-  "withdrawn",
   "archived",
 ] as const;
 export const applicationStateSchema = z.enum(applicationStateValues);

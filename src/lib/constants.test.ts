@@ -124,10 +124,9 @@ describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
     }
   });
 
-  it("treats terminal failure and withdrawal states as Rejected for the funnel", () => {
+  it("treats terminal failure states as Rejected for the funnel", () => {
     for (const state of [
       "rejected",
-      "withdrawn",
       "screening_expired",
       "interview_no_show",
       "processing_failed",

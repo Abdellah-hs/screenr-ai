@@ -170,7 +170,7 @@ Every failure path is explicit — never silent.
 - `screening_expired` — candidate missed the response window
 - `interview_no_show` — candidate didn't attend
 - `processing_failed` — pipeline error (parse, score, etc.)
-- `rejected` | `withdrawn` — terminal non-hires
+- `rejected` — terminal non-hire
 - `hired` — terminal success
 - `archived` — the only state all the above can transition into
 

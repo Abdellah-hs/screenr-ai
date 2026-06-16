@@ -271,7 +271,6 @@ export type ApplicationState =
   // Terminal
   | "rejected"
   | "hired"
-  | "withdrawn"
   | "archived";
 
 /**
@@ -289,26 +288,25 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
     "screening_approved",
     "processing_failed",
     "rejected",
-    "withdrawn",
   ],
 
   // Canonical screening track
-  screening_review_pending: ["screening_approved", "rejected", "withdrawn"],
-  screening_approved: ["screening_sent", "rejected", "withdrawn"],
-  screening_sent: ["screening_completed", "screening_expired", "rejected", "withdrawn"],
-  screening_completed: ["screening_scored", "processing_failed", "rejected", "withdrawn"],
-  screening_scored: ["interview_scheduling", "rejected", "withdrawn"],
+  screening_review_pending: ["screening_approved", "rejected"],
+  screening_approved: ["screening_sent", "rejected"],
+  screening_sent: ["screening_completed", "screening_expired", "rejected"],
+  screening_completed: ["screening_scored", "processing_failed", "rejected"],
+  screening_scored: ["interview_scheduling", "rejected"],
 
   // Canonical interview track
-  interview_scheduling: ["interview_scheduled", "rejected", "withdrawn"],
-  interview_scheduled: ["interview_completed", "interview_no_show", "rejected", "withdrawn"],
-  interview_completed: ["interview_scored", "processing_failed", "rejected", "withdrawn"],
-  interview_scored: ["reference_check", "manager_review", "rejected", "withdrawn"],
+  interview_scheduling: ["interview_scheduled", "rejected"],
+  interview_scheduled: ["interview_completed", "interview_no_show", "rejected"],
+  interview_completed: ["interview_scored", "processing_failed", "rejected"],
+  interview_scored: ["reference_check", "manager_review", "rejected"],
 
   // Post-interview
-  reference_check: ["manager_review", "rejected", "withdrawn"],
-  manager_review: ["final_interview_scheduling", "hired", "rejected", "withdrawn"],
-  final_interview_scheduling: ["hired", "rejected", "withdrawn"],
+  reference_check: ["manager_review", "rejected"],
+  manager_review: ["final_interview_scheduling", "hired", "rejected"],
+  final_interview_scheduling: ["hired", "rejected"],
 
   // Failure states — observable dead-ends, archived is the only exit.
   screening_expired: ["archived"],
@@ -318,7 +316,6 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   // Terminal — only `archived` is reachable from them (for housekeeping).
   rejected: ["archived"],
   hired: ["archived"],
-  withdrawn: ["archived"],
   archived: [],
 };
 
@@ -338,8 +335,8 @@ export type TransitionActor = "system" | "ai" | "recruiter";
  *     that they need action; approval moves them to **Screening**.
  *   - Post-interview states (`manager_review`, `final_interview_scheduling`)
  *     map to **Final Interview** — the HR + manager final round before Hired.
- *   - Failure / withdrawn / archived states map to **Rejected**: they're out
- *     of the active funnel and the coarse model has no dedicated bucket.
+ *   - Failure / archived states map to **Rejected**: they're out of the active
+ *     funnel and the coarse model has no dedicated bucket.
  */
 export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> = {
   new: "applied",
@@ -362,7 +359,6 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   hired: "hired",
 
   rejected: "rejected",
-  withdrawn: "rejected",
   screening_expired: "rejected",
   interview_no_show: "rejected",
   processing_failed: "rejected",
