@@ -83,17 +83,15 @@ const RubricResponseSchema = z.object({
   interview: z.array(RubricDimensionAiSchema),
 });
 
-const ScoreTierSchema = z.enum(["strong", "moderate", "weak", "no_match"]);
-
 const ScoreFactorAiSchema = z.object({
   name: z.string(),
-  weight: z.number(),
   score: z.number(),
 });
 
+// The AI is asked ONLY for per-criterion scores + rationale. The overall score
+// and tier are derived in code (see weightedOverall / tierFromScore) so they are
+// an objective function of the evidence, not the model's own arithmetic.
 const ResumeScoreResponseSchema = z.object({
-  overall_score: z.number(),
-  tier: ScoreTierSchema,
   rationale: z.string(),
   factors: z.array(ScoreFactorAiSchema),
 });
@@ -340,7 +338,12 @@ Rules:
 }
 
 export const RESUME_SCORING_MODEL = "gpt-4o-mini";
-export const RESUME_SCORING_PROMPT_VERSION = "v1_resume_scoring";
+export const RESUME_SCORING_PROMPT_VERSION = "v2_resume_scoring";
+
+// Fixed seed so repeated scoring of the same resume is reproducible. Combined
+// with temperature 0, this anchors the model toward the same per-factor scores
+// run-to-run (best-effort — OpenAI does not guarantee bit-identical output).
+export const RESUME_SCORING_SEED = 7;
 
 export interface ResumeScoringEvidence {
   result: ResumeScoreResult;
@@ -361,6 +364,47 @@ export type ResumeScoringCriterion = {
   is_mandatory: boolean;
   min_score: number;
 };
+
+/**
+ * Deterministic weighted aggregate of per-criterion factor scores, using the
+ * recruiter's criteria weights (the source of truth) rather than the model's
+ * arithmetic. Factors are index-aligned to criteria per the prompt contract;
+ * any unmatched trailing factor or criterion is ignored. Falls back to a plain
+ * mean when the matched criteria weights sum to zero.
+ */
+function weightedOverall(
+  factorScores: number[],
+  criteria: ResumeScoringCriterion[],
+): number {
+  const n = Math.min(factorScores.length, criteria.length);
+  if (n === 0) return 0;
+
+  let weighted = 0;
+  let totalWeight = 0;
+  let plainSum = 0;
+  for (let i = 0; i < n; i++) {
+    weighted += factorScores[i] * criteria[i].weight;
+    totalWeight += criteria[i].weight;
+    plainSum += factorScores[i];
+  }
+
+  if (totalWeight <= 0) return Math.round(plainSum / n);
+  return Math.round(weighted / totalWeight);
+}
+
+/**
+ * Pure tier classification from a 0–100 overall score. Mirrors the bands the
+ * scoring prompt used to ask the model to apply — now derived in code so the
+ * tier is an objective function of the score. The mandatory-criteria knockout
+ * is NOT applied here: that is a rule-layer decision (see
+ * `evaluateResumeScoringOutcome`), kept out of this advisory tier label.
+ */
+function tierFromScore(score: number): ResumeScoreResult["tier"] {
+  if (score >= 75) return "strong";
+  if (score >= 50) return "moderate";
+  if (score >= 25) return "weak";
+  return "no_match";
+}
 
 /**
  * AI-scores a parsed resume against a campaign's resume-rubric dimensions.
@@ -388,28 +432,20 @@ export async function scoreResumeAgainstCriteria(
 
   const completion = await openai.chat.completions.parse({
     model: RESUME_SCORING_MODEL,
-    temperature: 0.2,
+    temperature: 0,
+    seed: RESUME_SCORING_SEED,
     messages: [
       {
         role: "system",
         content: `You are an expert ATS (Applicant Tracking System) resume screener. You evaluate resumes against specific screening criteria for a job posting.
 
-Score the resume against EACH criterion on a 0-100 scale, then compute a weighted overall score.
-
-Classify the candidate into a tier based on the overall score:
-- "strong": 75-100 (excellent fit)
-- "moderate": 50-74 (potential fit, worth reviewing)
-- "weak": 25-49 (poor fit on most criteria)
-- "no_match": 0-24 (does not meet basic requirements)
-
-IMPORTANT: If a candidate scores below a mandatory criterion's stated "min pass score", the maximum tier is "weak" regardless of overall score.
+Score the resume against EACH criterion on a 0-100 scale. Do NOT compute an overall score, a weighted total, or a tier — those are derived downstream from your per-criterion scores. Your job is only to score each criterion and explain your reasoning.
 
 Rules:
-- overall_score must equal the weighted sum of factor scores (rounded to nearest integer)
-- Each factor score is 0-100
+- Each factor score is an integer 0-100
 - factors array must have one entry per screening criterion, in the same order
 - rationale must reference specific resume details (skills, experience, education)
-- Be objective and fair — score based on evidence in the resume, not assumptions`,
+- Be objective and fair — score based on evidence in the resume, not assumptions. The same resume against the same criteria must always receive the same scores.`,
       },
       {
         role: "user",
@@ -442,15 +478,24 @@ ${JSON.stringify(parsedResume, null, 2)}`,
 
   const parsed = message.parsed;
 
+  // Attach the recruiter's criteria weight to each factor (index-aligned to the
+  // criteria per the prompt contract) and clamp/round the model's raw scores.
+  const factors = parsed.factors.map((f, i) => ({
+    name: f.name,
+    weight: screeningCriteria[i]?.weight ?? 0,
+    score: Math.max(0, Math.min(100, Math.round(f.score))),
+  }));
+
+  const overall_score = weightedOverall(
+    factors.map((f) => f.score),
+    screeningCriteria,
+  );
+
   const result: ResumeScoreResult = {
-    overall_score: Math.max(0, Math.min(100, Math.round(parsed.overall_score))),
-    tier: parsed.tier,
+    overall_score,
+    tier: tierFromScore(overall_score),
     rationale: parsed.rationale || "No rationale provided.",
-    factors: parsed.factors.map((f) => ({
-      name: f.name,
-      weight: f.weight,
-      score: Math.max(0, Math.min(100, Math.round(f.score))),
-    })),
+    factors,
   };
 
   return {

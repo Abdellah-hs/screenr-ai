@@ -26,7 +26,7 @@ function formatStateLabel(state: ApplicationState): string {
 /** Chip colour by state category — negative outcomes red, hired green, idle grey, in-progress sky. */
 function stateTone(state: ApplicationState): string {
   if (state === "hired") return "text-[#059669] bg-[#ECFDF5] border-[#A7F3D0]";
-  if (state === "rejected" || state === "withdrawn" || FAILURE_STATES.includes(state)) {
+  if (state === "rejected" || FAILURE_STATES.includes(state)) {
     return "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]";
   }
   if (state === "new" || state === "archived") {

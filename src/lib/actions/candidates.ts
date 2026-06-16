@@ -63,7 +63,20 @@ import type { Database } from "@/types/database.types";
 
 type ApplicationRow = Database["public"]["Tables"]["applications"]["Row"];
 type CandidateRow = Database["public"]["Tables"]["candidates"]["Row"];
-type ApplicationWithCandidate = ApplicationRow & { candidates: CandidateRow };
+type ScreeningResponseScoreRow = Pick<
+  Database["public"]["Tables"]["screening_question_responses"]["Row"],
+  "overall_score" | "overall_rationale" | "scored_at" | "rubric_version" | "status"
+>;
+type ApplicationWithCandidate = ApplicationRow & {
+  candidates: CandidateRow;
+  // The embedded screening response. `screening_question_responses` has a
+  // UNIQUE(application_id), so PostgREST returns a single object (or null) for
+  // this one-to-one embed — not an array. Typed permissively to tolerate both.
+  screening_question_responses:
+    | ScreeningResponseScoreRow
+    | ScreeningResponseScoreRow[]
+    | null;
+};
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
 
 /**
@@ -218,30 +231,73 @@ export async function syncResumesFromGmail(campaignId: string) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * Builds the per-stage score array — one entry per stage that has produced a
+ * score, in pipeline order (resume → screening → …). Each stage's score is
+ * independent evidence (CLAUDE.md "Independent Stage Scores"); there is no
+ * rollup. The resume score lives on the application row; the screening score
+ * lives on the joined screening_question_responses row (it is only included
+ * once that response has been scored).
+ */
 function buildScoresArray(
   row: Pick<ApplicationRow, "resume_score" | "screening_tier" | "score_rationale" | "score_factors" | "scored_at" | "created_at" | "rubric_version">,
   currentResumeRubricVersion: number | null,
+  screeningResponse: ScreeningResponseScoreRow | null,
+  currentScreeningRubricVersion: number | null,
 ): CandidateScore[] {
-  if (row.resume_score == null) return [];
-  return [{
-    stage: "resume",
-    overall: Number(row.resume_score),
-    tier: (row.screening_tier as ScreeningTier | null) || undefined,
-    ai_summary: row.score_rationale || "Scored by AI",
-    factors: (row.score_factors as ScoreFactor[] | null) || [],
-    scored_at: row.scored_at || row.created_at,
-    rubric_version: row.rubric_version,
-    current_rubric_version: currentResumeRubricVersion,
-  }];
+  const scores: CandidateScore[] = [];
+
+  if (row.resume_score != null) {
+    scores.push({
+      stage: "resume",
+      overall: Number(row.resume_score),
+      tier: (row.screening_tier as ScreeningTier | null) || undefined,
+      ai_summary: row.score_rationale || "Scored by AI",
+      factors: (row.score_factors as ScoreFactor[] | null) || [],
+      scored_at: row.scored_at || row.created_at,
+      rubric_version: row.rubric_version,
+      current_rubric_version: currentResumeRubricVersion,
+    });
+  }
+
+  if (screeningResponse?.status === "scored" && screeningResponse.overall_score != null) {
+    scores.push({
+      stage: "screening",
+      overall: Number(screeningResponse.overall_score),
+      ai_summary: screeningResponse.overall_rationale || "Scored by AI",
+      factors: [],
+      scored_at: screeningResponse.scored_at || row.created_at,
+      rubric_version: screeningResponse.rubric_version,
+      current_rubric_version: currentScreeningRubricVersion,
+    });
+  }
+
+  return scores;
+}
+
+/**
+ * The scored screening response for an application, if any. Tolerates the embed
+ * arriving as a single object (the one-to-one case PostgREST actually returns)
+ * or an array, and only counts a response that has reached the `scored` status.
+ */
+function scoredScreeningResponse(
+  responses: ScreeningResponseScoreRow | ScreeningResponseScoreRow[] | null,
+): ScreeningResponseScoreRow | null {
+  if (!responses) return null;
+  const response = Array.isArray(responses)
+    ? responses.find((r) => r.status === "scored") ?? null
+    : responses;
+  return response?.status === "scored" ? response : null;
 }
 
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
 
 export async function getCandidatesByCampaignId(campaignId: string): Promise<Candidate[]> {
   const userId = await requireUserId();
-  const [data, currentResumeRubricVersion] = await Promise.all([
+  const [data, currentResumeRubricVersion, currentScreeningRubricVersion] = await Promise.all([
     fetchCandidatesByCampaignId(campaignId, userId),
     fetchActiveRubricVersion(campaignId, "resume"),
+    fetchActiveRubricVersion(campaignId, "screening_q"),
   ]);
   if (!data) return [];
 
@@ -257,7 +313,12 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       current_company: parsed?.experience?.[0]?.company || null,
       stage: toCandidateStage(app.status),
       awaiting_human_review: app.status === "screening_review_pending",
-      scores: buildScoresArray(app, currentResumeRubricVersion),
+      scores: buildScoresArray(
+        app,
+        currentResumeRubricVersion,
+        scoredScreeningResponse(app.screening_question_responses),
+        currentScreeningRubricVersion,
+      ),
       resume: {
         skills: parsed?.skills || [],
         experience_years: parsed?.experience?.length || 0,
@@ -280,9 +341,10 @@ export async function getCandidateById(applicationId: string) {
   // Generate signed URL for resume if path exists, and look up the
   // currently-active resume rubric version so the UI can flag scores
   // produced under a stale rubric.
-  const [resumeSignedUrl, currentResumeRubricVersion] = await Promise.all([
+  const [resumeSignedUrl, currentResumeRubricVersion, currentScreeningRubricVersion] = await Promise.all([
     data.resume_url ? getResumeSignedUrl(data.resume_url) : Promise.resolve(null),
     fetchActiveRubricVersion(data.campaign_id, "resume"),
+    fetchActiveRubricVersion(data.campaign_id, "screening_q"),
   ]);
 
   return {
@@ -300,7 +362,12 @@ export async function getCandidateById(applicationId: string) {
     status: data.status as ApplicationState,
     awaiting_human_review: data.status === "screening_review_pending",
     screening_tier: data.screening_tier || null,
-    scores: buildScoresArray(data, currentResumeRubricVersion),
+    scores: buildScoresArray(
+      data,
+      currentResumeRubricVersion,
+      scoredScreeningResponse(data.screening_question_responses),
+      currentScreeningRubricVersion,
+    ),
     applied_at: data.created_at,
     resume_url: resumeSignedUrl || "",
     resume: {

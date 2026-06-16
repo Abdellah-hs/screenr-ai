@@ -7,6 +7,7 @@ import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
 import type { Campaign } from "@/lib/constants";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
+import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
 
 export default function EditCampaignPage({
   params,
@@ -212,6 +213,16 @@ export default function EditCampaignPage({
         {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor initialRubrics={campaign.rubrics} campaignId={campaign.id} />
+        </div>
+
+        {/* AI Interview Availability */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <InterviewAvailabilityEditor
+            initialRules={campaign.interview_availability_rules}
+            initialSlotMinutes={campaign.interview_slot_minutes}
+            initialTimezone={campaign.interview_timezone}
+            initialHorizonDays={campaign.interview_booking_horizon_days}
+          />
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">

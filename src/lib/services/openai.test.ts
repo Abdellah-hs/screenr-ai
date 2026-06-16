@@ -15,6 +15,7 @@ import {
   generateScreeningCriteria,
   generateRubricDimensions,
   scoreResumeAgainstCriteria,
+  RESUME_SCORING_SEED,
 } from "./openai";
 
 function parsedResponse(parsed: unknown, refusal: string | null = null) {
@@ -219,23 +220,42 @@ describe("scoreResumeAgainstCriteria", () => {
     };
   }
 
-  it("clamps overall_score to the 0..100 range", async () => {
+  it("computes overall_score as the weighted mean of factor scores, ignoring the model's own arithmetic", async () => {
+    // factors 90/65 with criteria weights 0.6/0.4 → 0.6*90 + 0.4*65 = 80,
+    // regardless of the (deliberately wrong) overall_score the model returned.
     mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 142 })));
 
-    const high = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(high.result.overall_score).toBe(100);
+    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
 
-    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: -30 })));
-
-    const low = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(low.result.overall_score).toBe(0);
+    expect(result.result.overall_score).toBe(80);
   });
 
-  it("rounds non-integer overall_score to the nearest integer", async () => {
-    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 72.6 })));
+  it("rounds the weighted mean to the nearest integer", async () => {
+    // 0.6*70 + 0.4*72 = 42 + 28.8 = 70.8 → 71
+    mockParse.mockResolvedValueOnce(
+      parsedResponse(
+        scorePayload({
+          factors: [
+            { name: "React", score: 70 },
+            { name: "Tests", score: 72 },
+          ],
+        }),
+      ),
+    );
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.result.overall_score).toBe(73);
+
+    expect(result.result.overall_score).toBe(71);
+  });
+
+  it("scores at temperature 0 with a fixed seed so the same resume is reproducible", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload()));
+
+    await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
+
+    const call = mockParse.mock.calls[0][0];
+    expect(call.temperature).toBe(0);
+    expect(call.seed).toBe(RESUME_SCORING_SEED);
   });
 
   it("clamps and rounds factor scores", async () => {
@@ -255,13 +275,16 @@ describe("scoreResumeAgainstCriteria", () => {
     expect(result.result.factors.map((f) => f.score)).toEqual([100, 0, 47]);
   });
 
-  it("forwards the AI's tier verbatim, even when it disagrees with the score range", async () => {
+  it("derives the tier from the computed score, ignoring any tier the model emits", async () => {
+    // factors 90/65 → computed overall 80 → "strong", even though the model
+    // claimed "weak". Tier is an objective function of the score, not a guess.
     mockParse.mockResolvedValueOnce(
-      parsedResponse(scorePayload({ tier: "weak", overall_score: 90 })),
+      parsedResponse(scorePayload({ tier: "weak", overall_score: 12 })),
     );
 
     const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.result.tier).toBe("weak");
+
+    expect(result.result.tier).toBe("strong");
   });
 
   it("falls back to a default rationale when the AI returns an empty string", async () => {
@@ -272,15 +295,15 @@ describe("scoreResumeAgainstCriteria", () => {
   });
 
   it("returns audit evidence (rawOutput, model, promptVersion) alongside the normalized result", async () => {
-    const payload = scorePayload({ overall_score: 60 });
+    const payload = scorePayload();
     mockParse.mockResolvedValueOnce(parsedResponse(payload));
 
     const evidence = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
 
     expect(evidence.rawOutput).toBe(JSON.stringify(payload));
     expect(evidence.model).toBe("gpt-4o-mini");
-    expect(evidence.promptVersion).toBe("v1_resume_scoring");
-    expect(evidence.result.overall_score).toBe(60);
+    expect(evidence.promptVersion).toBe("v2_resume_scoring");
+    expect(evidence.result.overall_score).toBe(80);
   });
 
   it("forwards the job description, criteria, and parsed resume into the prompt", async () => {

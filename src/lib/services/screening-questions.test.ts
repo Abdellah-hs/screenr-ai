@@ -175,6 +175,26 @@ describe("scoreTranscript", () => {
     expect(evidence.result.answers.map((a) => a.score)).toEqual([100, 0]);
   });
 
+  it("scores a transcript with no candidate speech as zero, without calling the model", async () => {
+    // Interviewer asked the questions; the candidate never spoke. Scoring this
+    // must be a deterministic zero, never an AI call (the model fabricates
+    // answers for a silent call).
+    const interviewerOnly: VoiceTranscriptTurn[] = [
+      { role: "agent", text: "Walk me through a hard system design.", at: "2026-06-03T10:00:00.000Z" },
+      { role: "agent", text: "What's your debugging approach?", at: "2026-06-03T10:01:00.000Z" },
+    ];
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: interviewerOnly,
+    });
+
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(evidence.result.overall_score).toBe(0);
+    expect(evidence.result.answers.map((a) => a.score)).toEqual([0, 0]);
+  });
+
   it("throws when OPENAI_API_KEY is not configured", async () => {
     delete process.env.OPENAI_API_KEY;
 

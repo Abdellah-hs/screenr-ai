@@ -101,7 +101,6 @@ describe("assertEligibleForScreeningSend", () => {
     "final_interview_scheduling",
     "rejected",
     "hired",
-    "withdrawn",
     "archived",
   ];
 

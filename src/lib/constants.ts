@@ -75,6 +75,26 @@ export interface SlaTimer {
   escalation_threshold_hours: number;
 }
 
+// One weekly AI-interview availability rule (PRD 3.5.6). `weekday` is
+// 0=Sunday..6=Saturday (matching JS Date.getDay()); times are minutes from
+// midnight in the campaign's `interview_timezone`.
+export interface InterviewAvailabilityRule {
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+}
+
+// Weekday labels indexed by `InterviewAvailabilityRule.weekday`.
+export const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
 export interface PipelineStageCount {
   name: string;
   key: string;
@@ -98,6 +118,11 @@ export interface Campaign {
   rubrics: EvaluationRubric[];
   reviewers: CampaignReviewer[];
   sla_timers: SlaTimer[];
+  // AI-interview availability config (PRD 3.5.6).
+  interview_slot_minutes: number | null;
+  interview_timezone: string | null;
+  interview_booking_horizon_days: number;
+  interview_availability_rules: InterviewAvailabilityRule[];
   pipeline: PipelineStageCount[];
   user_id: string;
   created_at: string;
@@ -271,7 +296,6 @@ export type ApplicationState =
   // Terminal
   | "rejected"
   | "hired"
-  | "withdrawn"
   | "archived";
 
 /**
@@ -289,26 +313,25 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
     "screening_approved",
     "processing_failed",
     "rejected",
-    "withdrawn",
   ],
 
   // Canonical screening track
-  screening_review_pending: ["screening_approved", "rejected", "withdrawn"],
-  screening_approved: ["screening_sent", "rejected", "withdrawn"],
-  screening_sent: ["screening_completed", "screening_expired", "rejected", "withdrawn"],
-  screening_completed: ["screening_scored", "processing_failed", "rejected", "withdrawn"],
-  screening_scored: ["interview_scheduling", "rejected", "withdrawn"],
+  screening_review_pending: ["screening_approved", "rejected"],
+  screening_approved: ["screening_sent", "rejected"],
+  screening_sent: ["screening_completed", "screening_expired", "rejected"],
+  screening_completed: ["screening_scored", "processing_failed", "rejected"],
+  screening_scored: ["interview_scheduling", "rejected"],
 
   // Canonical interview track
-  interview_scheduling: ["interview_scheduled", "rejected", "withdrawn"],
-  interview_scheduled: ["interview_completed", "interview_no_show", "rejected", "withdrawn"],
-  interview_completed: ["interview_scored", "processing_failed", "rejected", "withdrawn"],
-  interview_scored: ["reference_check", "manager_review", "rejected", "withdrawn"],
+  interview_scheduling: ["interview_scheduled", "rejected"],
+  interview_scheduled: ["interview_completed", "interview_no_show", "rejected"],
+  interview_completed: ["interview_scored", "processing_failed", "rejected"],
+  interview_scored: ["reference_check", "manager_review", "rejected"],
 
   // Post-interview
-  reference_check: ["manager_review", "rejected", "withdrawn"],
-  manager_review: ["final_interview_scheduling", "hired", "rejected", "withdrawn"],
-  final_interview_scheduling: ["hired", "rejected", "withdrawn"],
+  reference_check: ["manager_review", "rejected"],
+  manager_review: ["final_interview_scheduling", "hired", "rejected"],
+  final_interview_scheduling: ["hired", "rejected"],
 
   // Failure states — observable dead-ends, archived is the only exit.
   screening_expired: ["archived"],
@@ -318,7 +341,6 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   // Terminal — only `archived` is reachable from them (for housekeeping).
   rejected: ["archived"],
   hired: ["archived"],
-  withdrawn: ["archived"],
   archived: [],
 };
 
@@ -338,8 +360,8 @@ export type TransitionActor = "system" | "ai" | "recruiter";
  *     that they need action; approval moves them to **Screening**.
  *   - Post-interview states (`manager_review`, `final_interview_scheduling`)
  *     map to **Final Interview** — the HR + manager final round before Hired.
- *   - Failure / withdrawn / archived states map to **Rejected**: they're out
- *     of the active funnel and the coarse model has no dedicated bucket.
+ *   - Failure / archived states map to **Rejected**: they're out of the active
+ *     funnel and the coarse model has no dedicated bucket.
  */
 export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> = {
   new: "applied",
@@ -362,7 +384,6 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   hired: "hired",
 
   rejected: "rejected",
-  withdrawn: "rejected",
   screening_expired: "rejected",
   interview_no_show: "rejected",
   processing_failed: "rejected",
@@ -376,5 +397,32 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
  */
 export function toCandidateStage(status: string): CandidateStage {
   return APPLICATION_STAGE_BUCKET[status as ApplicationState] ?? "applied";
+}
+
+// Which score stage a pipeline stage should display. Stages that don't produce
+// a score of their own (interview scoring isn't built yet; final_interview is a
+// human round; hired/rejected are terminal) map to null → the cell is blank.
+const STAGE_SCORE_FOR: Record<CandidateStage, CandidateScore["stage"] | null> = {
+  applied: "resume",
+  screening: "screening",
+  interview: "interview",
+  final_interview: null,
+  hired: null,
+  rejected: null,
+};
+
+/**
+ * The score to surface for a candidate in the pipeline: strictly the score for
+ * their CURRENT stage. Returns null when that stage hasn't produced a score yet
+ * (the cell shows "—") — we never fall back to an earlier stage's score, so a
+ * resume score can't appear in a screening/interview row. Stage-specific by
+ * design (see "Independent Stage Scores" in CLAUDE.md).
+ */
+export function pipelineDisplayScore(
+  candidate: Pick<Candidate, "stage" | "scores">,
+): CandidateScore | null {
+  const target = STAGE_SCORE_FOR[candidate.stage];
+  if (!target) return null;
+  return candidate.scores.find((s) => s.stage === target) ?? null;
 }
 

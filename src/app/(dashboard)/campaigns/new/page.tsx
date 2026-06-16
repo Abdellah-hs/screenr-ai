@@ -7,6 +7,7 @@ import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
 import TeamReviewersEditor from "@/components/campaigns/team-reviewers-editor";
+import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
 
 export default function NewCampaignPage() {
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +169,11 @@ export default function NewCampaignPage() {
         {/* SLA Timers */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <SlaTimersEditor />
+        </div>
+
+        {/* AI Interview Availability */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <InterviewAvailabilityEditor />
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">

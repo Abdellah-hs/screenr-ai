@@ -314,7 +314,10 @@ export type Database = {
           department: string | null
           description: string
           id: string
+          interview_booking_horizon_days: number
           interview_persona: Database["public"]["Enums"]["interview_persona_enum"]
+          interview_slot_minutes: number | null
+          interview_timezone: string | null
           location: string | null
           positions: number
           screening_threshold: number
@@ -333,7 +336,10 @@ export type Database = {
           department?: string | null
           description?: string
           id?: string
+          interview_booking_horizon_days?: number
           interview_persona?: Database["public"]["Enums"]["interview_persona_enum"]
+          interview_slot_minutes?: number | null
+          interview_timezone?: string | null
           location?: string | null
           positions?: number
           screening_threshold?: number
@@ -352,7 +358,10 @@ export type Database = {
           department?: string | null
           description?: string
           id?: string
+          interview_booking_horizon_days?: number
           interview_persona?: Database["public"]["Enums"]["interview_persona_enum"]
+          interview_slot_minutes?: number | null
+          interview_timezone?: string | null
           location?: string | null
           positions?: number
           screening_threshold?: number
@@ -530,6 +539,44 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      interview_availability_rules: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          end_minute: number
+          id: string
+          start_minute: number
+          updated_at: string
+          weekday: number
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          end_minute: number
+          id?: string
+          start_minute: number
+          updated_at?: string
+          weekday: number
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          end_minute?: number
+          id?: string
+          start_minute?: number
+          updated_at?: string
+          weekday?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interview_availability_rules_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       rubric_dimensions: {
         Row: {
@@ -767,7 +814,6 @@ export type Database = {
         | "processing_failed"
         | "rejected"
         | "hired"
-        | "withdrawn"
         | "archived"
       dimension_importance_enum: "high" | "medium" | "low"
       interview_persona_enum:
@@ -935,7 +981,6 @@ export const Constants = {
         "processing_failed",
         "rejected",
         "hired",
-        "withdrawn",
         "archived",
       ],
       dimension_importance_enum: ["high", "medium", "low"],

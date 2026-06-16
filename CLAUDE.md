@@ -124,7 +124,7 @@ new
 → reference_check              (optional)
 → manager_review
 → final_interview_scheduling
-→ hired | rejected | withdrawn | archived
+→ hired | rejected | archived
 ```
 
 Explicit failure states (never silent): `screening_expired`, `interview_no_show`, `processing_failed`, `archived`.
@@ -175,7 +175,7 @@ ELSE:
 
 ### Disposition Codes
 
-Every terminal transition (`rejected`, `withdrawn`, `archived`) requires a structured disposition `{ code, description }`. Allowed codes include: `LOW_SCORE`, `FAILED_INTERVIEW`, `NO_SHOW`, `WITHDRAWN`, `EXPIRED`, `OVERRIDE_REJECTED`.
+Every terminal transition (`rejected`, `archived`) requires a structured disposition `{ code, description }`. Allowed codes include: `LOW_SCORE`, `FAILED_INTERVIEW`, `NO_SHOW`, `EXPIRED`, `OVERRIDE_REJECTED`.
 
 ### Manual Override Rules
 

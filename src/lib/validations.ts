@@ -20,6 +20,11 @@ export const campaignFormSchema = z.object({
   // Address applicants send CVs to (a plus-alias of the connected inbox). The
   // resume sync filters Gmail on this; null means "not set" (campaign can't sync).
   application_email: z.email("Enter a valid email address").max(254).nullable(),
+  // AI-interview availability config (PRD 3.5.6). Slots are generated from the
+  // weekly availabilityRules; these are the campaign-level knobs.
+  interview_slot_minutes: z.number().int().min(5).max(240).nullable(),
+  interview_timezone: z.string().max(64).nullable(),
+  interview_booking_horizon_days: z.number().int().min(1).max(90),
 });
 
 export const screeningCriterionSchema = z.object({
@@ -60,6 +65,19 @@ export const reviewerSchema = z.object({
   role: z.enum(["lead", "reviewer", "observer"]),
 });
 
+// One weekly AI-interview availability rule. weekday 0=Sunday..6=Saturday;
+// times are minutes-from-midnight in the campaign's interview_timezone.
+export const availabilityRuleSchema = z
+  .object({
+    weekday: z.number().int().min(0).max(6),
+    start_minute: z.number().int().min(0).max(1439),
+    end_minute: z.number().int().min(1).max(1440),
+  })
+  .refine((r) => r.end_minute > r.start_minute, {
+    message: "End time must be after start time",
+    path: ["end_minute"],
+  });
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
@@ -68,6 +86,8 @@ export const reviewerSchema = z.object({
 export function parseCampaignFormData(formData: FormData) {
   const rawPositions = parseInt(formData.get("positions") as string);
   const rawThreshold = parseInt(formData.get("screening_threshold") as string);
+  const rawSlotMinutes = parseInt(formData.get("interview_slot_minutes") as string);
+  const rawHorizon = parseInt(formData.get("interview_booking_horizon_days") as string);
 
   const data = campaignFormSchema.parse({
     title: formData.get("title") as string,
@@ -81,6 +101,9 @@ export function parseCampaignFormData(formData: FormData) {
     screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
     application_email: (formData.get("application_email") as string)?.trim() || null,
+    interview_slot_minutes: Number.isNaN(rawSlotMinutes) ? null : rawSlotMinutes,
+    interview_timezone: (formData.get("interview_timezone") as string)?.trim() || null,
+    interview_booking_horizon_days: Number.isNaN(rawHorizon) ? 14 : rawHorizon,
   });
 
   // Parse related JSON data with validation. Resume scoring criteria live in
@@ -101,7 +124,12 @@ export function parseCampaignFormData(formData: FormData) {
     z.array(reviewerSchema)
   );
 
-  return { ...data, rubrics, slaTimers, reviewers };
+  const availabilityRules = safeParseJsonArray(
+    formData.get("availability_rules_json") as string,
+    z.array(availabilityRuleSchema)
+  );
+
+  return { ...data, rubrics, slaTimers, reviewers, availabilityRules };
 }
 
 function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
@@ -143,7 +171,6 @@ const applicationStateValues = [
   "processing_failed",
   "rejected",
   "hired",
-  "withdrawn",
   "archived",
 ] as const;
 export const applicationStateSchema = z.enum(applicationStateValues);
@@ -208,10 +235,16 @@ export const voiceScreeningSubmissionSchema = z.object({
   token: z.string().min(10).max(2000),
   // A finished call always has at least one turn; an empty transcript is a
   // capture failure and is reported via the failure action, not submitted here.
+  // A transcript of only the interviewer's questions (no candidate speech) is
+  // also rejected: there is nothing to score, and scoring absence makes the AI
+  // fabricate answers — the candidate must re-record instead.
   transcript: z
     .array(voiceTranscriptTurnSchema)
     .min(1, "No transcript was captured for this call.")
-    .max(500, "Transcript is too long"),
+    .max(500, "Transcript is too long")
+    .refine((turns) => turns.some((t) => t.role === "candidate"), {
+      message: "The call didn't capture any spoken answers — please re-record.",
+    }),
 });
 
 // ─── HITL Screening Review ──────────────────────────────────────────────────

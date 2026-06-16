@@ -204,6 +204,34 @@ function normalizeScoringResult(content: string): AnswerScoringResult {
 }
 
 /**
+ * Deterministic zero-score evidence for a voice call in which the candidate
+ * never spoke. We do NOT ask the model to score an absence: given a transcript
+ * of only the interviewer's questions, gpt-4o-mini fabricates plausible answers
+ * (it was observed inventing 50–60/100 rationales for a silent call). A call
+ * with no candidate speech is, objectively, a zero — so we record that in code
+ * without an OpenAI round-trip, fully reproducible and traceable.
+ */
+function noCandidateSpeechEvidence(
+  questions: { id: string }[],
+): AnswerScoringEvidence {
+  return {
+    result: {
+      overall_score: 0,
+      overall_rationale:
+        "No spoken response was captured in this call — the candidate did not answer any questions.",
+      answers: questions.map((q) => ({
+        question_id: q.id,
+        score: 0,
+        rationale: "No spoken response was captured for this question.",
+      })),
+    },
+    rawOutput: JSON.stringify({ skipped: "no_candidate_speech" }),
+    model: SCREENING_SCORING_MODEL,
+    promptVersion: SCREENING_VOICE_SCORING_PROMPT_VERSION,
+  };
+}
+
+/**
  * AI-scores a candidate's voice-screening call (#84) against the screening
  * questions, reading the spoken transcript instead of typed answers.
  *
@@ -219,11 +247,18 @@ export async function scoreTranscript(params: {
   questions: { id: string; prompt: string; is_required: boolean }[];
   transcript: VoiceTranscriptTurn[];
 }): Promise<AnswerScoringEvidence> {
+  const { jobDescription, questions, transcript } = params;
+
+  // Never feed the model a transcript with no candidate turns — it scores the
+  // absence by hallucinating answers. This is the authoritative backstop for
+  // every scoring path (recruiter re-score AND the auto-score on completion).
+  if (!transcript.some((t) => t.role === "candidate")) {
+    return noCandidateSpeechEvidence(questions);
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
-
-  const { jobDescription, questions, transcript } = params;
 
   const questionList = questions
     .map((q) => `- [${q.id}]${q.is_required ? " (required)" : ""} ${q.prompt}`)

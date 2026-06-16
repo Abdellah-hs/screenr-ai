@@ -2,7 +2,13 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import type { AutomationMode, Candidate, CandidateStage } from "@/lib/constants";
+import { pipelineDisplayScore } from "@/lib/constants";
+import type {
+  AutomationMode,
+  Candidate,
+  CandidateScore,
+  CandidateStage,
+} from "@/lib/constants";
 
 const stageColors: Record<CandidateStage, string> = {
   applied: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
@@ -30,10 +36,14 @@ const stageLabels: Record<CandidateStage, string> = {
 
 type SortField = "name" | "applied_at" | "score";
 
-function getLatestScore(candidate: Candidate) {
-  if (candidate.scores.length === 0) return null;
-  return candidate.scores[candidate.scores.length - 1];
-}
+// Short tags shown next to the score so a number is never mistaken for a stage
+// it didn't come from (the pipeline used to always show the resume score). The
+// stage-selection logic lives in pipelineDisplayScore (constants.ts).
+const scoreStageTag: Record<CandidateScore["stage"], string> = {
+  resume: "Resume",
+  screening: "Screening",
+  interview: "Interview",
+};
 
 export default function CandidateTable({
   candidates,
@@ -70,6 +80,14 @@ export default function CandidateTable({
   const effectiveFilter =
     stageFilter === "pending_review" && !showPendingReview ? "all" : stageFilter;
 
+  // The "All" view is a mixed-stage lookup list, so a single Score column would
+  // be comparing scores across different stages — hide it there. It appears
+  // only when a specific stage (or pending review) is selected, where every
+  // visible row shares the same stage and the scores are comparable.
+  const showScore = effectiveFilter !== "all";
+  const effectiveSort: SortField =
+    !showScore && sortBy === "score" ? "applied_at" : sortBy;
+
   const filtered = useMemo(() => {
     return candidates
       .filter((c) => {
@@ -90,17 +108,17 @@ export default function CandidateTable({
         return true;
       })
       .sort((a, b) => {
-        if (sortBy === "name") return a.name.localeCompare(b.name);
-        if (sortBy === "score") {
-          const sa = getLatestScore(a)?.overall ?? 0;
-          const sb = getLatestScore(b)?.overall ?? 0;
+        if (effectiveSort === "name") return a.name.localeCompare(b.name);
+        if (effectiveSort === "score") {
+          const sa = pipelineDisplayScore(a)?.overall ?? 0;
+          const sb = pipelineDisplayScore(b)?.overall ?? 0;
           return sb - sa;
         }
         return (
           new Date(b.applied_at).getTime() - new Date(a.applied_at).getTime()
         );
       });
-  }, [candidates, search, effectiveFilter, sortBy]);
+  }, [candidates, search, effectiveFilter, effectiveSort]);
 
   return (
     <div className="space-y-4">
@@ -170,13 +188,13 @@ export default function CandidateTable({
         </div>
 
         <select
-          value={sortBy}
+          value={effectiveSort}
           onChange={(e) => setSortBy(e.target.value as SortField)}
           className="bg-white border border-[#E5E7EB] text-[#111827] text-sm rounded-lg px-3 py-2 outline-none focus:border-[#2563EB] w-full sm:w-auto"
         >
           <option value="applied_at">Sort by Newest</option>
           <option value="name">Sort A-Z</option>
-          <option value="score">Sort by Score</option>
+          {showScore && <option value="score">Sort by Score</option>}
         </select>
       </div>
 
@@ -215,9 +233,11 @@ export default function CandidateTable({
                   <th scope="col" className="px-6 py-4">
                     Stage
                   </th>
-                  <th scope="col" className="px-6 py-4">
-                    Score
-                  </th>
+                  {showScore && (
+                    <th scope="col" className="px-6 py-4">
+                      Score
+                    </th>
+                  )}
                   <th scope="col" className="px-6 py-4">
                     Applied
                   </th>
@@ -226,7 +246,7 @@ export default function CandidateTable({
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
                 {filtered.map((candidate) => {
-                  const latestScore = getLatestScore(candidate);
+                  const stageScore = showScore ? pipelineDisplayScore(candidate) : null;
                   return (
                     <tr
                       key={candidate.id}
@@ -268,26 +288,31 @@ export default function CandidateTable({
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        {latestScore ? (
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-[#111827]">
-                              {latestScore.overall}
-                            </span>
-                            {latestScore.tier && (
-                              <span
-                                className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full capitalize ${
-                                  tierColors[latestScore.tier]
-                                }`}
-                              >
-                                {latestScore.tier}
+                      {showScore && (
+                        <td className="px-6 py-4">
+                          {stageScore ? (
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-[#111827]">
+                                {stageScore.overall}
                               </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[#9CA3AF]">—</span>
-                        )}
-                      </td>
+                              <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-[#F3F4F6] text-[#6B7280]">
+                                {scoreStageTag[stageScore.stage]}
+                              </span>
+                              {stageScore.tier && (
+                                <span
+                                  className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full capitalize ${
+                                    tierColors[stageScore.tier]
+                                  }`}
+                                >
+                                  {stageScore.tier}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[#9CA3AF]">—</span>
+                          )}
+                        </td>
+                      )}
                       <td className="px-6 py-4 text-[#4B5563]">
                         {new Date(candidate.applied_at).toLocaleDateString(
                           "en-US",

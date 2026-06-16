@@ -325,9 +325,11 @@ async function expireScreeningResponse(applicationId: string): Promise<void> {
  * transcript and advance `screening_sent → screening_completed`. The
  * recruiter's scoring action (#84) reads the transcript from here.
  *
- * Token-gated + IP-rate-limited, mirroring `submitScreeningAnswers`. An empty
- * transcript is rejected by the schema — a no-transcript call is a capture
- * failure and goes through `reportVoiceScreeningFailure` instead.
+ * Token-gated + IP-rate-limited, mirroring `submitScreeningAnswers`. The schema
+ * rejects a transcript that is empty OR has no candidate speech (interviewer
+ * questions only) — a call the candidate never answered has nothing to score
+ * and must be re-recorded; a hard capture failure goes through
+ * `reportVoiceScreeningFailure` instead.
  */
 export async function submitVoiceScreening(input: {
   token: string;

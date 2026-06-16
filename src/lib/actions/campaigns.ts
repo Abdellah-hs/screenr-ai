@@ -50,7 +50,9 @@ export async function createCampaign(formData: FormData) {
     title, description, department, positions, status, deadline, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
     interview_persona: interviewPersona, application_email: applicationEmail,
-    rubrics, slaTimers, reviewers
+    interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
+    interview_booking_horizon_days: interviewBookingHorizonDays,
+    rubrics, slaTimers, reviewers, availabilityRules
   } = parseCampaignFormData(formData);
 
   const campaignId = await insertCampaignTx(
@@ -66,10 +68,14 @@ export async function createCampaign(formData: FormData) {
       screening_threshold: screeningThreshold,
       interview_persona: interviewPersona,
       application_email: applicationEmail,
+      interview_slot_minutes: interviewSlotMinutes,
+      interview_timezone: interviewTimezone,
+      interview_booking_horizon_days: interviewBookingHorizonDays,
     },
     rubrics,
     slaTimers,
     reviewers,
+    availabilityRules,
     userId
   );
 
@@ -88,7 +94,9 @@ export async function updateCampaign(id: string, formData: FormData) {
     title, description, department, positions, status, deadline, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
     interview_persona: interviewPersona, application_email: applicationEmail,
-    rubrics, slaTimers
+    interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
+    interview_booking_horizon_days: interviewBookingHorizonDays,
+    rubrics, slaTimers, availabilityRules
   } = parseCampaignFormData(formData);
 
   await updateCampaignTx(
@@ -105,9 +113,13 @@ export async function updateCampaign(id: string, formData: FormData) {
       screening_threshold: screeningThreshold,
       interview_persona: interviewPersona,
       application_email: applicationEmail,
+      interview_slot_minutes: interviewSlotMinutes,
+      interview_timezone: interviewTimezone,
+      interview_booking_horizon_days: interviewBookingHorizonDays,
     },
     rubrics,
     slaTimers,
+    availabilityRules,
     userId
   );
 
