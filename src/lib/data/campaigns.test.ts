@@ -13,8 +13,31 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve({ from: mockFrom })),
 }));
 
-import { dimensionsEqual, fetchCampaignApplicationEmail } from "./campaigns";
+import { dimensionsEqual, fetchCampaignApplicationEmail, mapAvailabilityRows } from "./campaigns";
 import type { DimensionImportance } from "@/lib/constants";
+
+type AvailabilityRow = {
+  id: string;
+  campaign_id: string;
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+  created_at: string;
+  updated_at: string;
+};
+
+function availabilityRow(overrides: Partial<AvailabilityRow> = {}): AvailabilityRow {
+  return {
+    id: "rule-1",
+    campaign_id: "camp-1",
+    weekday: 1,
+    start_minute: 540,
+    end_minute: 1020,
+    created_at: "2026-06-16T00:00:00.000Z",
+    updated_at: "2026-06-16T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 type Intent = {
   name: string;
@@ -103,5 +126,32 @@ describe("fetchCampaignApplicationEmail", () => {
     mockSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
 
     expect(await fetchCampaignApplicationEmail("camp-1", "user-1")).toBeNull();
+  });
+});
+
+describe("mapAvailabilityRows", () => {
+  it("maps rows to the domain shape (weekday + minutes only)", () => {
+    const result = mapAvailabilityRows([availabilityRow()]);
+
+    expect(result).toEqual([{ weekday: 1, start_minute: 540, end_minute: 1020 }]);
+  });
+
+  it("sorts by weekday, then by start time within a day", () => {
+    const result = mapAvailabilityRows([
+      availabilityRow({ weekday: 3, start_minute: 600 }),
+      availabilityRow({ weekday: 1, start_minute: 780 }),
+      availabilityRow({ weekday: 1, start_minute: 540 }),
+    ]);
+
+    expect(result.map((r) => [r.weekday, r.start_minute])).toEqual([
+      [1, 540],
+      [1, 780],
+      [3, 600],
+    ]);
+  });
+
+  it("returns an empty array for undefined or empty input", () => {
+    expect(mapAvailabilityRows(undefined)).toEqual([]);
+    expect(mapAvailabilityRows([])).toEqual([]);
   });
 });

@@ -8,6 +8,7 @@ import type {
   DimensionImportance,
   CampaignReviewer,
   SlaTimer,
+  InterviewAvailabilityRule,
   PipelineStageCount,
 } from "@/lib/constants";
 import { deriveDimensionFields } from "@/lib/rubric-weights";
@@ -19,6 +20,7 @@ type EvaluationRubricRow = Database["public"]["Tables"]["evaluation_rubrics"]["R
 type RubricDimensionRow = Database["public"]["Tables"]["rubric_dimensions"]["Row"];
 type CampaignReviewerRow = Database["public"]["Tables"]["campaign_reviewers"]["Row"];
 type SlaTimerRow = Database["public"]["Tables"]["sla_timers"]["Row"];
+type AvailabilityRuleRow = Database["public"]["Tables"]["interview_availability_rules"]["Row"];
 
 // Recruiter intent only — weight/min_score/max_score are derived on write
 // via deriveDimensionFields (issue #77).
@@ -42,6 +44,11 @@ type SlaTimerInput = {
   alert_threshold_hours: number;
   escalation_threshold_hours: number;
 };
+type AvailabilityRuleInput = {
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+};
 
 const DEFAULT_PIPELINE: PipelineStageCount[] = [
   { name: "New", key: "applied", count: 0 },
@@ -55,7 +62,8 @@ function assembleCampaign(
   row: Record<string, unknown>,
   rubrics: EvaluationRubric[],
   reviewers: CampaignReviewer[],
-  slaTimers: SlaTimer[]
+  slaTimers: SlaTimer[],
+  availabilityRules: InterviewAvailabilityRule[]
 ): Campaign {
   return {
     id: row.id as string,
@@ -74,6 +82,10 @@ function assembleCampaign(
     rubrics,
     reviewers,
     sla_timers: slaTimers,
+    interview_slot_minutes: (row.interview_slot_minutes as number) ?? null,
+    interview_timezone: (row.interview_timezone as string) || null,
+    interview_booking_horizon_days: (row.interview_booking_horizon_days as number) ?? 14,
+    interview_availability_rules: availabilityRules,
     pipeline: DEFAULT_PIPELINE,
     user_id: row.user_id as string,
     created_at: row.created_at as string,
@@ -106,18 +118,20 @@ export async function fetchAllCampaigns(userId: string): Promise<Campaign[]> {
 
   const campaignIds = rows.map((r) => r.id);
 
-  const [rubricsRes, dimensionsRes, reviewersRes, slaRes] =
+  const [rubricsRes, dimensionsRes, reviewersRes, slaRes, availabilityRes] =
     await Promise.all([
       supabase.from("evaluation_rubrics").select("*").in("campaign_id", campaignIds).eq("is_active", true),
       supabase.from("rubric_dimensions").select("*").is("deleted_at", null),
       supabase.from("campaign_reviewers").select("*").in("campaign_id", campaignIds),
       supabase.from("sla_timers").select("*").in("campaign_id", campaignIds),
+      supabase.from("interview_availability_rules").select("*").in("campaign_id", campaignIds),
     ]);
 
   const rubricsByC = groupBy(rubricsRes.data || [], "campaign_id");
   const dimensionsByR = groupBy(dimensionsRes.data || [], "rubric_id");
   const reviewersByC = groupBy(reviewersRes.data || [], "campaign_id");
   const slaByC = groupBy(slaRes.data || [], "campaign_id");
+  const availabilityByC = groupBy(availabilityRes.data || [], "campaign_id");
 
   return rows.map((row) => {
     const rubrics = ((rubricsByC[row.id] || []) as EvaluationRubricRow[]).map((r) => ({
@@ -157,8 +171,22 @@ export async function fetchAllCampaigns(userId: string): Promise<Campaign[]> {
       escalation_threshold_hours: s.escalation_threshold_hours,
     }));
 
-    return assembleCampaign(row as unknown as Record<string, unknown>, rubrics, reviewers, slaTimers);
+    const availabilityRules = mapAvailabilityRows(availabilityByC[row.id]);
+
+    return assembleCampaign(row as unknown as Record<string, unknown>, rubrics, reviewers, slaTimers, availabilityRules);
   });
+}
+
+/** Map raw availability rows to the domain type, sorted weekday → start time.
+ *  Exported for unit testing. */
+export function mapAvailabilityRows(rows: AvailabilityRuleRow[] | undefined): InterviewAvailabilityRule[] {
+  return (rows ?? [])
+    .map((r) => ({
+      weekday: r.weekday,
+      start_minute: r.start_minute,
+      end_minute: r.end_minute,
+    }))
+    .sort((a, b) => a.weekday - b.weekday || a.start_minute - b.start_minute);
 }
 
 // ─── GET single campaign
@@ -175,10 +203,11 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
 
   if (error || !row) return null;
 
-  const [rubricsRes, reviewersRes, slaRes] = await Promise.all([
+  const [rubricsRes, reviewersRes, slaRes, availabilityRes] = await Promise.all([
     supabase.from("evaluation_rubrics").select("*").eq("campaign_id", id).eq("is_active", true),
     supabase.from("campaign_reviewers").select("*").eq("campaign_id", id),
     supabase.from("sla_timers").select("*").eq("campaign_id", id),
+    supabase.from("interview_availability_rules").select("*").eq("campaign_id", id),
   ]);
 
   const rubricIds = (rubricsRes.data || []).map((r) => r.id);
@@ -225,7 +254,9 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
     escalation_threshold_hours: s.escalation_threshold_hours,
   }));
 
-  return assembleCampaign(row as unknown as Record<string, unknown>, rubrics, reviewers, slaTimers);
+  const availabilityRules = mapAvailabilityRows(availabilityRes.data ?? undefined);
+
+  return assembleCampaign(row as unknown as Record<string, unknown>, rubrics, reviewers, slaTimers, availabilityRules);
 }
 
 /**
@@ -457,6 +488,7 @@ export async function insertCampaignTx(
   rubrics: RubricInput[],
   slaTimers: SlaTimerInput[],
   reviewers: ReviewerInput[],
+  availabilityRules: AvailabilityRuleInput[],
   userId: string
 ): Promise<string> {
   const supabase = await createClient();
@@ -524,6 +556,18 @@ export async function insertCampaignTx(
     );
   }
 
+  // 5b. Insert AI-interview availability rules
+  if (availabilityRules.length > 0) {
+    await supabase.from("interview_availability_rules").insert(
+      availabilityRules.map((a) => ({
+        campaign_id: campaign.id,
+        weekday: a.weekday,
+        start_minute: a.start_minute,
+        end_minute: a.end_minute,
+      }))
+    );
+  }
+
   // 6. Write audit log entry
   await supabase.from("campaign_audit_log").insert({
     campaign_id: campaign.id,
@@ -542,6 +586,7 @@ export async function updateCampaignTx(
   payload: CampaignUpdate,
   rubrics: RubricInput[],
   slaTimers: { stage: string; time_limit_hours: number; alert_threshold_hours: number; escalation_threshold_hours: number }[],
+  availabilityRules: AvailabilityRuleInput[],
   userId: string
 ): Promise<void> {
   const supabase = await createClient();
@@ -583,6 +628,19 @@ export async function updateCampaignTx(
     );
   }
 
+  // Handle AI-interview availability rules — delete & re-insert
+  await supabase.from("interview_availability_rules").delete().eq("campaign_id", id);
+  if (availabilityRules.length > 0) {
+    await supabase.from("interview_availability_rules").insert(
+      availabilityRules.map((a) => ({
+        campaign_id: id,
+        weekday: a.weekday,
+        start_minute: a.start_minute,
+        end_minute: a.end_minute,
+      }))
+    );
+  }
+
   await supabase.from("campaign_audit_log").insert({
     campaign_id: id,
     user_id: userId,
@@ -610,6 +668,9 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
       automation_mode: source.automation_mode,
       screening_threshold: source.screening_threshold,
       interview_persona: source.interview_persona,
+      interview_slot_minutes: source.interview_slot_minutes,
+      interview_timezone: source.interview_timezone,
+      interview_booking_horizon_days: source.interview_booking_horizon_days,
       // application_email intentionally NOT copied: one alias routes to one
       // campaign per recruiter (unique index), so a clone starts unset.
       user_id: userId,
@@ -655,6 +716,17 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
         time_limit_hours: s.time_limit_hours,
         alert_threshold_hours: s.alert_threshold_hours,
         escalation_threshold_hours: s.escalation_threshold_hours,
+      }))
+    );
+  }
+
+  if (source.interview_availability_rules.length > 0) {
+    await supabase.from("interview_availability_rules").insert(
+      source.interview_availability_rules.map((a) => ({
+        campaign_id: cloned.id,
+        weekday: a.weekday,
+        start_minute: a.start_minute,
+        end_minute: a.end_minute,
       }))
     );
   }

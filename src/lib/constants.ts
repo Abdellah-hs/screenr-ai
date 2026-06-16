@@ -75,6 +75,26 @@ export interface SlaTimer {
   escalation_threshold_hours: number;
 }
 
+// One weekly AI-interview availability rule (PRD 3.5.6). `weekday` is
+// 0=Sunday..6=Saturday (matching JS Date.getDay()); times are minutes from
+// midnight in the campaign's `interview_timezone`.
+export interface InterviewAvailabilityRule {
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+}
+
+// Weekday labels indexed by `InterviewAvailabilityRule.weekday`.
+export const WEEKDAYS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
 export interface PipelineStageCount {
   name: string;
   key: string;
@@ -98,6 +118,11 @@ export interface Campaign {
   rubrics: EvaluationRubric[];
   reviewers: CampaignReviewer[];
   sla_timers: SlaTimer[];
+  // AI-interview availability config (PRD 3.5.6).
+  interview_slot_minutes: number | null;
+  interview_timezone: string | null;
+  interview_booking_horizon_days: number;
+  interview_availability_rules: InterviewAvailabilityRule[];
   pipeline: PipelineStageCount[];
   user_id: string;
   created_at: string;
