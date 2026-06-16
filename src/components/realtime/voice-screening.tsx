@@ -68,8 +68,6 @@ function formatDeadline(iso: string): string {
 
 const PRIMARY_BTN =
   "px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
-const SECONDARY_BTN =
-  "px-4 py-2 text-sm font-medium text-[#0369A1] bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#E0F2FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
 
 /**
  * Candidate-facing voice screening (#80/#83/#85). Mints a token-gated OpenAI
@@ -479,8 +477,8 @@ export default function VoiceScreening({
           {hasResponses ? (
             <p className="text-sm text-[#0C4A6E]">
               We captured <strong>{responseCount}</strong> spoken{" "}
-              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re happy, or
-              re-record to start the interview again.
+              {responseCount === 1 ? "response" : "responses"}. Review them below and submit
+              when you&apos;re ready.
             </p>
           ) : (
             <p className="text-sm text-[#0C4A6E]">
@@ -507,9 +505,9 @@ export default function VoiceScreening({
             Submit responses
           </button>
         )}
-        {review && (
-          <button type="button" onClick={reRecord} className={hasResponses ? SECONDARY_BTN : PRIMARY_BTN}>
-            {hasResponses ? "Re-record" : "Try again"}
+        {review && !hasResponses && (
+          <button type="button" onClick={reRecord} className={PRIMARY_BTN}>
+            Try again
           </button>
         )}
         {submitting && (
