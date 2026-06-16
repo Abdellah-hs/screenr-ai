@@ -90,7 +90,9 @@ export default function VoiceScreening({
 }: VoiceScreeningProps) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [turnCount, setTurnCount] = useState(0);
+  // Counts the candidate's *own* spoken turns — the interviewer's questions are
+  // turns too, but a call is only submittable once the candidate has answered.
+  const [responseCount, setResponseCount] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(CALL_SECONDS);
   const [timedOut, setTimedOut] = useState(false);
   const [wrappingUp, setWrappingUp] = useState(false);
@@ -128,7 +130,7 @@ export default function VoiceScreening({
     const trimmed = text.trim();
     if (!trimmed) return;
     transcriptRef.current.push({ role, text: trimmed, at: new Date().toISOString() });
-    setTurnCount(transcriptRef.current.length);
+    setResponseCount(transcriptRef.current.filter((t) => t.role === "candidate").length);
   }
 
   function stopTimer() {
@@ -203,7 +205,7 @@ export default function VoiceScreening({
     setError(null);
     setStatus("connecting");
     transcriptRef.current = [];
-    setTurnCount(0);
+    setResponseCount(0);
     setSecondsLeft(CALL_SECONDS);
     setTimedOut(false);
     setWrappingUp(false);
@@ -325,7 +327,7 @@ export default function VoiceScreening({
   function reRecord() {
     teardown();
     transcriptRef.current = [];
-    setTurnCount(0);
+    setResponseCount(0);
     setSecondsLeft(CALL_SECONDS);
     setTimedOut(false);
     setWrappingUp(false);
@@ -339,7 +341,9 @@ export default function VoiceScreening({
 
   async function submit() {
     const turns = transcriptRef.current;
-    if (turns.length === 0) return; // schema rejects empty; re-record instead
+    // No candidate speech → nothing to score. The server rejects it and would
+    // otherwise have the AI fabricate answers; re-record instead of submitting.
+    if (!turns.some((t) => t.role === "candidate")) return;
     setStatus("submitting");
     setError(null);
     try {
@@ -355,7 +359,7 @@ export default function VoiceScreening({
   const live = status === "live";
   const review = status === "review";
   const submitting = status === "submitting";
-  const hasTurns = turnCount > 0;
+  const hasResponses = responseCount > 0;
   const lowTime = secondsLeft <= 60;
 
   if (status === "done") {
@@ -461,8 +465,8 @@ export default function VoiceScreening({
         </p>
       )}
 
-      {live && hasTurns && (
-        <p className="text-xs text-[#6B7280]">{turnCount} responses captured so far.</p>
+      {live && hasResponses && (
+        <p className="text-xs text-[#6B7280]">{responseCount} responses captured so far.</p>
       )}
 
       {review && (
@@ -472,15 +476,16 @@ export default function VoiceScreening({
               Your 5 minutes are up.
             </p>
           )}
-          {hasTurns ? (
+          {hasResponses ? (
             <p className="text-sm text-[#0C4A6E]">
-              We captured <strong>{turnCount}</strong> spoken{" "}
-              {turnCount === 1 ? "response" : "responses"}. Submit when you&apos;re happy, or
+              We captured <strong>{responseCount}</strong> spoken{" "}
+              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re happy, or
               re-record to start the interview again.
             </p>
           ) : (
             <p className="text-sm text-[#0C4A6E]">
-              We didn&apos;t catch any responses on that call. Please re-record before submitting.
+              We didn&apos;t catch any spoken answers on that call. Please re-record before
+              submitting.
             </p>
           )}
         </div>
@@ -497,14 +502,14 @@ export default function VoiceScreening({
             I&apos;m finished
           </button>
         )}
-        {review && hasTurns && (
+        {review && hasResponses && (
           <button type="button" onClick={submit} className={PRIMARY_BTN}>
             Submit responses
           </button>
         )}
         {review && (
-          <button type="button" onClick={reRecord} className={hasTurns ? SECONDARY_BTN : PRIMARY_BTN}>
-            {hasTurns ? "Re-record" : "Try again"}
+          <button type="button" onClick={reRecord} className={hasResponses ? SECONDARY_BTN : PRIMARY_BTN}>
+            {hasResponses ? "Re-record" : "Try again"}
           </button>
         )}
         {submitting && (

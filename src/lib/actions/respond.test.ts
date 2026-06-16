@@ -165,6 +165,17 @@ describe("submitVoiceScreening", () => {
     expect(mockSaveTranscript).not.toHaveBeenCalled();
   });
 
+  it("rejects a call with no candidate speech (interviewer-only transcript)", async () => {
+    const interviewerOnly: VoiceTranscriptTurn[] = [
+      { role: "agent", text: "Tell me about a scaling problem you solved.", at: "2026-06-03T10:00:00.000Z" },
+    ];
+
+    await expect(
+      submitVoiceScreening({ token: TOKEN, transcript: interviewerOnly }),
+    ).rejects.toThrow(/spoken answers/i);
+    expect(mockSaveTranscript).not.toHaveBeenCalled();
+  });
+
   it("refuses to overwrite an already-scored response", async () => {
     mockFetchResponse.mockResolvedValue(responseRow({ status: "scored" }));
 

@@ -208,10 +208,16 @@ export const voiceScreeningSubmissionSchema = z.object({
   token: z.string().min(10).max(2000),
   // A finished call always has at least one turn; an empty transcript is a
   // capture failure and is reported via the failure action, not submitted here.
+  // A transcript of only the interviewer's questions (no candidate speech) is
+  // also rejected: there is nothing to score, and scoring absence makes the AI
+  // fabricate answers — the candidate must re-record instead.
   transcript: z
     .array(voiceTranscriptTurnSchema)
     .min(1, "No transcript was captured for this call.")
-    .max(500, "Transcript is too long"),
+    .max(500, "Transcript is too long")
+    .refine((turns) => turns.some((t) => t.role === "candidate"), {
+      message: "The call didn't capture any spoken answers — please re-record.",
+    }),
 });
 
 // ─── HITL Screening Review ──────────────────────────────────────────────────
