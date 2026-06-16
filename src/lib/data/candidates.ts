@@ -199,6 +199,13 @@ export async function fetchCandidatesByCampaignId(campaignId: string, userId: st
         email,
         phone,
         location
+      ),
+      screening_question_responses (
+        overall_score,
+        overall_rationale,
+        scored_at,
+        rubric_version,
+        status
       )
     `)
     .eq("campaign_id", campaignId)
@@ -228,6 +235,13 @@ export async function fetchCandidateById(applicationId: string, userId: string) 
         location,
         linkedin_url,
         portfolio_url
+      ),
+      screening_question_responses (
+        overall_score,
+        overall_rationale,
+        scored_at,
+        rubric_version,
+        status
       )
     `)
     .eq("id", applicationId)

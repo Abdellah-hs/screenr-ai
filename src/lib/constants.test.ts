@@ -3,7 +3,9 @@ import {
   APPLICATION_STATE_TRANSITIONS,
   APPLICATION_STAGE_BUCKET,
   toCandidateStage,
+  pipelineDisplayScore,
   type ApplicationState,
+  type CandidateScore,
   type CandidateStage,
 } from "./constants";
 
@@ -170,5 +172,53 @@ describe("failure states", () => {
       ([, targets]) => targets.includes("processing_failed"),
     );
     expect(sources.length).toBeGreaterThan(0);
+  });
+});
+
+describe("pipelineDisplayScore", () => {
+  function score(stage: CandidateScore["stage"], overall: number): CandidateScore {
+    return {
+      stage,
+      overall,
+      ai_summary: "",
+      factors: [],
+      scored_at: "2026-06-16T00:00:00.000Z",
+      rubric_version: null,
+      current_rubric_version: null,
+    };
+  }
+
+  it("returns the current stage's score when it exists", () => {
+    const result = pipelineDisplayScore({
+      stage: "screening",
+      scores: [score("resume", 80), score("screening", 65)],
+    });
+
+    expect(result?.stage).toBe("screening");
+    expect(result?.overall).toBe(65);
+  });
+
+  it("returns null when the current stage isn't scored yet (no fallback)", () => {
+    // In screening but only the resume has been scored — the cell stays blank;
+    // we never surface the resume score in a screening row.
+    const result = pipelineDisplayScore({
+      stage: "screening",
+      scores: [score("resume", 80)],
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null for a terminal stage, which has no stage score of its own", () => {
+    const result = pipelineDisplayScore({
+      stage: "rejected",
+      scores: [score("resume", 80), score("screening", 65)],
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the candidate has no scores", () => {
+    expect(pipelineDisplayScore({ stage: "applied", scores: [] })).toBeNull();
   });
 });

@@ -374,3 +374,30 @@ export function toCandidateStage(status: string): CandidateStage {
   return APPLICATION_STAGE_BUCKET[status as ApplicationState] ?? "applied";
 }
 
+// Which score stage a pipeline stage should display. Stages that don't produce
+// a score of their own (interview scoring isn't built yet; final_interview is a
+// human round; hired/rejected are terminal) map to null → the cell is blank.
+const STAGE_SCORE_FOR: Record<CandidateStage, CandidateScore["stage"] | null> = {
+  applied: "resume",
+  screening: "screening",
+  interview: "interview",
+  final_interview: null,
+  hired: null,
+  rejected: null,
+};
+
+/**
+ * The score to surface for a candidate in the pipeline: strictly the score for
+ * their CURRENT stage. Returns null when that stage hasn't produced a score yet
+ * (the cell shows "—") — we never fall back to an earlier stage's score, so a
+ * resume score can't appear in a screening/interview row. Stage-specific by
+ * design (see "Independent Stage Scores" in CLAUDE.md).
+ */
+export function pipelineDisplayScore(
+  candidate: Pick<Candidate, "stage" | "scores">,
+): CandidateScore | null {
+  const target = STAGE_SCORE_FOR[candidate.stage];
+  if (!target) return null;
+  return candidate.scores.find((s) => s.stage === target) ?? null;
+}
+
