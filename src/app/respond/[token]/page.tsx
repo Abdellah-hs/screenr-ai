@@ -48,7 +48,7 @@ export default async function RespondPage({
     );
   }
 
-  if (ctx.status === "responded") {
+  if (ctx.status === "responded" || ctx.status === "scored") {
     return (
       <div className="min-h-screen bg-[#F9FAFB] flex items-center justify-center p-4 sm:p-6">
         <div className="max-w-md w-full bg-white rounded-2xl border border-[#E5E7EB] p-6 sm:p-8 shadow-sm text-center">

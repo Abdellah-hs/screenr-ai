@@ -29,6 +29,7 @@ vi.mock("@/lib/services/realtime", async (importActual) => ({
 }));
 
 import {
+  loadResponseContext,
   startCandidateVoiceScreening,
   submitVoiceScreening,
   reportVoiceScreeningFailure,
@@ -109,6 +110,48 @@ beforeEach(() => {
   mockTransition.mockResolvedValue(undefined);
   mockFetchScoringContext.mockResolvedValue(SCORING_CONTEXT);
   mockRunScoring.mockResolvedValue({ overall_score: 72 });
+});
+
+describe("loadResponseContext", () => {
+  it("returns a friendly completed status (not an error) for an already-scored response", async () => {
+    mockFetchResponse.mockResolvedValue(responseRow({ status: "scored" }));
+
+    const ctx = await loadResponseContext(TOKEN);
+
+    expect(ctx.status).toBe("scored");
+    expect(ctx.campaign_title).toBe("Senior Backend Engineer");
+  });
+
+  it("returns a completed status for a responded (awaiting-scoring) response", async () => {
+    mockFetchResponse.mockResolvedValue(responseRow({ status: "responded" }));
+
+    const ctx = await loadResponseContext(TOKEN);
+
+    expect(ctx.status).toBe("responded");
+  });
+
+  it("throws for an expired response so the page shows the expired notice", async () => {
+    mockFetchResponse.mockResolvedValue(responseRow({ status: "expired" }));
+
+    await expect(loadResponseContext(TOKEN)).rejects.toThrow(/expired/i);
+  });
+
+  it("returns the questions and any in-progress answers for an open response", async () => {
+    mockFetchResponse.mockResolvedValue(
+      responseRow({
+        status: "sent",
+        answers: [
+          { question_id: "q1", prompt: "Describe a scaling problem you solved.", answer_text: "draft", score: null, rationale: null },
+        ],
+      }),
+    );
+
+    const ctx = await loadResponseContext(TOKEN);
+
+    expect(ctx.status).toBe("sent");
+    expect(ctx.questions).toHaveLength(1);
+    expect(ctx.existing_answers).toEqual({ q1: "draft" });
+  });
 });
 
 describe("startCandidateVoiceScreening", () => {
