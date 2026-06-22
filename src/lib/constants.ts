@@ -222,6 +222,10 @@ export interface Candidate {
   // workflow flag — the HITL review panel resolves it, not the recruiter's
   // manual stage changer.
   awaiting_human_review: boolean;
+  // Derived from raw application.status === "archived". Archived applications
+  // live in the `rejected` coarse bucket, so this flag is what lets the
+  // candidate list split them into their own "Archived" group.
+  is_archived: boolean;
   scores: CandidateScore[];
   resume: {
     skills: string[];

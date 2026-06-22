@@ -313,6 +313,7 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       current_company: parsed?.experience?.[0]?.company || null,
       stage: toCandidateStage(app.status),
       awaiting_human_review: app.status === "screening_review_pending",
+      is_archived: app.status === "archived",
       scores: buildScoresArray(
         app,
         currentResumeRubricVersion,
