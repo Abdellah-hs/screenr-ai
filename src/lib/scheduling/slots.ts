@@ -1,0 +1,159 @@
+import type { InterviewAvailabilityRule } from "@/lib/constants";
+
+/** A single bookable AI-interview slot. */
+export interface GeneratedSlot {
+  /** UTC instant of the slot start, ISO string — the canonical identifier. */
+  startIso: string;
+  /** Calendar day in the campaign timezone, e.g. "2026-06-22" (for grouping). */
+  dayKey: string;
+  /** Human label in the campaign timezone, e.g. "Mon, Jun 22, 9:00 AM". */
+  label: string;
+}
+
+export interface GenerateSlotsParams {
+  rules: InterviewAvailabilityRule[];
+  slotMinutes: number;
+  /** IANA timezone the rules' wall-clock times are expressed in. */
+  timezone: string;
+  /** How many days ahead candidates may book. */
+  horizonDays: number;
+  /** "Now" — injectable for tests. Defaults to the current time. */
+  now?: Date;
+  /** Already-booked slot start instants (ISO) to exclude. */
+  bookedIso?: string[];
+  /** Minimum notice before a slot can be booked. Defaults to 60 minutes. */
+  leadMinutes?: number;
+}
+
+/** The tz offset (ms) at `date`, such that localWallClock = utc + offset. */
+function tzOffsetMs(date: Date, timeZone: string): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = dtf.formatToParts(date);
+  const map: Record<string, string> = {};
+  for (const p of parts) map[p.type] = p.value;
+  const hour = map.hour === "24" ? 0 : Number(map.hour);
+  const asUtc = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    hour,
+    Number(map.minute),
+    Number(map.second),
+  );
+  return asUtc - date.getTime();
+}
+
+/**
+ * The UTC instant for a wall-clock time on a calendar date in `timeZone`.
+ * Two-pass to resolve DST boundaries (the offset can differ between the naive
+ * guess and the resolved instant).
+ */
+export function zonedWallTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  minutesOfDay: number,
+  timeZone: string,
+): Date {
+  const hour = Math.floor(minutesOfDay / 60);
+  const minute = minutesOfDay % 60;
+  const guessUtcMs = Date.UTC(year, month - 1, day, hour, minute);
+  const offset1 = tzOffsetMs(new Date(guessUtcMs), timeZone);
+  let utcMs = guessUtcMs - offset1;
+  const offset2 = tzOffsetMs(new Date(utcMs), timeZone);
+  if (offset2 !== offset1) utcMs = guessUtcMs - offset2;
+  return new Date(utcMs);
+}
+
+/** The calendar Y/M/D of `date` as seen in `timeZone`. */
+function localYmd(date: Date, timeZone: string): { y: number; m: number; d: number } {
+  const dtf = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const map: Record<string, string> = {};
+  for (const p of dtf.formatToParts(date)) map[p.type] = p.value;
+  return { y: Number(map.year), m: Number(map.month), d: Number(map.day) };
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/**
+ * Generate the bookable interview slots from a campaign's weekly availability
+ * rules over the booking horizon, in the campaign timezone, excluding past /
+ * within-lead-time and already-booked slots. Pure — `now` and `bookedIso` are
+ * injected. The candidate booking flow regenerates this server-side to validate
+ * a chosen slot, so it is the single source of truth for "what's offered".
+ */
+export function generateSlots(params: GenerateSlotsParams): GeneratedSlot[] {
+  const {
+    rules,
+    slotMinutes,
+    timezone,
+    horizonDays,
+    now = new Date(),
+    bookedIso = [],
+    leadMinutes = 60,
+  } = params;
+
+  if (rules.length === 0 || slotMinutes <= 0) return [];
+
+  const earliestMs = now.getTime() + leadMinutes * 60_000;
+  const bookedMs = new Set(bookedIso.map((iso) => new Date(iso).getTime()));
+  const labelFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  const base = localYmd(now, timezone);
+  const slots: GeneratedSlot[] = [];
+  const seenMs = new Set<number>();
+
+  for (let i = 0; i <= horizonDays; i++) {
+    // Walk calendar dates via UTC arithmetic on the local Y/M/D triple.
+    const dayDate = new Date(Date.UTC(base.y, base.m - 1, base.d + i));
+    const y = dayDate.getUTCFullYear();
+    const m = dayDate.getUTCMonth() + 1;
+    const d = dayDate.getUTCDate();
+    const weekday = dayDate.getUTCDay(); // 0=Sunday, matches rule.weekday
+
+    for (const rule of rules) {
+      if (rule.weekday !== weekday) continue;
+      for (
+        let s = rule.start_minute;
+        s + slotMinutes <= rule.end_minute;
+        s += slotMinutes
+      ) {
+        const start = zonedWallTimeToUtc(y, m, d, s, timezone);
+        const ms = start.getTime();
+        if (ms < earliestMs || bookedMs.has(ms) || seenMs.has(ms)) continue;
+        seenMs.add(ms);
+        slots.push({
+          startIso: start.toISOString(),
+          dayKey: `${y}-${pad(m)}-${pad(d)}`,
+          label: labelFmt.format(start),
+        });
+      }
+    }
+  }
+
+  slots.sort((a, b) => a.startIso.localeCompare(b.startIso));
+  return slots;
+}

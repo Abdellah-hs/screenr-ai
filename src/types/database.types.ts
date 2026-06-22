@@ -578,6 +578,54 @@ export type Database = {
           },
         ]
       }
+      interview_bookings: {
+        Row: {
+          application_id: string
+          campaign_id: string
+          created_at: string
+          id: string
+          scheduled_at: string
+          slot_minutes: number
+          status: string
+          timezone: string
+        }
+        Insert: {
+          application_id: string
+          campaign_id: string
+          created_at?: string
+          id?: string
+          scheduled_at: string
+          slot_minutes: number
+          status?: string
+          timezone: string
+        }
+        Update: {
+          application_id?: string
+          campaign_id?: string
+          created_at?: string
+          id?: string
+          scheduled_at?: string
+          slot_minutes?: number
+          status?: string
+          timezone?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interview_bookings_application_id_fkey"
+            columns: ["application_id"]
+            isOneToOne: true
+            referencedRelation: "applications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "interview_bookings_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rubric_dimensions: {
         Row: {
           created_at: string
@@ -780,6 +828,14 @@ export type Database = {
       transition_application: {
         Args: {
           p_actor: string
+          p_application_id: string
+          p_rationale?: string
+          p_to_state: Database["public"]["Enums"]["candidate_stage_enum"]
+        }
+        Returns: undefined
+      }
+      transition_application_system: {
+        Args: {
           p_application_id: string
           p_rationale?: string
           p_to_state: Database["public"]["Enums"]["candidate_stage_enum"]
