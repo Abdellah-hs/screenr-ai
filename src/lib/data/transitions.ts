@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   APPLICATION_STATE_TRANSITIONS,
   type ApplicationState,
@@ -68,6 +69,55 @@ export async function transitionApplication(params: TransitionParams): Promise<v
 
   if (error) {
     console.error("transition_application RPC failed:", error);
+    throw new Error(`Transition failed: ${error.message}`);
+  }
+}
+
+/**
+ * System transition for token-verified candidate actions that run WITHOUT a
+ * recruiter session (e.g. interview booking). Uses the service-role client +
+ * the `transition_application_system` RPC, which skips the owner check that
+ * `transition_application` enforces. The caller MUST have verified the
+ * candidate's signed token first. Actor is always `system`.
+ *
+ * Enforces the same legality check as `transitionApplication` before the RPC.
+ */
+export async function transitionApplicationAsSystem(
+  applicationId: string,
+  toState: ApplicationState,
+  rationale?: string,
+): Promise<void> {
+  const supabase = createAdminClient();
+
+  const { data: app, error: fetchError } = await supabase
+    .from("applications")
+    .select("status")
+    .eq("id", applicationId)
+    .single();
+
+  if (fetchError || !app) throw new Error("Application not found");
+
+  const fromState = app.status as ApplicationState;
+  if (fromState === toState) return; // no-op
+
+  const allowed = APPLICATION_STATE_TRANSITIONS[fromState] ?? [];
+  if (!allowed.includes(toState)) {
+    throw new Error(`Illegal transition: ${fromState} → ${toState}`);
+  }
+
+  const { error } = await (
+    supabase.rpc as unknown as (
+      fn: string,
+      args: Record<string, unknown>,
+    ) => Promise<{ error: { message: string } | null }>
+  )("transition_application_system", {
+    p_application_id: applicationId,
+    p_to_state: toState,
+    p_rationale: rationale ?? null,
+  });
+
+  if (error) {
+    console.error("transition_application_system RPC failed:", error);
     throw new Error(`Transition failed: ${error.message}`);
   }
 }

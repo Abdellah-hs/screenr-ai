@@ -5,7 +5,10 @@ type GmailConnectionRow = Database["public"]["Tables"]["gmail_connections"]["Row
 
 /** Connection status for the UI — never includes the refresh token. */
 export type GmailConnectionStatus = {
+  /** A row exists AND its refresh token was verified live. */
   connected: boolean;
+  /** A row exists but Google rejected the token — the recruiter must reconnect. */
+  needsReconnect: boolean;
   email: string | null;
   connectedAt: string | null;
 };
@@ -50,23 +53,6 @@ export async function fetchGmailConnection(
     .maybeSingle();
   if (error) throw error;
   return data;
-}
-
-/**
- * Token-free connection status for the Settings UI.
- */
-export async function fetchGmailConnectionStatus(
-  userId: string,
-): Promise<GmailConnectionStatus> {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("gmail_connections")
-    .select("email, connected_at")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return { connected: false, email: null, connectedAt: null };
-  return { connected: true, email: data.email, connectedAt: data.connected_at };
 }
 
 export async function deleteGmailConnection(userId: string): Promise<void> {

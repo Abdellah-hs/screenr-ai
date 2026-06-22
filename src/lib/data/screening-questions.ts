@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { ApplicationState } from "@/lib/constants";
 import type { Json } from "@/types/database.types";
 
@@ -442,6 +443,57 @@ export async function markScreeningResponseExpired(
   const db = supabase as any;
 
   const { error } = await db
+    .from("screening_question_responses")
+    .update({ status: "expired" })
+    .eq("application_id", applicationId);
+
+  if (error) {
+    throw new Error(
+      `Failed to expire screening response: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
+/**
+ * Application IDs whose screening link is still `sent` but past its deadline —
+ * the work list for the proactive expiry sweep (the scheduled counterpart to
+ * the lazy expiry in `startCandidateVoiceScreening`). Uses the service-role
+ * admin client because the sweep runs from a cron with no recruiter session.
+ *
+ * Rows with a null `expires_at` never expire and are excluded.
+ */
+export async function fetchExpiredSentScreeningAppIds(
+  now: Date
+): Promise<string[]> {
+  const supabase = createAdminClient();
+
+  const { data, error } = await supabase
+    .from("screening_question_responses")
+    .select("application_id")
+    .eq("status", "sent")
+    .not("expires_at", "is", null)
+    .lt("expires_at", now.toISOString());
+
+  if (error) {
+    throw new Error(
+      `Failed to load expired screening responses: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+
+  return (data ?? []).map((row) => row.application_id);
+}
+
+/**
+ * Service-role variant of `markScreeningResponseExpired` for the session-less
+ * sweep. The application transition to `screening_expired` is the caller's job
+ * (via `transitionApplicationAsSystem`) — this only flips the response row.
+ */
+export async function markScreeningResponseExpiredAsSystem(
+  applicationId: string
+): Promise<void> {
+  const supabase = createAdminClient();
+
+  const { error } = await supabase
     .from("screening_question_responses")
     .update({ status: "expired" })
     .eq("application_id", applicationId);

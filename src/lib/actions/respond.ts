@@ -85,6 +85,22 @@ export async function loadResponseContext(
     );
   }
 
+  // A completed response is not an error — the candidate is done. `responded`
+  // (awaiting scoring) and `scored` (reviewed) both mean "nothing left to do",
+  // so return the status and let the page show a friendly confirmation rather
+  // than throwing into the generic "couldn't open this link" error card. Only
+  // `expired` (needs a new link) and the still-open states fall through.
+  if (response.status === "responded" || response.status === "scored") {
+    return {
+      application_id,
+      status: response.status,
+      campaign_title: app.campaign_title,
+      questions: [],
+      existing_answers: {},
+      expires_at,
+    };
+  }
+
   assertResponseIsOpen(response.status);
 
   const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);

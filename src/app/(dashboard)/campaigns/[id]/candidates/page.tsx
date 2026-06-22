@@ -4,12 +4,26 @@ import { getCampaignById } from "@/lib/actions/campaigns";
 import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import CandidateTable from "@/components/campaigns/candidate-table";
 
+const VALID_FILTERS = new Set([
+  "all",
+  "applied",
+  "pending_review",
+  "screening",
+  "interview",
+  "final_interview",
+  "hired",
+  "rejected",
+  "archived",
+]);
+
 export default async function CandidatesPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ stage?: string }>;
 }) {
-  const { id } = await params;
+  const [{ id }, { stage }] = await Promise.all([params, searchParams]);
   const campaign = await getCampaignById(id);
 
   if (!campaign) {
@@ -17,6 +31,8 @@ export default async function CandidatesPage({
   }
 
   const candidates = await getCandidatesByCampaignId(id);
+
+  const initialFilter = stage && VALID_FILTERS.has(stage) ? stage : "all";
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -57,9 +73,10 @@ export default async function CandidatesPage({
       </div>
 
       <CandidateTable
+        key={initialFilter}
         candidates={candidates}
         campaignId={id}
-        automationMode={campaign.automation_mode}
+        initialFilter={initialFilter}
       />
     </div>
   );

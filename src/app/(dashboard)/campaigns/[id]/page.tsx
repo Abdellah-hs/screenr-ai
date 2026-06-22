@@ -8,8 +8,8 @@ import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
 import { SendScreeningQuestionsBulkButton } from "@/components/candidates/send-screening-questions-button";
+import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
-import type { CandidateStage } from "@/lib/constants";
 
 const statusColors: Record<string, string> = {
   draft: "bg-gray-500/10 text-gray-400 border-gray-500/20",
@@ -17,14 +17,6 @@ const statusColors: Record<string, string> = {
   paused: "bg-amber-500/10 text-amber-400 border-amber-500/20",
   closed: "bg-red-500/10 text-red-400 border-red-500/20",
 };
-
-const pipelineStageKeys: { name: string; key: CandidateStage }[] = [
-  { name: "New", key: "applied" },
-  { name: "Screening", key: "screening" },
-  { name: "Interview", key: "interview" },
-  { name: "Final Interview", key: "final_interview" },
-  { name: "Hired", key: "hired" },
-];
 
 export default async function CampaignDetailPage({
   params,
@@ -185,20 +177,11 @@ export default async function CampaignDetailPage({
             View all candidates ({candidates.length})
           </Link>
         </div>
-        <div className="grid grid-cols-5 gap-3">
-          {pipelineStageKeys.map((stage) => (
-            <Link
-              key={stage.key}
-              href={`/campaigns/${id}/candidates`}
-              className="text-center p-4 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB] hover:border-[#2563EB] hover:bg-[#EFF6FF] transition-colors"
-            >
-              <p className="text-2xl font-semibold text-[#111827]">
-                {stageCounts[stage.key] || 0}
-              </p>
-              <p className="text-xs text-[#6B7280] mt-1">{stage.name}</p>
-            </Link>
-          ))}
-        </div>
+        <PipelineFunnel
+          campaignId={id}
+          stageCounts={stageCounts}
+          total={candidates.length}
+        />
       </div>
     </div>
   );

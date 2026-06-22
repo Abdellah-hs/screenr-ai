@@ -1,14 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { pipelineDisplayScore } from "@/lib/constants";
 import type {
-  AutomationMode,
   Candidate,
   CandidateScore,
   CandidateStage,
 } from "@/lib/constants";
+import {
+  ALL_FUNNEL_STAGE,
+  FUNNEL_STAGES,
+  ARCHIVED_FUNNEL_STAGE,
+  FunnelCard,
+  PipelineSummary,
+} from "./pipeline-funnel";
 
 const stageColors: Record<CandidateStage, string> = {
   applied: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
@@ -48,37 +54,48 @@ const scoreStageTag: Record<CandidateScore["stage"], string> = {
 export default function CandidateTable({
   candidates,
   campaignId,
-  automationMode,
+  initialFilter = "all",
 }: {
   candidates: Candidate[];
   campaignId: string;
-  automationMode: AutomationMode;
+  /** Seeds the stage pill selection, e.g. from a `?stage=` deep link. */
+  initialFilter?: string;
 }) {
   const [search, setSearch] = useState("");
-  const [stageFilter, setStageFilter] = useState<string>("all");
+  const [stageFilter, setStageFilter] = useState<string>(initialFilter);
   const [sortBy, setSortBy] = useState<SortField>("applied_at");
 
   const stageCounts = useMemo(() => {
     const counts: Record<string, number> = {
       all: candidates.length,
       pending_review: 0,
+      archived: 0,
     };
     for (const c of candidates) {
       counts[c.stage] = (counts[c.stage] || 0) + 1;
       if (c.awaiting_human_review) counts.pending_review += 1;
+      if (c.is_archived) counts.archived += 1;
     }
+    // Archived candidates sit in the `rejected` coarse bucket but get their
+    // own pill, so subtract them out to keep the two groups disjoint.
+    counts.rejected = (counts.rejected ?? 0) - counts.archived;
     return counts;
   }, [candidates]);
 
-  // If the "Pending review" pill is no longer rendered (e.g. recruiter
-  // approved the last pending candidate on a fully_auto campaign), don't
-  // leave the user filtered to a hidden state with no visible reset —
-  // derive the effective filter from the requested one, so a stale
-  // "pending_review" intent silently behaves as "all".
-  const showPendingReview =
-    automationMode === "human_in_loop" || stageCounts.pending_review > 0;
-  const effectiveFilter =
-    stageFilter === "pending_review" && !showPendingReview ? "all" : stageFilter;
+  // The "Pending review" banner (and its filter) only exist while candidates
+  // are actually awaiting review. Once the queue empties the banner disappears,
+  // so a stale "pending_review" filter intent must fall back to "all" (handled
+  // in effectiveFilter below) to avoid stranding the user on a hidden state.
+  const pendingCount = stageCounts.pending_review ?? 0;
+  const showPendingReview = pendingCount > 0;
+  // Only surface the Archived group when there's something in it, so the pill
+  // row stays quiet for campaigns that never archive anyone.
+  const showArchived = stageCounts.archived > 0;
+  const effectiveFilter = (() => {
+    if (stageFilter === "pending_review" && !showPendingReview) return "all";
+    if (stageFilter === "archived" && !showArchived) return "all";
+    return stageFilter;
+  })();
 
   // The "All" view is a mixed-stage lookup list, so a single Score column would
   // be comparing scores across different stages — hide it there. It appears
@@ -88,11 +105,32 @@ export default function CandidateTable({
   const effectiveSort: SortField =
     !showScore && sortBy === "score" ? "applied_at" : sortBy;
 
+  // Funnel cards: an "All" reset card, the forward stages, then the terminal
+  // Archived bucket (only when it has anyone).
+  const stageCards = showArchived
+    ? [...FUNNEL_STAGES, ARCHIVED_FUNNEL_STAGE]
+    : FUNNEL_STAGES;
+  const funnelStages = [ALL_FUNNEL_STAGE, ...stageCards];
+  const total = candidates.length;
+  const activeCount =
+    (stageCounts.applied ?? 0) +
+    (stageCounts.screening ?? 0) +
+    (stageCounts.interview ?? 0) +
+    (stageCounts.final_interview ?? 0);
+  const hiredCount = stageCounts.hired ?? 0;
+  const closedCount = total - activeCount - hiredCount;
+
   const filtered = useMemo(() => {
     return candidates
       .filter((c) => {
         if (effectiveFilter === "pending_review") {
           if (!c.awaiting_human_review) return false;
+        } else if (effectiveFilter === "archived") {
+          if (!c.is_archived) return false;
+        } else if (effectiveFilter === "rejected") {
+          // Rejected and Archived are disjoint groups — archived rows are
+          // filed under their own pill, not here.
+          if (c.stage !== "rejected" || c.is_archived) return false;
         } else if (effectiveFilter !== "all" && c.stage !== effectiveFilter) {
           return false;
         }
@@ -122,45 +160,69 @@ export default function CandidateTable({
 
   return (
     <div className="space-y-4">
-      {/* Stage pills */}
-      <div className="flex flex-wrap gap-2">
-        {(
-          [
-            { key: "all", label: "All" },
-            { key: "applied", label: "New" },
-            ...(showPendingReview
-              ? [{ key: "pending_review", label: "Pending review" }]
-              : []),
-            { key: "screening", label: "Screening" },
-            { key: "interview", label: "Interview" },
-            { key: "final_interview", label: "Final Interview" },
-            { key: "hired", label: "Hired" },
-            { key: "rejected", label: "Rejected" },
-          ] as { key: string; label: string }[]
-        ).map(({ key, label }) => {
-          const isPending = key === "pending_review";
-          const isActive = effectiveFilter === key;
-          const inactiveClasses = isPending
-            ? "bg-[#FFFBEB] text-[#B45309] border-[#FDE68A] hover:bg-[#FEF3C7]"
-            : "bg-white text-[#4B5563] border-[#E5E7EB] hover:bg-[#F9FAFB]";
-          return (
-            <button
-              key={key}
-              onClick={() => setStageFilter(key)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
-                isActive
-                  ? "bg-[#2563EB] text-white border-[#2563EB]"
-                  : inactiveClasses
-              }`}
-            >
-              {label}
-              {stageCounts[key] != null && (
-                <span className="ml-1.5 opacity-70">{stageCounts[key]}</span>
-              )}
-            </button>
-          );
-        })}
+      {/* Pipeline funnel — doubles as the stage filter. Click a card to filter,
+          click it again to clear. */}
+      <div>
+        <div
+          className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:[grid-template-columns:repeat(var(--funnel-cols),minmax(0,1fr))]"
+          style={{ "--funnel-cols": funnelStages.length } as CSSProperties}
+        >
+          {funnelStages.map((stage) => {
+            const isAll = stage.key === "all";
+            const count = stageCounts[stage.key] ?? 0;
+            const isActive = effectiveFilter === stage.key;
+            return (
+              <FunnelCard
+                key={stage.key}
+                stage={stage}
+                count={count}
+                active={isActive}
+                onClick={() =>
+                  setStageFilter(isActive && !isAll ? "all" : stage.key)
+                }
+              />
+            );
+          })}
+        </div>
+
+        <div className="mt-3">
+          <PipelineSummary
+            total={total}
+            active={activeCount}
+            hired={hiredCount}
+            closed={closedCount}
+          />
+        </div>
       </div>
+
+      {/* Pending review — an attention banner that doubles as a filter. Shown
+          only while candidates are actually awaiting review; click to filter the
+          list down to them, click again to clear. */}
+      {showPendingReview && (
+        <button
+          type="button"
+          onClick={() =>
+            setStageFilter(
+              effectiveFilter === "pending_review" ? "all" : "pending_review",
+            )
+          }
+          aria-pressed={effectiveFilter === "pending_review"}
+          className={`flex w-full items-center justify-between gap-3 rounded-lg border border-[#FDE68A] px-4 py-2.5 text-left transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FBBF24] focus-visible:ring-offset-1 ${
+            effectiveFilter === "pending_review"
+              ? "bg-[#FEF3C7]"
+              : "bg-[#FFFBEB] hover:bg-[#FEF3C7]"
+          }`}
+        >
+          <span className="flex items-center gap-2 text-sm font-medium text-[#92400E]">
+            <span className="h-2 w-2 rounded-full bg-[#F59E0B]" aria-hidden="true" />
+            {pendingCount} candidate{pendingCount === 1 ? "" : "s"} awaiting your
+            review
+          </span>
+          <span className="text-xs font-medium text-[#B45309]">
+            {effectiveFilter === "pending_review" ? "Clear filter" : "View →"}
+          </span>
+        </button>
+      )}
 
       {/* Search + Sort */}
       <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -274,13 +336,19 @@ export default function CandidateTable({
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-1.5">
-                          <span
-                            className={`inline-flex px-2.5 py-1 text-xs font-medium border rounded-md capitalize ${
-                              stageColors[candidate.stage]
-                            }`}
-                          >
-                            {stageLabels[candidate.stage]}
-                          </span>
+                          {candidate.is_archived ? (
+                            <span className="inline-flex px-2.5 py-1 text-xs font-medium border rounded-md text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]">
+                              Archived
+                            </span>
+                          ) : (
+                            <span
+                              className={`inline-flex px-2.5 py-1 text-xs font-medium border rounded-md capitalize ${
+                                stageColors[candidate.stage]
+                              }`}
+                            >
+                              {stageLabels[candidate.stage]}
+                            </span>
+                          )}
                           {candidate.awaiting_human_review && (
                             <span className="inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]">
                               Pending review

@@ -4,19 +4,40 @@ import { revalidatePath } from "next/cache";
 import { requireUserId } from "@/lib/auth/guards";
 import {
   fetchGmailConnection,
-  fetchGmailConnectionStatus,
   deleteGmailConnection,
   type GmailConnectionStatus,
 } from "@/lib/data/integrations";
-import { revokeRefreshToken } from "@/lib/services/gmail";
+import { revokeRefreshToken, verifyRefreshToken } from "@/lib/services/gmail";
 
 /**
  * Read the current recruiter's Gmail connection status for the Settings page.
- * Token-free by construction (see fetchGmailConnectionStatus).
+ * A stored row is not enough — the refresh token is verified live so a revoked
+ * or expired connection surfaces as "needs reconnect" instead of a stale
+ * "Connected". The token never leaves the server.
  */
 export async function getGmailConnectionStatus(): Promise<GmailConnectionStatus> {
   const userId = await requireUserId();
-  return fetchGmailConnectionStatus(userId);
+
+  const connection = await fetchGmailConnection(userId);
+  if (!connection) {
+    return { connected: false, needsReconnect: false, email: null, connectedAt: null };
+  }
+
+  let connected = true;
+  try {
+    connected = await verifyRefreshToken(connection.refresh_token);
+  } catch (err) {
+    // Transient failure (network/Google 5xx): stay optimistic rather than flap
+    // a working connection to "reconnect" on a blip.
+    console.warn("getGmailConnectionStatus: token verification failed (transient):", err);
+  }
+
+  return {
+    connected,
+    needsReconnect: !connected,
+    email: connection.email,
+    connectedAt: connection.connected_at,
+  };
 }
 
 /**

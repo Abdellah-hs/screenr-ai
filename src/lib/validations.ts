@@ -247,6 +247,18 @@ export const voiceScreeningSubmissionSchema = z.object({
     }),
 });
 
+// ─── Interview Scheduling (booking) ─────────────────────────────────────────
+
+// Candidate picks a slot on the token-gated /schedule page. The chosen slot is
+// authoritatively re-validated server-side against the regenerated slot list,
+// so this schema only checks basic shape.
+export const bookInterviewSlotSchema = z.object({
+  token: z.string().min(10).max(2000),
+  start_iso: z
+    .string()
+    .refine((v) => !Number.isNaN(Date.parse(v)), "Invalid slot time"),
+});
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 
 // Recruiter approve/reject decision on a screening_review_pending application.
