@@ -403,11 +403,25 @@ OPENAI_API_KEY                # OpenAI API key for AI generation (resume extract
 DATALAB_API_KEY               # Datalab Marker API key for layout-aware resume text extraction (PDF + DOCX). Sign up at https://www.datalab.to
 GOOGLE_CLIENT_ID              # Google OAuth client ID (the app identity — same for all recruiters)
 GOOGLE_CLIENT_SECRET          # Google OAuth client secret
+SUPABASE_SERVICE_ROLE_KEY     # Service-role key for session-less server writes (admin client) — NEVER exposed to the browser
+CRON_SECRET                   # Shared secret guarding the scheduled-job endpoints (e.g. screening expiry sweep)
 ```
 
 Gmail sync (`src/lib/services/gmail.ts`) uses the `googleapis` SDK. The OAuth **app** credentials (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) live in env; the per-recruiter **refresh token** is obtained via the consent flow and stored in the `gmail_connections` table (one row per `user_id`). A recruiter connects/changes their inbox under **Settings → Integrations**, which drives the OAuth round-trip through the route handlers in `src/app/api/integrations/gmail/{connect,callback}/route.ts`. `syncResumesFromGmail` reads the stored token (server-side only) to build the Gmail client. The refresh token is a secret: protected by owner-only RLS, never returned to the browser; encryption-at-rest (pgcrypto / Supabase Vault) is a future hardening step. **Setup:** in the Google Cloud OAuth client, register the redirect URI `<origin>/api/integrations/gmail/callback` (e.g. `http://localhost:3000/...`) and allow the `gmail.modify` scope.
 
 Resume text extraction (`src/lib/services/marker.ts`) uses the hosted Datalab Marker API for all document types — it replaced the legacy `pdf-parse` (PDF) and `mammoth` (DOCX) extractors. The OpenAI resume parser classifies each document (`document_type`: `cv` | `motivation_letter` | `other`); only CVs are ingested.
+
+### Scheduled Jobs (Cron)
+
+Screening links carry a 7-day deadline (`RESPONSE_TTL_MS`). Expiry is detected two ways: **lazily** when the candidate reopens a dead link (`startCandidateVoiceScreening`), and **proactively** by a scheduled sweep so the pipeline reflects reality even for candidates who never return. The sweep (`sweepExpiredScreenings` in `src/lib/screening/expiry-sweep.ts`) finds every `screening_sent` response past its `expires_at` and moves the application to `screening_expired` via the system transition (admin client — it runs without a recruiter session).
+
+It is exposed at **`GET /api/cron/expire-screenings`**, guarded by `Authorization: Bearer ${CRON_SECRET}` (fails closed if the secret is unset). Wire any scheduler to hit it on whatever cadence you want (daily is plenty):
+
+- **Vercel Cron** — add the path + schedule to `vercel.json` (Vercel injects the `CRON_SECRET` bearer automatically).
+- **Supabase pg_cron + pg_net** — schedule an HTTP POST/GET to the deployed URL with the bearer header.
+- **External cron / GitHub Actions** — `curl -H "Authorization: Bearer $CRON_SECRET" <origin>/api/cron/expire-screenings`.
+
+There is no scheduler wired by default — the endpoint is inert until one is pointed at it.
 
 ## Notes for Future Work
 

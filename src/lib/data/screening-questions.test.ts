@@ -17,10 +17,26 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve(mockSupabase)),
 }));
 
+// Admin (service-role) client — used by the session-less expiry sweep.
+const mockAdminFrom = vi.fn();
+const mockAdminSelect = vi.fn();
+const mockAdminSelectEq = vi.fn();
+const mockAdminNot = vi.fn();
+const mockAdminLt = vi.fn();
+const mockAdminUpdate = vi.fn();
+const mockAdminUpdateEq = vi.fn();
+const mockAdminSupabase = { from: mockAdminFrom };
+
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: vi.fn(() => mockAdminSupabase),
+}));
+
 import {
   saveAnswerScores,
   saveVoiceTranscript,
   markScreeningResponseExpired,
+  markScreeningResponseExpiredAsSystem,
+  fetchExpiredSentScreeningAppIds,
   fetchScoringContextByApplicationId,
   type VoiceTranscriptTurn,
 } from "./screening-questions";
@@ -72,6 +88,20 @@ beforeEach(() => {
     if (table === "ai_audit_log") return { insert: mockAuditInsert };
     if (table === "applications") return { select: mockAppSelect };
     throw new Error(`Unexpected supabase.from(${table})`);
+  });
+
+  // Admin client chains for the expiry sweep.
+  //   select("application_id").eq("status","sent").not(...).lt(...) → { data, error }
+  mockAdminLt.mockResolvedValue({ data: [], error: null });
+  mockAdminNot.mockReturnValue({ lt: mockAdminLt });
+  mockAdminSelectEq.mockReturnValue({ not: mockAdminNot });
+  mockAdminSelect.mockReturnValue({ eq: mockAdminSelectEq });
+  //   update({status:"expired"}).eq("application_id", id) → { error }
+  mockAdminUpdateEq.mockResolvedValue({ error: null });
+  mockAdminUpdate.mockReturnValue({ eq: mockAdminUpdateEq });
+  mockAdminFrom.mockReturnValue({
+    select: mockAdminSelect,
+    update: mockAdminUpdate,
   });
 });
 
@@ -270,6 +300,56 @@ describe("markScreeningResponseExpired", () => {
 
     await expect(markScreeningResponseExpired("app-1")).rejects.toThrow(
       /Failed to expire screening response: RLS denied/,
+    );
+  });
+});
+
+describe("fetchExpiredSentScreeningAppIds", () => {
+  it("queries sent rows past the deadline and returns their application ids", async () => {
+    const now = new Date("2026-06-22T12:00:00.000Z");
+    mockAdminLt.mockResolvedValueOnce({
+      data: [{ application_id: "app-1" }, { application_id: "app-2" }],
+      error: null,
+    });
+
+    const ids = await fetchExpiredSentScreeningAppIds(now);
+
+    expect(mockAdminFrom).toHaveBeenCalledWith("screening_question_responses");
+    expect(mockAdminSelectEq).toHaveBeenCalledWith("status", "sent");
+    expect(mockAdminNot).toHaveBeenCalledWith("expires_at", "is", null);
+    expect(mockAdminLt).toHaveBeenCalledWith("expires_at", now.toISOString());
+    expect(ids).toEqual(["app-1", "app-2"]);
+  });
+
+  it("returns an empty array when nothing is overdue", async () => {
+    mockAdminLt.mockResolvedValueOnce({ data: [], error: null });
+
+    expect(await fetchExpiredSentScreeningAppIds(new Date())).toEqual([]);
+  });
+
+  it("throws when the query fails", async () => {
+    mockAdminLt.mockResolvedValueOnce({ error: { message: "boom" } });
+
+    await expect(fetchExpiredSentScreeningAppIds(new Date())).rejects.toThrow(
+      /Failed to load expired screening responses: boom/,
+    );
+  });
+});
+
+describe("markScreeningResponseExpiredAsSystem", () => {
+  it("flips the row to expired via the admin client", async () => {
+    await markScreeningResponseExpiredAsSystem("app-1");
+
+    expect(mockAdminFrom).toHaveBeenCalledWith("screening_question_responses");
+    expect(mockAdminUpdate).toHaveBeenCalledWith({ status: "expired" });
+    expect(mockAdminUpdateEq).toHaveBeenCalledWith("application_id", "app-1");
+  });
+
+  it("throws when the update fails", async () => {
+    mockAdminUpdateEq.mockResolvedValueOnce({ error: { message: "denied" } });
+
+    await expect(markScreeningResponseExpiredAsSystem("app-1")).rejects.toThrow(
+      /Failed to expire screening response: denied/,
     );
   });
 });
