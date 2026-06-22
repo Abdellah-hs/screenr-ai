@@ -84,6 +84,40 @@ export async function getConnectedEmail(refreshToken: string): Promise<string> {
 }
 
 /**
+ * Tell a definitively-dead token (Google rejected it with `invalid_grant` —
+ * revoked, expired, or password-reset) apart from a transient failure
+ * (network blip, Google 5xx). Only the former means "reconnect required".
+ */
+function isInvalidGrantError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { response?: { data?: { error?: string } }; message?: string };
+  return (
+    e.response?.data?.error === "invalid_grant" ||
+    /invalid_grant/.test(e.message ?? "")
+  );
+}
+
+/**
+ * Verify a stored refresh token still works by minting a short-lived access
+ * token from it. Returns `true` when the token is live, `false` when Google
+ * rejected it as `invalid_grant` (the recruiter must reconnect). Transient
+ * errors are re-thrown so callers don't flip a working connection to
+ * "disconnected" over a network blip.
+ */
+export async function verifyRefreshToken(refreshToken: string): Promise<boolean> {
+  const { clientId, clientSecret } = getOAuthCredentials();
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  try {
+    const { token } = await oauth2Client.getAccessToken();
+    return Boolean(token);
+  } catch (err) {
+    if (isInvalidGrantError(err)) return false;
+    throw err;
+  }
+}
+
+/**
  * Best-effort revocation of a refresh token (called on Disconnect). Failures
  * are swallowed by the caller — the local connection row is deleted regardless.
  */

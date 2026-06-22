@@ -4,6 +4,7 @@ const {
   mockGenerateAuthUrl,
   mockGetToken,
   mockSetCredentials,
+  mockGetAccessToken,
   mockGetProfile,
   mockOAuth2,
   mockGmailFactory,
@@ -11,6 +12,7 @@ const {
   const mockGenerateAuthUrl = vi.fn();
   const mockGetToken = vi.fn();
   const mockSetCredentials = vi.fn();
+  const mockGetAccessToken = vi.fn();
   const mockGetProfile = vi.fn();
   // Constructor-style mock: invoked via `new google.auth.OAuth2(...)`, so the
   // implementation must assign to `this` (an arrow fn can't be `new`-ed).
@@ -19,11 +21,13 @@ const {
       generateAuthUrl: typeof mockGenerateAuthUrl;
       getToken: typeof mockGetToken;
       setCredentials: typeof mockSetCredentials;
+      getAccessToken: typeof mockGetAccessToken;
     },
   ) {
     this.generateAuthUrl = mockGenerateAuthUrl;
     this.getToken = mockGetToken;
     this.setCredentials = mockSetCredentials;
+    this.getAccessToken = mockGetAccessToken;
   });
   const mockGmailFactory = vi.fn(() => ({
     users: { getProfile: mockGetProfile },
@@ -32,6 +36,7 @@ const {
     mockGenerateAuthUrl,
     mockGetToken,
     mockSetCredentials,
+    mockGetAccessToken,
     mockGetProfile,
     mockOAuth2,
     mockGmailFactory,
@@ -51,6 +56,7 @@ import {
   buildGmailConsentUrl,
   exchangeCodeForTokens,
   getConnectedEmail,
+  verifyRefreshToken,
   fetchUnreadGmailResumes,
 } from "./gmail";
 
@@ -157,6 +163,37 @@ describe("getConnectedEmail", () => {
     mockGetProfile.mockResolvedValue({ data: {} });
 
     await expect(getConnectedEmail("rt-xyz")).rejects.toThrow();
+  });
+});
+
+describe("verifyRefreshToken", () => {
+  it("returns true when the token mints an access token", async () => {
+    mockGetAccessToken.mockResolvedValue({ token: "at-live" });
+
+    const result = await verifyRefreshToken("rt-live");
+
+    expect(result).toBe(true);
+    expect(mockSetCredentials).toHaveBeenCalledWith({ refresh_token: "rt-live" });
+  });
+
+  it("returns false when Google rejects the token as invalid_grant", async () => {
+    mockGetAccessToken.mockRejectedValue({
+      response: { data: { error: "invalid_grant" } },
+    });
+
+    expect(await verifyRefreshToken("rt-dead")).toBe(false);
+  });
+
+  it("returns false when invalid_grant only appears in the error message", async () => {
+    mockGetAccessToken.mockRejectedValue(new Error("invalid_grant: Token has been expired or revoked."));
+
+    expect(await verifyRefreshToken("rt-dead")).toBe(false);
+  });
+
+  it("re-throws transient errors so a working connection isn't flipped on a blip", async () => {
+    mockGetAccessToken.mockRejectedValue(new Error("ETIMEDOUT"));
+
+    await expect(verifyRefreshToken("rt-live")).rejects.toThrow("ETIMEDOUT");
   });
 });
 

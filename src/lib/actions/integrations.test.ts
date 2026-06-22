@@ -3,16 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockRequireUserId,
   mockFetchGmailConnection,
-  mockFetchGmailConnectionStatus,
   mockDeleteGmailConnection,
   mockRevokeRefreshToken,
+  mockVerifyRefreshToken,
   mockRevalidatePath,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockFetchGmailConnection: vi.fn(),
-  mockFetchGmailConnectionStatus: vi.fn(),
   mockDeleteGmailConnection: vi.fn(),
   mockRevokeRefreshToken: vi.fn(),
+  mockVerifyRefreshToken: vi.fn(),
   mockRevalidatePath: vi.fn(),
 }));
 
@@ -22,12 +22,12 @@ vi.mock("@/lib/auth/guards", () => ({
 
 vi.mock("@/lib/data/integrations", () => ({
   fetchGmailConnection: mockFetchGmailConnection,
-  fetchGmailConnectionStatus: mockFetchGmailConnectionStatus,
   deleteGmailConnection: mockDeleteGmailConnection,
 }));
 
 vi.mock("@/lib/services/gmail", () => ({
   revokeRefreshToken: mockRevokeRefreshToken,
+  verifyRefreshToken: mockVerifyRefreshToken,
 }));
 
 vi.mock("next/cache", () => ({
@@ -46,15 +46,66 @@ describe("getGmailConnectionStatus", () => {
     mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
 
     await expect(getGmailConnectionStatus()).rejects.toThrow("Unauthorized");
-    expect(mockFetchGmailConnectionStatus).not.toHaveBeenCalled();
+    expect(mockFetchGmailConnection).not.toHaveBeenCalled();
   });
 
-  it("returns the connection status for the authenticated user", async () => {
-    const status = { connected: true, email: "jobs@acme.com", connectedAt: "t" };
-    mockFetchGmailConnectionStatus.mockResolvedValue(status);
+  it("reports not connected when there is no stored connection", async () => {
+    mockFetchGmailConnection.mockResolvedValue(null);
 
-    await expect(getGmailConnectionStatus()).resolves.toEqual(status);
-    expect(mockFetchGmailConnectionStatus).toHaveBeenCalledWith("user-1");
+    await expect(getGmailConnectionStatus()).resolves.toEqual({
+      connected: false,
+      needsReconnect: false,
+      email: null,
+      connectedAt: null,
+    });
+    expect(mockVerifyRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it("reports connected when the stored token verifies live", async () => {
+    mockFetchGmailConnection.mockResolvedValue({
+      refresh_token: "rt-1",
+      email: "jobs@acme.com",
+      connected_at: "2026-06-06T00:00:00Z",
+    });
+    mockVerifyRefreshToken.mockResolvedValue(true);
+
+    await expect(getGmailConnectionStatus()).resolves.toEqual({
+      connected: true,
+      needsReconnect: false,
+      email: "jobs@acme.com",
+      connectedAt: "2026-06-06T00:00:00Z",
+    });
+    expect(mockVerifyRefreshToken).toHaveBeenCalledWith("rt-1");
+  });
+
+  it("reports needsReconnect when a stored token is rejected by Google", async () => {
+    mockFetchGmailConnection.mockResolvedValue({
+      refresh_token: "rt-dead",
+      email: "jobs@acme.com",
+      connected_at: "2026-06-06T00:00:00Z",
+    });
+    mockVerifyRefreshToken.mockResolvedValue(false);
+
+    await expect(getGmailConnectionStatus()).resolves.toEqual({
+      connected: false,
+      needsReconnect: true,
+      email: "jobs@acme.com",
+      connectedAt: "2026-06-06T00:00:00Z",
+    });
+  });
+
+  it("stays connected (optimistic) when verification throws a transient error", async () => {
+    mockFetchGmailConnection.mockResolvedValue({
+      refresh_token: "rt-1",
+      email: "jobs@acme.com",
+      connected_at: "2026-06-06T00:00:00Z",
+    });
+    mockVerifyRefreshToken.mockRejectedValue(new Error("ETIMEDOUT"));
+
+    const status = await getGmailConnectionStatus();
+
+    expect(status.connected).toBe(true);
+    expect(status.needsReconnect).toBe(false);
   });
 });
 

@@ -21,7 +21,6 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   upsertGmailConnection,
   fetchGmailConnection,
-  fetchGmailConnectionStatus,
   deleteGmailConnection,
 } from "./integrations";
 
@@ -82,34 +81,6 @@ describe("fetchGmailConnection", () => {
     mockMaybeSingle.mockResolvedValue({ data: null, error: null });
 
     expect(await fetchGmailConnection("user-1")).toBeNull();
-  });
-});
-
-describe("fetchGmailConnectionStatus", () => {
-  it("reports connected with the email but never selects the refresh token", async () => {
-    mockMaybeSingle.mockResolvedValue({
-      data: { email: "jobs@acme.com", connected_at: "2026-06-06T00:00:00Z" },
-      error: null,
-    });
-
-    const status = await fetchGmailConnectionStatus("user-1");
-
-    expect(status).toEqual({
-      connected: true,
-      email: "jobs@acme.com",
-      connectedAt: "2026-06-06T00:00:00Z",
-    });
-    expect(mockSelect).toHaveBeenCalledWith("email, connected_at");
-  });
-
-  it("reports not connected when there is no row", async () => {
-    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
-
-    expect(await fetchGmailConnectionStatus("user-1")).toEqual({
-      connected: false,
-      email: null,
-      connectedAt: null,
-    });
   });
 });
 
