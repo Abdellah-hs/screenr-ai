@@ -386,6 +386,14 @@ describe("updateCandidateStage", () => {
     expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
   });
 
+  it("rejects a system-produced state a recruiter must not fabricate (e.g. screening_scored)", async () => {
+    await expect(
+      updateCandidateStage(VALID_APP_ID, "screening_scored", VALID_RATIONALE),
+    ).rejects.toThrow(/can't be set manually/);
+
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+  });
+
   it("delegates to updateApplicationStage with the validated state and trimmed rationale", async () => {
     await updateCandidateStage(
       VALID_APP_ID,
