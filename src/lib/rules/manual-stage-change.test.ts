@@ -29,6 +29,13 @@ describe("recruiterStageOptions", () => {
     expect(options).toEqual(["screening_expired", "rejected"]);
   });
 
+  it("drops screening_sent from the screening_approved options (sending is the Send button's job)", () => {
+    const options = recruiterStageOptions("screening_approved");
+
+    expect(options).not.toContain("screening_sent");
+    expect(options).toEqual(["rejected"]);
+  });
+
   it("drops screening_scored from the screening_completed options", () => {
     const options = recruiterStageOptions("screening_completed");
 
