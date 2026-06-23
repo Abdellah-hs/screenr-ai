@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/database.types";
+import type { SupabaseDb } from "@/lib/supabase/types";
 
 type GmailConnectionRow = Database["public"]["Tables"]["gmail_connections"]["Row"];
 
@@ -44,8 +45,9 @@ export async function upsertGmailConnection(input: {
  */
 export async function fetchGmailConnection(
   userId: string,
+  db?: SupabaseDb,
 ): Promise<GmailConnectionRow | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
   const { data, error } = await supabase
     .from("gmail_connections")
     .select("*")

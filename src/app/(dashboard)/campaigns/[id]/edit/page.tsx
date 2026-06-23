@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
@@ -34,15 +34,21 @@ export default function EditCampaignPage({
     load();
   }, [params, router]);
 
-  async function handleSubmit(formData: FormData) {
+  // onSubmit + preventDefault, not the form `action` prop: React 19 auto-resets
+  // an uncontrolled form when its action resolves, and our catch makes the
+  // action always resolve — which would discard the recruiter's unsaved edits
+  // on a failed save. preventDefault preserves them; native `required` still runs.
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     if (!campaign) return;
     setError(null);
     setSaving(true);
 
+    const formData = new FormData(e.currentTarget);
     try {
       await updateCampaign(campaign.id, formData);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
       setSaving(false);
     }
   }
@@ -75,7 +81,7 @@ export default function EditCampaignPage({
 
       <h1 className="text-2xl font-semibold text-[#111827] mb-6">Edit Campaign</h1>
 
-      <form action={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
+      <form onSubmit={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
         {error && (
           <div className="p-3 text-sm text-[#DC2626] bg-[#FEF2F2] rounded-lg border border-[#FECACA]">
             {error}

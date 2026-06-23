@@ -9,14 +9,8 @@ import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
 import { SendScreeningQuestionsBulkButton } from "@/components/candidates/send-screening-questions-button";
 import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
+import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
-
-const statusColors: Record<string, string> = {
-  draft: "bg-gray-500/10 text-gray-400 border-gray-500/20",
-  active: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-  paused: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-  closed: "bg-red-500/10 text-red-400 border-red-500/20",
-};
 
 export default async function CampaignDetailPage({
   params,
@@ -40,6 +34,11 @@ export default async function CampaignDetailPage({
     stageCounts[stageStr] = (stageCounts[stageStr] || 0) + 1;
   }
 
+  // The pipeline is frozen unless the campaign is Active — gate the processing
+  // actions (resume sync, screening sends) and explain why.
+  const isActive = campaign.status === "active";
+  const frozenReason = `This campaign is ${campaign.status ?? "draft"} — set it to Active to process candidates.`;
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-4">
@@ -54,13 +53,10 @@ export default async function CampaignDetailPage({
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold text-[#111827]">{campaign.title}</h1>
-            <span
-              className={`inline-flex px-2.5 py-0.5 text-xs font-medium rounded border ${
-                statusColors[campaign.status ?? "draft"]
-              }`}
-            >
-              {campaign.status}
-            </span>
+            <CampaignStatusChanger
+              campaignId={campaign.id}
+              currentStatus={campaign.status ?? "draft"}
+            />
           </div>
           {campaign.department && (
             <p className="text-sm text-[#6B7280] mt-1">{campaign.department}</p>
@@ -163,11 +159,17 @@ export default async function CampaignDetailPage({
             <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
               Pipeline
             </h2>
-            <GmailSyncButton campaignId={id} />
+            <GmailSyncButton
+              campaignId={id}
+              disabled={!isActive}
+              disabledReason={frozenReason}
+            />
             <SendScreeningQuestionsBulkButton
               campaignId={id}
-              disabled={screeningQuestions.length === 0}
-              disabledReason="Set up screening questions first"
+              disabled={!isActive || screeningQuestions.length === 0}
+              disabledReason={
+                !isActive ? frozenReason : "Set up screening questions first"
+              }
             />
           </div>
           <Link
@@ -177,6 +179,18 @@ export default async function CampaignDetailPage({
             View all candidates ({candidates.length})
           </Link>
         </div>
+        {!isActive && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2 text-sm text-[#92400E]">
+            <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <span>
+              This campaign is <span className="font-medium capitalize">{campaign.status}</span>. Resume
+              sync and screening are paused — set it to <span className="font-medium">Active</span> to
+              process candidates.
+            </span>
+          </div>
+        )}
         <PipelineFunnel
           campaignId={id}
           stageCounts={stageCounts}

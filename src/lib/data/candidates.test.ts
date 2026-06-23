@@ -93,14 +93,17 @@ describe("upsertCandidate", () => {
 
     const id = await upsertCandidate(baseResume);
 
-    expect(mockFlagDuplicateCandidate).toHaveBeenCalledWith({
-      candidateId: id,
-      matchedCandidateId: "existing-1",
-      matchSignals: expect.objectContaining({
-        email_match: true,
-        matched_email: "alice@example.com",
-      }),
-    });
+    expect(mockFlagDuplicateCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: id,
+        matchedCandidateId: "existing-1",
+        matchSignals: expect.objectContaining({
+          email_match: true,
+          matched_email: "alice@example.com",
+        }),
+      },
+      undefined,
+    );
   });
 
   it("flags a duplicate when only the phone matches (different email)", async () => {
@@ -108,14 +111,17 @@ describe("upsertCandidate", () => {
 
     const id = await upsertCandidate(baseResume);
 
-    expect(mockFlagDuplicateCandidate).toHaveBeenCalledWith({
-      candidateId: id,
-      matchedCandidateId: "existing-2",
-      matchSignals: expect.objectContaining({
-        phone_match: true,
-        matched_phone: "+1-555-1111",
-      }),
-    });
+    expect(mockFlagDuplicateCandidate).toHaveBeenCalledWith(
+      {
+        candidateId: id,
+        matchedCandidateId: "existing-2",
+        matchSignals: expect.objectContaining({
+          phone_match: true,
+          matched_phone: "+1-555-1111",
+        }),
+      },
+      undefined,
+    );
   });
 
   it("does not look up phone when the resume has no phone", async () => {

@@ -2,9 +2,10 @@ import { createClient } from "@/lib/supabase/server";
 import { randomUUID } from "crypto";
 import type { ParsedResumeData } from "@/lib/services/openai";
 import type { Database, Json } from "@/types/database.types";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
-import type { ApplicationState } from "@/lib/constants";
+import type { ApplicationState, CampaignStatus } from "@/lib/constants";
 import {
   findCandidateByEmail,
   findCandidateByPhone,
@@ -15,8 +16,8 @@ import {
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
 type ScreeningTierEnum = Database["public"]["Enums"]["screening_tier_enum"];
 
-export async function uploadResumeToStorage(campaignId: string, filename: string, fileBuffer: Buffer): Promise<string> {
-  const supabase = await createClient();
+export async function uploadResumeToStorage(campaignId: string, filename: string, fileBuffer: Buffer, db?: SupabaseDb): Promise<string> {
+  const supabase = db ?? (await createClient());
   const filePath = `${campaignId}/${randomUUID()}-${filename}`;
   const { error: uploadError } = await supabase.storage
     .from("resumes")
@@ -57,12 +58,13 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
  */
 export async function upsertCandidate(
   structuredData: ParsedResumeData & { email: string },
+  db?: SupabaseDb,
 ): Promise<string> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
 
   const [matchedByEmail, matchedByPhone] = await Promise.all([
-    findCandidateByEmail(structuredData.email),
-    structuredData.phone ? findCandidateByPhone(structuredData.phone) : Promise.resolve(null),
+    findCandidateByEmail(structuredData.email, db),
+    structuredData.phone ? findCandidateByPhone(structuredData.phone, db) : Promise.resolve(null),
   ]);
 
   const candidateId = randomUUID();
@@ -93,7 +95,7 @@ export async function upsertCandidate(
       candidateId,
       matchedCandidateId,
       matchSignals,
-    });
+    }, db);
   }
 
   return candidateId;
@@ -103,9 +105,10 @@ export async function createApplicationIfNotExists(
   candidateId: string,
   campaignId: string,
   resumeUrl: string,
-  structuredData: ParsedResumeData
+  structuredData: ParsedResumeData,
+  db?: SupabaseDb
 ): Promise<string> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
 
   const { data: existingApp } = await supabase
     .from("applications")
@@ -167,8 +170,8 @@ export async function logAiAudit(params: {
   textContent: string;
   filename: string;
   structuredData: ParsedResumeData;
-}) {
-  const supabase = await createClient();
+}, db?: SupabaseDb) {
+  const supabase = db ?? (await createClient());
 
   await supabase.from("ai_audit_log").insert({
     campaign_id: params.campaignId,
@@ -291,8 +294,8 @@ export async function saveResumeScore(args: {
   factors: { name: string; weight: number; score: number }[];
   rubricVersion: number | null;
   audit: ResumeScoreAuditFields;
-}) {
-  const supabase = await createClient();
+}, db?: SupabaseDb) {
+  const supabase = db ?? (await createClient());
 
   const { error: updateError, data: updateData } = await supabase
     .from("applications")
@@ -363,6 +366,7 @@ export interface ApplicationForResponse {
   application_id: string;
   campaign_id: string;
   campaign_title: string;
+  campaign_status: CampaignStatus;
 }
 
 export async function fetchApplicationForResponse(
@@ -371,12 +375,12 @@ export async function fetchApplicationForResponse(
   const supabase = await createClient();
   const { data } = await supabase
     .from("applications")
-    .select("id, campaign_id, campaigns!inner(id, title)")
+    .select("id, campaign_id, campaigns!inner(id, title, status)")
     .eq("id", applicationId)
     .single<{
       id: string;
       campaign_id: string;
-      campaigns: { id: string; title: string };
+      campaigns: { id: string; title: string; status: CampaignStatus };
     }>();
 
   if (!data) return null;
@@ -384,6 +388,7 @@ export async function fetchApplicationForResponse(
     application_id: data.id,
     campaign_id: data.campaign_id,
     campaign_title: data.campaigns.title,
+    campaign_status: data.campaigns.status,
   };
 }
 

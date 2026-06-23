@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 
 interface GmailSyncButtonProps {
   campaignId: string;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
-export function GmailSyncButton({ campaignId }: GmailSyncButtonProps) {
+export function GmailSyncButton({ campaignId, disabled, disabledReason }: GmailSyncButtonProps) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
 
@@ -32,8 +34,9 @@ export function GmailSyncButton({ campaignId }: GmailSyncButtonProps) {
     <div className="flex items-center gap-3">
       <Button
         onClick={handleSync}
-        disabled={isSyncing}
+        disabled={isSyncing || disabled}
         variant="secondary"
+        title={disabled ? disabledReason : undefined}
         className="gap-2 border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 hover:text-emerald-900"
       >
         {isSyncing ? (

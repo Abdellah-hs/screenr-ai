@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { type SlaTimer, PIPELINE_STAGES } from "@/lib/constants";
+import { type SlaTimer, SLA_STAGES } from "@/lib/constants";
 
 interface Props {
   initialTimers?: SlaTimer[];
 }
 
 const DEFAULT_SLA: SlaTimer = {
-  stage: "screening_q",
+  stage: "screening",
   time_limit_hours: 48,
   alert_threshold_hours: 36,
   escalation_threshold_hours: 44,
@@ -31,7 +31,7 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
     setTimers(newTimers);
   };
 
-  const availableStages = PIPELINE_STAGES.filter(
+  const availableStages = SLA_STAGES.filter(
     (stage) => !timers.some((t) => t.stage === stage.key)
   );
 
@@ -80,7 +80,7 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
                     className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
                   >
                     <option value={timer.stage}>
-                      {PIPELINE_STAGES.find((s) => s.key === timer.stage)?.name || timer.stage}
+                      {SLA_STAGES.find((s) => s.key === timer.stage)?.name || timer.stage}
                     </option>
                     {availableStages.map((stage) => (
                       <option key={stage.key} value={stage.key}>

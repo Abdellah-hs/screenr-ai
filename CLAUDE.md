@@ -422,7 +422,19 @@ It is exposed at **`GET /api/cron/expire-screenings`**, guarded by `Authorizatio
 - **Supabase pg_cron + pg_net** — schedule an HTTP POST/GET to the deployed URL with the bearer header.
 - **External cron / GitHub Actions** — `curl -H "Authorization: Bearer $CRON_SECRET" <origin>/api/cron/expire-screenings`.
 
-There is no scheduler wired by default — the endpoint is inert until one is pointed at it.
+**Automatic resume sync** is the second scheduled job. The recruiter's "Sync from Gmail" button is an on-demand pull; the proactive counterpart (`sweepResumeSync` in `src/lib/resume-sync/sync-sweep.ts`) ingests new CVs into **every Active campaign** on a schedule, so recruiters don't have to press anything. It runs session-less (service-role client) and resolves each campaign's owner to build their Gmail client; only Active campaigns are touched (the freeze rule). Reuses the same ingest+score pipeline as the button via injected-client data functions (`db?: SupabaseDb` — see `src/lib/supabase/types.ts`).
+
+It is exposed at **`GET /api/cron/sync-resumes`**, same `CRON_SECRET` guard. With Supabase pg_cron + pg_net (a 15-min cadence is reasonable for an inbox):
+
+```sql
+select cron.schedule(
+  'sync-resumes', '*/15 * * * *',
+  $$ select net.http_get(
+       url     => '<origin>/api/cron/sync-resumes',
+       headers => jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>')) $$);
+```
+
+There is no scheduler wired by default — both endpoints are inert until one is pointed at them.
 
 ## Notes for Future Work
 

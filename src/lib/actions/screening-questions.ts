@@ -19,6 +19,7 @@ import { requireUserId } from "@/lib/auth/guards";
 import type { ApplicationState } from "@/lib/constants";
 import { transitionApplication } from "@/lib/data/transitions";
 import { assertEligibleForScreeningSend } from "@/lib/rules/screening-response";
+import { assertCampaignActiveById } from "./campaign-guards";
 import {
   fetchScreeningQuestionsByCampaignId,
   replaceScreeningQuestions,
@@ -186,6 +187,10 @@ export async function sendScreeningQuestionsToCandidate(
   const app = await fetchApplicationForScreeningSend(applicationId, userId);
   if (!app) throw new Error("Application not found or access denied");
 
+  // Freeze outbound unless the campaign is Active — no candidate emails go out
+  // from a draft/paused/closed campaign.
+  await assertCampaignActiveById(app.campaign_id, userId);
+
   // Gate the send on pipeline state. The bulk sender filters ineligible
   // candidates at the query level; this single-candidate path has no such
   // filter, so without this guard the email would go out to anyone — even
@@ -270,6 +275,9 @@ export async function scoreScreeningAnswers(
   const app = await fetchApplicationForScreeningSend(applicationId, userId);
   if (!app) throw new Error("Application not found or access denied");
 
+  // Freeze scoring unless the campaign is Active.
+  await assertCampaignActiveById(app.campaign_id, userId);
+
   checkRateLimit(userId, {
     name: "ai-generate",
     maxRequests: 10,
@@ -316,6 +324,9 @@ export async function sendScreeningQuestionsBulk(
   campaignId: string
 ): Promise<{ sent: number; failed: number; errors: string[] }> {
   const userId = await requireCampaignOwner(campaignId);
+
+  // Freeze outbound unless the campaign is Active.
+  await assertCampaignActiveById(campaignId, userId);
 
   checkRateLimit(userId, {
     name: "screening-send-bulk",

@@ -1,4 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import type {
   CampaignStatus,
   AutomationMode,
@@ -298,9 +300,132 @@ export async function fetchCampaignApplicationEmail(
   return data?.application_email ?? null;
 }
 
-// ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
-export async function fetchCampaignScoringConfig(campaignId: string, userId: string) {
+/**
+ * The campaign's current status, scoped to the owning user (doubles as an
+ * ownership gate). Returns null when the campaign is missing or not owned.
+ * SELECT-only — used by the inline status changer to validate the transition
+ * before writing.
+ */
+export async function fetchCampaignStatus(
+  campaignId: string,
+  userId: string
+): Promise<CampaignStatus | null> {
   const supabase = await createClient();
+  const { data } = await supabase
+    .from("campaigns")
+    .select("status")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .single();
+  return (data?.status as CampaignStatus) ?? null;
+}
+
+/**
+ * Flip a campaign's status in place (the inline status changer — a quick status
+ * change outside the full edit form). Scoped to the owning, non-deleted campaign
+ * so it doubles as an ownership gate, and appends a `campaign_status_changed`
+ * audit row capturing old → new. The legality of `from → to` is decided by the
+ * rule layer before this is called; this only persists the result.
+ */
+export async function updateCampaignStatusTx(
+  id: string,
+  fromStatus: CampaignStatus,
+  toStatus: CampaignStatus,
+  userId: string
+): Promise<void> {
+  const supabase = await createClient();
+
+  const { data: updated, error } = await supabase
+    .from("campaigns")
+    .update({ status: toStatus })
+    .eq("id", id)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .select("id")
+    .single();
+
+  if (error || !updated) {
+    throw new Error(error?.message || "Campaign not found or access denied");
+  }
+
+  await supabase.from("campaign_audit_log").insert({
+    campaign_id: id,
+    user_id: userId,
+    action: "campaign_status_changed",
+    entity_type: "campaign",
+    entity_id: id,
+    old_data: { status: fromStatus },
+    new_data: { status: toStatus },
+  });
+}
+
+/**
+ * Soft-delete a campaign (the "Remove" row action). Sets `deleted_at` so it
+ * drops out of every list query (all of which filter `deleted_at is null`)
+ * without destroying its candidates, scores or audit history. Scoped to the
+ * owning, not-already-deleted campaign so it doubles as an ownership gate, and
+ * appends a `campaign_deleted` audit row.
+ */
+export async function softDeleteCampaignTx(
+  id: string,
+  userId: string
+): Promise<void> {
+  const supabase = await createClient();
+
+  const { data: deleted, error } = await supabase
+    .from("campaigns")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .select("id")
+    .single();
+
+  if (error || !deleted) {
+    throw new Error(error?.message || "Campaign not found or access denied");
+  }
+
+  await supabase.from("campaign_audit_log").insert({
+    campaign_id: id,
+    user_id: userId,
+    action: "campaign_deleted",
+    entity_type: "campaign",
+    entity_id: id,
+  });
+}
+
+/**
+ * Active, non-deleted campaigns that have an application alias set — the set the
+ * scheduled resume-sync sweep iterates. Session-less (service-role) so the cron
+ * can read across all owners; returns each campaign's owner so the sweep can
+ * resolve their Gmail connection. SELECT-only.
+ */
+export async function fetchActiveCampaignsForResumeSync(): Promise<
+  { campaign_id: string; user_id: string; application_email: string }[]
+> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("id, user_id, application_email")
+    .eq("status", "active")
+    .is("deleted_at", null)
+    .not("application_email", "is", null);
+
+  if (error || !data) return [];
+
+  return data
+    .filter((r) => r.application_email)
+    .map((r) => ({
+      campaign_id: r.id as string,
+      user_id: r.user_id as string,
+      application_email: r.application_email as string,
+    }));
+}
+
+// ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
+export async function fetchCampaignScoringConfig(campaignId: string, userId: string, db?: SupabaseDb) {
+  const supabase = db ?? (await createClient());
 
   const { data: row } = await supabase
     .from("campaigns")
@@ -364,8 +489,9 @@ export type RubricStage = "resume" | "screening_q" | "interview";
 export async function fetchActiveRubricVersion(
   campaignId: string,
   stage: RubricStage,
+  db?: SupabaseDb,
 ): Promise<number | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
   const { data, error } = await supabase
     .from("evaluation_rubrics")
     .select("version")

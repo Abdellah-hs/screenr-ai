@@ -36,7 +36,7 @@ import {
 } from "./respond";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import { fetchApplicationForResponse } from "@/lib/data/candidates";
+import { fetchApplicationForResponse, type ApplicationForResponse } from "@/lib/data/candidates";
 import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
@@ -75,6 +75,16 @@ const APP_ID = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "tok_abcdefghij";
 const SESSION = { clientSecret: "ek_x", expiresAt: 1, model: "gpt-realtime" };
 
+function appRow(over: Partial<ApplicationForResponse> = {}): ApplicationForResponse {
+  return {
+    application_id: APP_ID,
+    campaign_id: "camp-1",
+    campaign_title: "Senior Backend Engineer",
+    campaign_status: "active",
+    ...over,
+  };
+}
+
 function responseRow(over: Partial<ScreeningResponseRow> = {}): ScreeningResponseRow {
   return {
     id: "resp-1",
@@ -101,8 +111,7 @@ const transcript: VoiceTranscriptTurn[] = [
 beforeEach(() => {
   vi.clearAllMocks();
   mockVerifyToken.mockReturnValue({ application_id: APP_ID, expires_at: new Date("2099-01-01") });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mockFetchApp.mockResolvedValue({ campaign_id: "camp-1", campaign_title: "Senior Backend Engineer" } as any);
+  mockFetchApp.mockResolvedValue(appRow());
   mockFetchResponse.mockResolvedValue(responseRow());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockFetchQuestions.mockResolvedValue([{ id: "q1", prompt: "Describe a scaling problem you solved.", is_required: true } as any]);
@@ -152,6 +161,12 @@ describe("loadResponseContext", () => {
     expect(ctx.questions).toHaveLength(1);
     expect(ctx.existing_answers).toEqual({ q1: "draft" });
   });
+
+  it("shows the on-hold message for an open response when the campaign isn't Active", async () => {
+    mockFetchApp.mockResolvedValue(appRow({ campaign_status: "paused" }));
+
+    await expect(loadResponseContext(TOKEN)).rejects.toThrow(/on hold/i);
+  });
 });
 
 describe("startCandidateVoiceScreening", () => {
@@ -187,6 +202,13 @@ describe("startCandidateVoiceScreening", () => {
     });
 
     await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow("Rate limit exceeded");
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses to mint a session when the campaign isn't Active (frozen)", async () => {
+    mockFetchApp.mockResolvedValue(appRow({ campaign_status: "closed" }));
+
+    await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow(/on hold/i);
     expect(mockCreateSession).not.toHaveBeenCalled();
   });
 });
@@ -261,6 +283,14 @@ describe("submitVoiceScreening", () => {
     mockFetchScoringContext.mockResolvedValue({ ...SCORING_CONTEXT, description: null });
 
     await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    expect(mockRunScoring).not.toHaveBeenCalled();
+  });
+
+  it("freezes the submission (no save, no score) when the campaign isn't Active", async () => {
+    mockFetchApp.mockResolvedValue(appRow({ campaign_status: "paused" }));
+
+    await expect(submitVoiceScreening({ token: TOKEN, transcript })).rejects.toThrow(/on hold/i);
+    expect(mockSaveTranscript).not.toHaveBeenCalled();
     expect(mockRunScoring).not.toHaveBeenCalled();
   });
 });

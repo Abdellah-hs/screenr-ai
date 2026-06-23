@@ -7,13 +7,22 @@ const mockIs = vi.fn(() => ({ single: mockSingle }));
 const mockEqUser = vi.fn(() => ({ is: mockIs }));
 const mockEqId = vi.fn(() => ({ eq: mockEqUser }));
 const mockSelect = vi.fn(() => ({ eq: mockEqId }));
-const mockFrom = vi.fn(() => ({ select: mockSelect }));
+// Return type is widened so describes below can override the implementation with
+// update/insert chains (updateCampaignStatusTx) without a type clash.
+const mockFrom = vi.fn((): Record<string, unknown> => ({ select: mockSelect }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve({ from: mockFrom })),
 }));
 
-import { dimensionsEqual, fetchCampaignApplicationEmail, mapAvailabilityRows } from "./campaigns";
+import {
+  dimensionsEqual,
+  fetchCampaignApplicationEmail,
+  fetchCampaignStatus,
+  updateCampaignStatusTx,
+  softDeleteCampaignTx,
+  mapAvailabilityRows,
+} from "./campaigns";
 import type { DimensionImportance } from "@/lib/constants";
 
 type AvailabilityRow = {
@@ -129,6 +138,29 @@ describe("fetchCampaignApplicationEmail", () => {
   });
 });
 
+describe("fetchCampaignStatus", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the status scoped to the campaign and owning user", async () => {
+    mockSingle.mockResolvedValue({ data: { status: "active" }, error: null });
+
+    const result = await fetchCampaignStatus("camp-1", "user-1");
+
+    expect(result).toBe("active");
+    expect(mockFrom).toHaveBeenCalledWith("campaigns");
+    expect(mockEqId).toHaveBeenCalledWith("id", "camp-1");
+    expect(mockEqUser).toHaveBeenCalledWith("user_id", "user-1");
+  });
+
+  it("returns null when the campaign is missing or not owned", async () => {
+    mockSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
+
+    expect(await fetchCampaignStatus("camp-1", "user-1")).toBeNull();
+  });
+});
+
 describe("mapAvailabilityRows", () => {
   it("maps rows to the domain shape (weekday + minutes only)", () => {
     const result = mapAvailabilityRows([availabilityRow()]);
@@ -153,5 +185,108 @@ describe("mapAvailabilityRows", () => {
   it("returns an empty array for undefined or empty input", () => {
     expect(mapAvailabilityRows(undefined)).toEqual([]);
     expect(mapAvailabilityRows([])).toEqual([]);
+  });
+});
+
+// Kept last: this overrides mockFrom's implementation to expose the update +
+// insert chains, so it must not run before the select-based describes above.
+describe("updateCampaignStatusTx", () => {
+  const updateSingle = vi.fn();
+  const auditInsert = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    auditInsert.mockResolvedValue({ error: null });
+    mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
+      if (table === "campaign_audit_log") {
+        return { insert: auditInsert };
+      }
+      // from("campaigns").update().eq().eq().is().select().single()
+      return {
+        update: () => ({
+          eq: () => ({
+            eq: () => ({
+              is: () => ({
+                select: () => ({ single: updateSingle }),
+              }),
+            }),
+          }),
+        }),
+      };
+    });
+  });
+
+  it("updates the status and appends a status-change audit row (old → new)", async () => {
+    updateSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+
+    await updateCampaignStatusTx("camp-1", "draft", "active", "user-1");
+
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaign_id: "camp-1",
+        user_id: "user-1",
+        action: "campaign_status_changed",
+        old_data: { status: "draft" },
+        new_data: { status: "active" },
+      }),
+    );
+  });
+
+  it("throws and skips the audit row when no owned row was updated", async () => {
+    updateSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
+
+    await expect(
+      updateCampaignStatusTx("camp-1", "draft", "active", "user-1"),
+    ).rejects.toThrow();
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+});
+
+// Same update + insert chain shape as updateCampaignStatusTx — kept last so the
+// mockFrom override doesn't leak into the select-based describes above.
+describe("softDeleteCampaignTx", () => {
+  const updateSingle = vi.fn();
+  const auditInsert = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    auditInsert.mockResolvedValue({ error: null });
+    mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
+      if (table === "campaign_audit_log") {
+        return { insert: auditInsert };
+      }
+      return {
+        update: () => ({
+          eq: () => ({
+            eq: () => ({
+              is: () => ({
+                select: () => ({ single: updateSingle }),
+              }),
+            }),
+          }),
+        }),
+      };
+    });
+  });
+
+  it("sets deleted_at and appends a campaign_deleted audit row", async () => {
+    updateSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+
+    await softDeleteCampaignTx("camp-1", "user-1");
+
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaign_id: "camp-1",
+        user_id: "user-1",
+        action: "campaign_deleted",
+      }),
+    );
+  });
+
+  it("throws and skips the audit row when nothing was deleted", async () => {
+    updateSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
+
+    await expect(softDeleteCampaignTx("camp-1", "user-1")).rejects.toThrow();
+    expect(auditInsert).not.toHaveBeenCalled();
   });
 });

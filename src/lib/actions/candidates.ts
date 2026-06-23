@@ -14,6 +14,7 @@ import { transitionApplication } from "@/lib/data/transitions";
 import { assertRecruiterSettableTarget } from "@/lib/rules/manual-stage-change";
 import { sendTransitionNotification } from "./transition-notifications";
 import { sendScreeningQuestionsToCandidate } from "./screening-questions";
+import { assertCampaignActiveById } from "./campaign-guards";
 
 // Services
 import {
@@ -50,7 +51,9 @@ import {
   fetchCampaignScoringConfig,
   fetchActiveRubricVersion,
   fetchCampaignApplicationEmail,
+  fetchCampaignStatus,
 } from "@/lib/data/campaigns";
+import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 
 // Rules
 import {
@@ -89,6 +92,22 @@ export async function syncResumesFromGmail(campaignId: string) {
 
     // Rate limit: 5 Gmail syncs per 10 minutes per user
     checkRateLimit(userId, { name: "gmail-sync", maxRequests: 5, windowMs: 10 * 60 * 1000 });
+
+    // Freeze ingestion unless the campaign is Active — a draft/paused/closed
+    // campaign must not pull in (or auto-score) new candidates. Friendly return
+    // to match the button's result UI rather than throwing. The lookup is
+    // user-scoped, so it also gates ownership.
+    const campaignStatus = await fetchCampaignStatus(campaignId, userId);
+    if (!campaignStatus) {
+      return { success: false, count: 0, message: "Campaign not found." };
+    }
+    if (!isCampaignProcessingActive(campaignStatus)) {
+      return {
+        success: false,
+        count: 0,
+        message: `This campaign is ${campaignStatus}. Set it to Active to sync resumes.`,
+      };
+    }
 
     // Resolve the recruiter's connected inbox. No connection → nothing to sync;
     // return a friendly message pointing them at Settings rather than throwing.
@@ -493,6 +512,13 @@ export async function decideHitlReview(input: {
     throw new Error("Application is no longer awaiting review");
   }
 
+  // Approving processes the candidate (advances + auto-sends screening), so it
+  // freezes unless the campaign is Active. Rejecting is a stop, not processing,
+  // and stays allowed so a recruiter can clear out a paused/closed campaign.
+  if (parsed.decision === "approve") {
+    await assertCampaignActiveById(data.campaign_id, userId);
+  }
+
   const toState: ApplicationState =
     parsed.decision === "approve" ? "screening_approved" : "rejected";
 
@@ -550,6 +576,9 @@ export async function scoreResume(applicationId: string) {
 
     const data = (await fetchCandidateById(applicationId, userId)) as ApplicationWithCandidate | null;
     if (!data) throw new Error("Application not found");
+
+    // Freeze scoring unless the campaign is Active.
+    await assertCampaignActiveById(data.campaign_id, userId);
 
     const parsedResume = data.parsed_data as ParsedResumeData | null;
     if (!parsedResume) throw new Error("No parsed resume data available for scoring");
