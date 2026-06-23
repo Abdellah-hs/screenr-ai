@@ -67,8 +67,39 @@ describe("scoreAnswers", () => {
 
     expect(evidence.rawOutput).toBe(JSON.stringify(payload));
     expect(evidence.model).toBe("gpt-4o-mini");
-    expect(evidence.promptVersion).toBe("v1_screening_scoring");
+    expect(evidence.promptVersion).toBe("v2_screening_scoring");
     expect(evidence.result.overall_score).toBe(60);
+  });
+
+  it("forces a 0 for a blank answer even if the model scored it, and recomputes the overall", async () => {
+    // The model over-credits an empty answer; the deterministic guard must win.
+    mockCreate.mockResolvedValueOnce(
+      aiResponse(
+        answerPayload({
+          overall_score: 75,
+          answers: [
+            { question_id: "q-1", score: 70, rationale: "Model credited a blank" },
+            { question_id: "q-2", score: 80, rationale: "Real answer" },
+          ],
+        }),
+      ),
+    );
+
+    const evidence = await scoreAnswers({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      answers: [
+        { question_id: "q-1", answer_text: "   " },
+        { question_id: "q-2", answer_text: "I start with logs and..." },
+      ],
+    });
+
+    const scoreById = Object.fromEntries(
+      evidence.result.answers.map((a) => [a.question_id, a.score]),
+    );
+    expect(scoreById["q-1"]).toBe(0);
+    expect(scoreById["q-2"]).toBe(80);
+    expect(evidence.result.overall_score).toBe(40);
   });
 
   it("clamps and rounds overall_score and per-answer scores into 0..100", async () => {
@@ -119,9 +150,26 @@ const sampleTranscript: VoiceTranscriptTurn[] = [
   { role: "candidate", text: "I start with logs and reproduce locally...", at: "2026-06-03T10:01:07.000Z" },
 ];
 
+// Quotes copied verbatim from sampleTranscript's candidate turns, so the
+// transcript-evidence verifier treats these payloads as grounded (a no-op).
+const GROUNDED_Q1 = "I led the migration of our monolith";
+const GROUNDED_Q2 = "I start with logs and reproduce locally";
+
+function voicePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    overall_score: 68,
+    overall_rationale: "Solid spoken answers.",
+    answers: [
+      { question_id: "q-1", score: 80, rationale: "Strong", evidence_quote: GROUNDED_Q1 },
+      { question_id: "q-2", score: 64, rationale: "Decent", evidence_quote: GROUNDED_Q2 },
+    ],
+    ...overrides,
+  };
+}
+
 describe("scoreTranscript", () => {
   it("returns the same evidence shape as scoreAnswers, tagged with the voice prompt version", async () => {
-    const payload = answerPayload({ overall_score: 68 });
+    const payload = voicePayload({ overall_score: 68 });
     mockCreate.mockResolvedValueOnce(aiResponse(payload));
 
     const evidence = await scoreTranscript({
@@ -133,11 +181,11 @@ describe("scoreTranscript", () => {
     expect(evidence.result.overall_score).toBe(68);
     expect(evidence.rawOutput).toBe(JSON.stringify(payload));
     expect(evidence.model).toBe("gpt-4o-mini");
-    expect(evidence.promptVersion).toBe("v1_voice_screening_scoring");
+    expect(evidence.promptVersion).toBe("v2_voice_screening_scoring");
   });
 
   it("sends the spoken transcript to the model", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(answerPayload()));
+    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
 
     await scoreTranscript({
       jobDescription: "JD",
@@ -152,14 +200,30 @@ describe("scoreTranscript", () => {
     expect(userMessage).toContain("Walk me through a hard system design.");
   });
 
+  it("requires a verbatim evidence quote per question in the system prompt", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
+
+    await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    const systemMessage = mockCreate.mock.calls[0][0].messages.find(
+      (m: { role: string }) => m.role === "system",
+    ).content as string;
+    expect(systemMessage).toContain("evidence_quote");
+    expect(systemMessage).toContain("score it exactly 0");
+  });
+
   it("clamps and rounds scores into 0..100", async () => {
     mockCreate.mockResolvedValueOnce(
       aiResponse(
-        answerPayload({
+        voicePayload({
           overall_score: 130,
           answers: [
-            { question_id: "q-1", score: 240, rationale: "x" },
-            { question_id: "q-2", score: -10, rationale: "y" },
+            { question_id: "q-1", score: 240, rationale: "x", evidence_quote: GROUNDED_Q1 },
+            { question_id: "q-2", score: -10, rationale: "y", evidence_quote: GROUNDED_Q2 },
           ],
         }),
       ),
@@ -173,6 +237,78 @@ describe("scoreTranscript", () => {
 
     expect(evidence.result.overall_score).toBe(100);
     expect(evidence.result.answers.map((a) => a.score)).toEqual([100, 0]);
+  });
+
+  it("forces a 0 for a question whose evidence_quote is empty, and recomputes the overall", async () => {
+    // The model scores q-2 without citing any candidate speech — the partial-call
+    // bug (a question the candidate never reached should never score above 0).
+    mockCreate.mockResolvedValueOnce(
+      aiResponse(
+        voicePayload({
+          overall_score: 55,
+          answers: [
+            { question_id: "q-1", score: 80, rationale: "Strong", evidence_quote: GROUNDED_Q1 },
+            { question_id: "q-2", score: 30, rationale: "General interest", evidence_quote: "" },
+          ],
+        }),
+      ),
+    );
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    const scoreById = Object.fromEntries(
+      evidence.result.answers.map((a) => [a.question_id, a.score]),
+    );
+    expect(scoreById["q-1"]).toBe(80);
+    expect(scoreById["q-2"]).toBe(0);
+    expect(evidence.result.overall_score).toBe(40);
+  });
+
+  it("forces a 0 when the cited quote is not present in the candidate's transcript", async () => {
+    mockCreate.mockResolvedValueOnce(
+      aiResponse(
+        voicePayload({
+          answers: [
+            { question_id: "q-1", score: 80, rationale: "Strong", evidence_quote: GROUNDED_Q1 },
+            {
+              question_id: "q-2",
+              score: 65,
+              rationale: "Claimed expertise",
+              evidence_quote: "I have ten years of kubernetes in production",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    const scoreById = Object.fromEntries(
+      evidence.result.answers.map((a) => [a.question_id, a.score]),
+    );
+    expect(scoreById["q-1"]).toBe(80);
+    expect(scoreById["q-2"]).toBe(0);
+  });
+
+  it("leaves scores untouched when every quote is grounded in the transcript", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload({ overall_score: 72 })));
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.answers.map((a) => a.score)).toEqual([80, 64]);
+    expect(evidence.result.overall_score).toBe(72);
   });
 
   it("scores a transcript with no candidate speech as zero, without calling the model", async () => {

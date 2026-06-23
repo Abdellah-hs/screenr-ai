@@ -92,8 +92,11 @@ export interface AnswerScoringResult {
 }
 
 export const SCREENING_SCORING_MODEL = "gpt-4o-mini";
-export const SCREENING_SCORING_PROMPT_VERSION = "v1_screening_scoring";
-export const SCREENING_VOICE_SCORING_PROMPT_VERSION = "v1_voice_screening_scoring";
+// v2: unanswered/unaddressed questions must score exactly 0 (no "general
+// interest" partial credit), and the voice scorer must ground every non-zero
+// score in a verbatim candidate quote that code then verifies.
+export const SCREENING_SCORING_PROMPT_VERSION = "v2_screening_scoring";
+export const SCREENING_VOICE_SCORING_PROMPT_VERSION = "v2_voice_screening_scoring";
 
 export interface AnswerScoringEvidence {
   result: AnswerScoringResult;
@@ -145,9 +148,12 @@ ${answerText}`;
 - Depth of reasoning
 - Alignment with the role
 
-Then compute an overall_score as the simple average of per-answer scores (0-100, rounded).
+Scoring a non-answer (critical):
+- An unanswered question ("(no answer provided)"), a blank answer, or a non-answer such as "I don't know" / "n/a" / a few unrelated words is NOT an answer. Score it exactly 0.
+- Do NOT award any credit for general enthusiasm, stated interest, or merely naming a relevant topic. Points require the candidate actually answering THAT question with relevant substance.
+- Every score above 0 must be justified by specific content the candidate actually wrote.
 
-If a required question is unanswered or answered generically ("(no answer provided)", filler text), score it below 30.
+Then compute an overall_score as the simple average of per-answer scores (0-100, rounded).
 
 Return JSON in this exact format:
 {
@@ -179,12 +185,58 @@ ${qaPairs}`,
     throw new Error("OpenAI returned an empty response for answer scoring");
   }
 
+  // Deterministic backstop (Control > AI > Data): we know the exact answer text
+  // here, so we enforce "no answer = 0" in code rather than trusting the model
+  // to honor it — it has been observed handing out partial credit for blanks.
+  const unansweredIds = new Set(
+    questions
+      .filter((q) => {
+        const match = answers.find((a) => a.question_id === q.id);
+        return !match?.answer_text?.trim();
+      })
+      .map((q) => q.id),
+  );
+
   return {
-    result: normalizeScoringResult(content),
+    result: zeroOutUnanswered(normalizeScoringResult(content), unansweredIds),
     rawOutput: content,
     model: SCREENING_SCORING_MODEL,
     promptVersion: SCREENING_SCORING_PROMPT_VERSION,
   };
+}
+
+/** Recompute overall_score as the rounded average of the per-question scores. */
+function averageOverall(answers: ScoredAnswer[]): number {
+  if (answers.length === 0) return 0;
+  return Math.round(answers.reduce((sum, a) => sum + a.score, 0) / answers.length);
+}
+
+/**
+ * Force a 0 for every question that received no answer, then recompute the
+ * overall so it can never exceed what the answered questions support. A no-op
+ * when nothing was left blank (preserves the model's own overall).
+ */
+function zeroOutUnanswered(
+  result: AnswerScoringResult,
+  unansweredIds: Set<string>,
+): AnswerScoringResult {
+  if (unansweredIds.size === 0) return result;
+
+  let changed = false;
+  const answers = result.answers.map((a) => {
+    if (unansweredIds.has(a.question_id) && a.score !== 0) {
+      changed = true;
+      return {
+        ...a,
+        score: 0,
+        rationale: "Scored 0: no answer was provided for this question.",
+      };
+    }
+    return a;
+  });
+
+  if (!changed) return result;
+  return { ...result, answers, overall_score: averageOverall(answers) };
 }
 
 /** Clamp/round the model's JSON into a normalized, 0..100 result. Shared by the
@@ -281,23 +333,25 @@ export async function scoreTranscript(params: {
 - Depth of reasoning
 - Alignment with the role
 
-Then compute an overall_score as the simple average of per-question scores (0-100, rounded).
+Scoring a non-answer (critical):
+- If the candidate never addressed a question — it was never asked, the call ended before reaching it, or they deflected ("I don't know", "I'm not sure", silence) — score it exactly 0.
+- Do NOT award any credit for general enthusiasm, stated interest, or merely mentioning a topic. Points require the candidate actually answering THAT question with relevant substance.
+- For each question set "evidence_quote" to the candidate's own words, copied VERBATIM from the transcript, that justify the score. Quote only the Candidate, never the Interviewer. If the candidate did not substantively address the question, set "evidence_quote" to an empty string and score it 0.
 
-If a required question was never meaningfully addressed in the transcript, score it below 30.
+Then compute an overall_score as the simple average of per-question scores (0-100, rounded).
 
 Return JSON in this exact format:
 {
   "overall_score": number,
   "overall_rationale": "2-3 sentence summary of the candidate's screening performance",
   "answers": [
-    { "question_id": "string", "score": number, "rationale": "1-2 sentences citing a short transcript excerpt" }
+    { "question_id": "string", "score": number, "rationale": "1-2 sentences citing the transcript", "evidence_quote": "verbatim candidate words, or empty string if unaddressed" }
   ]
 }
 
 Rules:
 - answers array must have exactly one entry per listed question, in the same order
-- question_id must match the listed id verbatim
-- every rationale must quote or paraphrase a specific moment from the transcript`,
+- question_id must match the listed id verbatim`,
       },
       {
         role: "user",
@@ -319,9 +373,72 @@ ${conversation}`,
   }
 
   return {
-    result: normalizeScoringResult(content),
+    result: enforceTranscriptEvidence(normalizeScoringResult(content), content, transcript),
     rawOutput: content,
     model: SCREENING_SCORING_MODEL,
     promptVersion: SCREENING_VOICE_SCORING_PROMPT_VERSION,
   };
+}
+
+/** Lowercase + strip non-alphanumerics so a verbatim quote survives minor
+ * punctuation/spacing differences but a fabricated one does not match. */
+function normalizeForMatch(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Voice backstop (Control > AI > Data): a non-zero per-question score may only
+ * stand if the model grounded it in a candidate quote that actually appears in
+ * the transcript. The conversational format makes per-question scoring the AI's
+ * job, but it has been observed inventing partial credit (e.g. "showed general
+ * interest") for questions the candidate never reached. So any score whose
+ * evidence_quote is empty or not found in the candidate's own speech is forced
+ * to 0, and the overall is recomputed from the corrected scores.
+ */
+function enforceTranscriptEvidence(
+  result: AnswerScoringResult,
+  rawContent: string,
+  transcript: VoiceTranscriptTurn[],
+): AnswerScoringResult {
+  let rawAnswers: { question_id?: unknown; evidence_quote?: unknown }[] = [];
+  try {
+    const parsed = JSON.parse(rawContent) as {
+      answers?: { question_id?: unknown; evidence_quote?: unknown }[];
+    };
+    rawAnswers = parsed.answers ?? [];
+  } catch {
+    rawAnswers = [];
+  }
+
+  const quoteByQuestion = new Map<string, string>();
+  for (const a of rawAnswers) {
+    if (a?.question_id != null) {
+      quoteByQuestion.set(
+        String(a.question_id),
+        typeof a.evidence_quote === "string" ? a.evidence_quote : "",
+      );
+    }
+  }
+
+  const candidateSpeech = normalizeForMatch(
+    transcript.filter((t) => t.role === "candidate").map((t) => t.text).join(" "),
+  );
+
+  let changed = false;
+  const answers = result.answers.map((a) => {
+    if (a.score === 0) return a;
+    const quote = normalizeForMatch(quoteByQuestion.get(a.question_id) ?? "");
+    const grounded = quote.length > 0 && candidateSpeech.includes(quote);
+    if (grounded) return a;
+    changed = true;
+    return {
+      ...a,
+      score: 0,
+      rationale:
+        "Scored 0: no candidate answer to this question was found in the transcript.",
+    };
+  });
+
+  if (!changed) return result;
+  return { ...result, answers, overall_score: averageOverall(answers) };
 }
