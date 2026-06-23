@@ -3,12 +3,14 @@ import { notFound } from "next/navigation";
 import { getCampaignById, getResumeCriteriaCount } from "@/lib/actions/campaigns";
 import { getCandidateById } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
+import { getInterviewBooking } from "@/lib/actions/schedule";
 import { ScoreResumeButton } from "@/components/candidates/score-resume-button";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
-import type { CandidateScore } from "@/lib/constants";
+import type { CandidateScore, ApplicationState } from "@/lib/constants";
+import type { InterviewBooking } from "@/lib/data/scheduling";
 import type { ParsedResumeData } from "@/lib/services/openai";
 
 const tierColors: Record<string, string> = {
@@ -182,13 +184,99 @@ function EducationEntry({ edu }: { edu: ParsedResumeData["education"][number] })
   );
 }
 
+/**
+ * Surfaces whether the candidate has actually booked their interview, so the
+ * recruiter can tell `interview_scheduling` (invited, awaiting booking) apart
+ * from `interview_scheduled` (slot picked) at a glance — the two labels are
+ * otherwise one word apart. Renders nothing outside those two states.
+ */
+function InterviewBookingBanner({
+  status,
+  booking,
+}: {
+  status: ApplicationState;
+  booking: InterviewBooking | null;
+}) {
+  if (status !== "interview_scheduling" && status !== "interview_scheduled") {
+    return null;
+  }
+
+  // Booked — the candidate picked a slot. Green, with the confirmed time.
+  if (booking && booking.status === "booked") {
+    const when = new Intl.DateTimeFormat("en-US", {
+      timeZone: booking.timezone,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(booking.scheduled_at));
+
+    return (
+      <div
+        role="status"
+        className="flex items-start gap-3 rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] p-4"
+      >
+        <svg className="w-5 h-5 text-[#059669] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008z" />
+        </svg>
+        <div>
+          <p className="text-sm font-semibold text-[#065F46]">Interview booked</p>
+          <p className="text-sm text-[#047857] mt-0.5">
+            {when} ({booking.timezone})
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Invited but not yet booked. Amber — action sits with the candidate.
+  if (status === "interview_scheduling") {
+    return (
+      <div
+        role="status"
+        className="flex items-start gap-3 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-4"
+      >
+        <svg className="w-5 h-5 text-[#D97706] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div>
+          <p className="text-sm font-semibold text-[#92400E]">Awaiting candidate booking</p>
+          <p className="text-sm text-[#B45309] mt-0.5">
+            The scheduling invite was sent. The candidate hasn&apos;t picked an interview slot yet.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // interview_scheduled without a booking row — e.g. set by a manual override.
+  // Be honest rather than imply a slot exists.
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-4"
+    >
+      <svg className="w-5 h-5 text-[#6B7280] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+      </svg>
+      <div>
+        <p className="text-sm font-semibold text-[#374151]">Marked as scheduled</p>
+        <p className="text-sm text-[#6B7280] mt-0.5">
+          No system booking is on file for this candidate.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default async function CandidateDetailPage({
   params,
 }: {
   params: Promise<{ id: string; candidateId: string }>;
 }) {
   const { id, candidateId } = await params;
-  const [campaign, candidate, screeningState, resumeCriteriaCount] = await Promise.all([
+  const [campaign, candidate, screeningState, resumeCriteriaCount, booking] = await Promise.all([
     getCampaignById(id),
     getCandidateById(candidateId),
     getCandidateScreeningState(candidateId).catch(() => ({
@@ -197,6 +285,7 @@ export default async function CandidateDetailPage({
       response: null,
     })),
     getResumeCriteriaCount(id).catch(() => 0),
+    getInterviewBooking(candidateId).catch(() => null),
   ]);
 
   const hasResumeCriteria = resumeCriteriaCount > 0;
@@ -552,6 +641,8 @@ export default async function CandidateDetailPage({
 
         {/* Right column — Background + Screening + Scores */}
         <div className="lg:col-span-2 space-y-4 min-w-0">
+          <InterviewBookingBanner status={candidate.status} booking={booking} />
+
           {candidate.awaiting_human_review && (
             <HitlReviewPanel applicationId={candidateId} />
           )}

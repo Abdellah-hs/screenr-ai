@@ -3,12 +3,14 @@
 import { headers } from "next/headers";
 import { z } from "zod/v4";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { requireUserId } from "@/lib/auth/guards";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import { bookInterviewSlotSchema } from "@/lib/validations";
+import { bookInterviewSlotSchema, uuidSchema } from "@/lib/validations";
 import {
   fetchSchedulingContext,
   fetchBookedSlotIsos,
   fetchBookingForApplication,
+  fetchBookingForRecruiter,
   insertBooking,
   type InterviewBooking,
 } from "@/lib/data/scheduling";
@@ -28,6 +30,20 @@ async function getClientIp(): Promise<string> {
   const fwd = h.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim();
   return h.get("x-real-ip") ?? "unknown";
+}
+
+/**
+ * Recruiter-facing read of a candidate's interview booking, for the candidate
+ * detail page. Auth'd by session; the underlying query runs under owner RLS, so
+ * a recruiter only ever sees bookings on their own campaigns' applications.
+ * Returns null when the candidate hasn't booked (or there is no booking row).
+ */
+export async function getInterviewBooking(
+  applicationId: string,
+): Promise<InterviewBooking | null> {
+  await requireUserId();
+  uuidSchema.parse(applicationId);
+  return fetchBookingForRecruiter(applicationId);
 }
 
 export interface SchedulingPageContext {
