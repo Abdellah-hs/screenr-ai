@@ -36,6 +36,13 @@ describe("recruiterStageOptions", () => {
     expect(options).toEqual(["processing_failed", "rejected"]);
   });
 
+  it("drops interview_scheduled from the interview_scheduling options (only the candidate's booking sets it)", () => {
+    const options = recruiterStageOptions("interview_scheduling");
+
+    expect(options).not.toContain("interview_scheduled");
+    expect(options).toEqual(["rejected"]);
+  });
+
   it("leaves a scored candidate's routing choices intact", () => {
     // screening_scored is reached by the system; from there the recruiter still
     // decides advancement vs rejection — neither is a system-produced state.
