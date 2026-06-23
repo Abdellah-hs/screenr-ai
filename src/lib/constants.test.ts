@@ -22,6 +22,7 @@ const LEGACY_STATES = ["screening", "screening_q", "interview"];
 // path CLAUDE.md flagged now has an observable terminal state.
 const FAILURE_STATES: ApplicationState[] = [
   "screening_expired",
+  "interview_expired",
   "interview_no_show",
   "processing_failed",
 ];
@@ -63,6 +64,20 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
 
   it("keeps archived a terminal state with no outbound transitions", () => {
     expect(APPLICATION_STATE_TRANSITIONS.archived).toEqual([]);
+  });
+
+  it("routes the on-demand interview invite to completed or expired", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.interview_invited).toEqual([
+      "interview_completed",
+      "interview_expired",
+      "rejected",
+    ]);
+  });
+
+  it("makes interview_invited reachable from screening_scored", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.screening_scored).toContain(
+      "interview_invited",
+    );
   });
 });
 
@@ -116,6 +131,7 @@ describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
 
   it("groups every interview-track state under Interview", () => {
     for (const state of [
+      "interview_invited",
       "interview_scheduling",
       "interview_scheduled",
       "interview_completed",
@@ -130,6 +146,7 @@ describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
     for (const state of [
       "rejected",
       "screening_expired",
+      "interview_expired",
       "interview_no_show",
       "processing_failed",
       "archived",

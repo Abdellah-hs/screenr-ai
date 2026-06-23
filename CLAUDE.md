@@ -117,8 +117,7 @@ new
 → screening_sent
 → screening_completed
 → screening_scored
-→ interview_scheduling
-→ interview_scheduled
+→ interview_invited            (on-demand AI interview — PRD 3.5.6)
 → interview_completed
 → interview_scored
 → reference_check              (optional)
@@ -127,7 +126,9 @@ new
 → hired | rejected | archived
 ```
 
-Explicit failure states (never silent): `screening_expired`, `interview_no_show`, `processing_failed`, `archived`.
+`interview_scheduling` / `interview_scheduled` are **deprecated** (the AI interview is on-demand, not slot-scheduled — see "AI Interview Invitation (On-Demand)"). They remain in the enum until a cleanup migration retires them; new flows use `interview_invited`.
+
+Explicit failure states (never silent): `screening_expired`, `interview_expired`, `interview_no_show`, `processing_failed`, `archived`.
 
 ### Transition Rules (NON-NEGOTIABLE)
 

@@ -285,6 +285,7 @@ export type ApplicationState =
   | "screening_completed"
   | "screening_scored"
   // Canonical interview stages
+  | "interview_invited"
   | "interview_scheduling"
   | "interview_scheduled"
   | "interview_completed"
@@ -296,6 +297,7 @@ export type ApplicationState =
   // Failure states — explicit, never silent
   | "screening_expired"
   | "interview_no_show"
+  | "interview_expired"
   | "processing_failed"
   // Terminal
   | "rejected"
@@ -324,7 +326,12 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   screening_approved: ["screening_sent", "rejected"],
   screening_sent: ["screening_completed", "screening_expired", "rejected"],
   screening_completed: ["screening_scored", "processing_failed", "rejected"],
-  screening_scored: ["interview_scheduling", "rejected"],
+  screening_scored: ["interview_scheduling", "interview_invited", "rejected"],
+
+  // On-demand AI interview (PRD 3.5.6): invited via a token link → completed or
+  // expired. Supersedes the scheduling/scheduled pair below, which stays valid
+  // until a cleanup migration retires it (and screening_scored is rerouted here).
+  interview_invited: ["interview_completed", "interview_expired", "rejected"],
 
   // Canonical interview track
   interview_scheduling: ["interview_scheduled", "rejected"],
@@ -340,6 +347,7 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   // Failure states — observable dead-ends, archived is the only exit.
   screening_expired: ["archived"],
   interview_no_show: ["archived"],
+  interview_expired: ["archived"],
   processing_failed: ["archived"],
 
   // Terminal — only `archived` is reachable from them (for housekeeping).
@@ -376,6 +384,7 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   screening_completed: "screening",
   screening_scored: "screening",
 
+  interview_invited: "interview",
   interview_scheduling: "interview",
   interview_scheduled: "interview",
   interview_completed: "interview",
@@ -390,6 +399,7 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   rejected: "rejected",
   screening_expired: "rejected",
   interview_no_show: "rejected",
+  interview_expired: "rejected",
   processing_failed: "rejected",
   archived: "rejected",
 };
