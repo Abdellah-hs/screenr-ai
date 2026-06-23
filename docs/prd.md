@@ -23,7 +23,7 @@ The system follows a sequential pipeline. Each candidate progresses through thes
 
 ```
 Resume Collection → AI Screening → Filtering → Screening Questions →
-Answer Scoring → AI Interview Scheduling → AI Interview →
+Answer Scoring → AI Interview Invitation → AI Interview →
 Interview Scoring → AI Reference Check (optional) → Manager Review →
 Final Interview Scheduling
 ```
@@ -207,13 +207,16 @@ The AI interviewer supports these interview formats (configurable per campaign):
 - The system generates a **full transcript** of the interview
 - Managers can jump to specific timestamps or flagged moments
 
-#### 3.5.6 Interview Scheduling
-- Once a candidate passes the screening questions stage, the system triggers interview scheduling
-- Candidates receive an **email** with available time slots
-- Available slots are pulled from the system's configured interview availability (not tied to a human interviewer's calendar since the interviewer is AI)
-- Candidates self-select a slot
-- A **confirmation email** is sent with the interview link and **interview preparation guide** (see 3.9.2)
-- **Reminder emails** are sent 24 hours and 1 hour before the interview (each reminder includes the prep guide link)
+#### 3.5.6 Interview Invitation (On-Demand)
+
+> **Decision (2026-06-23):** The AI interview is **on-demand**, not slot-scheduled. The AI interviewer is available 24/7, so there is no second party's calendar to coordinate against — calendar-style scheduling is reserved for the **final human interview** (3.8). This supersedes the earlier "self-schedule against AI interview availability" design. Capacity and cost are managed by a **concurrency cap** on simultaneous realtime sessions, not by candidate-facing time slots.
+
+- Once a candidate passes the screening questions stage, the system **invites** them to take the AI interview
+- Candidates receive an **email** with a link to start the interview and the **interview preparation guide** (see 3.9.2)
+- The invitation link carries a **deadline** (e.g., 7 days). The candidate starts whenever they are ready within that window — there is no slot to book
+- Before the session starts, a **readiness check** confirms desktop + camera/mic (the session is desktop-only, see 3.9.4)
+- **Reminder emails** are sent as the deadline approaches (e.g., 3 days and 1 day before expiry); each reminder includes the prep guide link
+- If the candidate does not complete the interview before the deadline, see No-Show / Expiry Handling (3.12.5)
 
 #### 3.5.7 Interview Scoring
 - After the interview, the AI produces:
@@ -564,13 +567,15 @@ Managers can select multiple candidates and perform actions in batch:
   - Can be **manually un-archived** by a manager if the candidate re-engages
 - Auto-archiving triggers are logged in the activity log
 
-#### 3.12.5 No-Show Handling
-When a candidate misses their scheduled AI interview:
-- The system marks the session as a **no-show** after a configurable grace period (e.g., 10 minutes past start time)
-- A **no-show notification** is sent to the assigned manager
-- The system automatically sends the candidate a **rescheduling email** with new available time slots (up to a configurable maximum number of reschedule attempts, e.g., 2)
-- If the candidate no-shows again after rescheduling, they are auto-archived
-- No-show history is visible on the candidate's profile
+#### 3.12.5 No-Show / Expiry Handling
+When a candidate does not complete their AI interview before the invitation deadline (or abandons a started session):
+- The system marks the application as a **no-show / expired** failure state
+- A **notification** is sent to the assigned manager
+- The system automatically sends the candidate a **reminder email** with a refreshed link and an extended deadline (up to a configurable maximum number of attempts, e.g., 2)
+- If the candidate still does not complete after the final reminder, they are auto-archived
+- No-show / expiry history is visible on the candidate's profile
+
+> The final **human** interview (3.8) keeps true calendar scheduling — a no-show there is a missed *appointment*, handled by the manager-availability reschedule flow, not this on-demand expiry.
 
 #### 3.12.6 Reusable Template Library
 - **Email templates** can be saved and reused across campaigns (not just per-campaign)

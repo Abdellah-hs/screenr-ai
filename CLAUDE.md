@@ -218,14 +218,14 @@ Each stage (resume, screening answers, interview) produces its own score. There 
 - Configurable formats: system design, technical Q&A, behavioral, code reading.
 - Output must include transcript, recording, per-section scores, overall score, strengths/concerns, and proctoring report.
 
-### Interview Scheduling
+### AI Interview Invitation (On-Demand)
 
-- After passing screening questions, candidates self-serve schedule against system-managed AI interview availability.
-- Confirmation + reminder emails include the prep guide (web page, not PDF).
+- **Decision 2026-06-23:** the AI interview is **on-demand, not slot-scheduled**. The AI interviewer is available 24/7, so there is no calendar to coordinate against. After passing screening, the candidate is *invited* via a token link with a deadline (like screening links) and starts the interview whenever ready — no booking. Capacity/cost is a **concurrency cap** on realtime sessions, not candidate-facing slots. Reminders + prep guide (web page, not PDF) go out as the deadline approaches.
+- This **supersedes** the earlier "self-serve schedule against AI interview availability" design (PRD 3.5.6). The slot-booking infrastructure (`interview_availability_rules`, `interview_bookings`, `/schedule/[token]`) is **repointed to the final human interview** below, where coordinating a real person's calendar genuinely needs it.
 
 ### Final Interview Scheduling
 
-Manager review is not the final step. After manager review, the system schedules a human final interview via calendar integration. Treat this as a first-class stage, not a manual follow-up.
+Manager review is not the final step. After manager review, the system schedules a human final interview via calendar integration — this is where candidate-facing **slot booking** lives (it inherits the availability/booking machinery originally built for the AI interview). Treat this as a first-class stage, not a manual follow-up.
 
 ### Reference Checks
 
