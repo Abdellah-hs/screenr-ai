@@ -18,6 +18,14 @@ vi.mock("./gmail-sender", () => ({
   getRecruiterGmailClient: mockGetGmailClient,
 }));
 
+vi.mock("@/lib/http/origin", () => ({
+  getRequestOrigin: () => Promise.resolve("https://hire.example.com"),
+}));
+
+vi.mock("@/lib/auth/screening-token", () => ({
+  signResponseToken: () => "signed-token",
+}));
+
 import { sendTransitionNotification } from "./transition-notifications";
 
 const CONTEXT = {
@@ -43,13 +51,15 @@ afterEach(() => {
 });
 
 describe("sendTransitionNotification", () => {
-  it("emails the candidate the advance email on transition to interview_scheduling", async () => {
+  it("emails the candidate a self-scheduling invite with the booking link on transition to interview_scheduling", async () => {
     await sendTransitionNotification("app-1", "interview_scheduling", USER_ID);
 
     expect(mockSendEmail).toHaveBeenCalledTimes(1);
     const sent = mockSendEmail.mock.calls[0][1];
     expect(sent.to).toBe("jane@example.com");
     expect(sent.subject).toContain("Senior Engineer");
+    expect(sent.text).toContain("https://hire.example.com/schedule/signed-token");
+    expect(sent.html).toContain("https://hire.example.com/schedule/signed-token");
   });
 
   it("sends from the acting recruiter's connected Gmail client", async () => {
