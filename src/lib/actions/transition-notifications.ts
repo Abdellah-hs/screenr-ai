@@ -2,29 +2,52 @@ import type { ApplicationState } from "@/lib/constants";
 import { fetchApplicationEmailContext } from "@/lib/data/candidates";
 import { sendEmail } from "@/lib/services/email";
 import { getRecruiterGmailClient } from "./gmail-sender";
-import { buildAdvanceScreeningEmail } from "@/lib/services/email-templates/advance-screening";
+import { getRequestOrigin } from "@/lib/http/origin";
+import { signResponseToken } from "@/lib/auth/screening-token";
+import { buildInterviewSchedulingEmail } from "@/lib/services/email-templates/interview-scheduling";
 import { buildRejectScreeningEmail } from "@/lib/services/email-templates/reject-screening";
 import type { BuiltEmail } from "@/lib/services/email-templates/shared";
+
+/**
+ * The candidate's scheduling link must outlive the booking horizon (the window
+ * of slots they can pick from, default 14 days) with comfortable buffer, so it
+ * gets a longer TTL than the 7-day screening response link.
+ */
+const SCHEDULE_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+interface TransitionEmailContext {
+  candidateName: string;
+  campaignTitle: string;
+  /** Token-gated /schedule link — present only for interview_scheduling. */
+  scheduleUrl?: string;
+}
 
 /**
  * Maps a destination state to the candidate email it should trigger, or null
  * when that state has no candidate-facing notification.
  *
  * Only the two states with a live transition emitter are wired today:
- *   - interview_scheduling → "you passed screening" advance email
+ *   - interview_scheduling → self-scheduling invite (carries the booking link)
  *   - rejected             → rejection email
  *
  * The interview-confirmation (`interview_scheduled`) and reminder templates
- * also exist but stay unwired — confirmation needs interview self-scheduling
- * and reminders need a scheduler, both tracked as separate follow-ups.
+ * also exist; confirmation is sent from the booking action itself, and
+ * reminders need a scheduler (tracked as a separate follow-up).
  */
 function buildTransitionEmail(
   toState: ApplicationState,
-  ctx: { candidateName: string; campaignTitle: string },
+  ctx: TransitionEmailContext,
 ): BuiltEmail | null {
   switch (toState) {
     case "interview_scheduling":
-      return buildAdvanceScreeningEmail(ctx);
+      // The caller always supplies scheduleUrl for this state; guard anyway so
+      // a missing origin/token degrades to "no email" rather than a broken link.
+      if (!ctx.scheduleUrl) return null;
+      return buildInterviewSchedulingEmail({
+        candidateName: ctx.candidateName,
+        campaignTitle: ctx.campaignTitle,
+        scheduleUrl: ctx.scheduleUrl,
+      });
     case "rejected":
       return buildRejectScreeningEmail(ctx);
     default:
@@ -50,9 +73,18 @@ export async function sendTransitionNotification(
     const ctx = await fetchApplicationEmailContext(applicationId);
     if (!ctx) return;
 
+    // The self-scheduling invite needs an absolute, token-gated booking link.
+    let scheduleUrl: string | undefined;
+    if (toState === "interview_scheduling") {
+      const origin = await getRequestOrigin();
+      const token = signResponseToken(applicationId, SCHEDULE_TOKEN_TTL_MS);
+      scheduleUrl = `${origin}/schedule/${encodeURIComponent(token)}`;
+    }
+
     const email = buildTransitionEmail(toState, {
       candidateName: ctx.candidateName,
       campaignTitle: ctx.campaignTitle,
+      scheduleUrl,
     });
     if (!email) return; // no notification configured for this state
 

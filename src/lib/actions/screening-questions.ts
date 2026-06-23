@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getRequestOrigin } from "@/lib/http/origin";
 import {
   uuidSchema,
   screeningQuestionsArraySchema,
@@ -173,15 +173,6 @@ async function tryAdvanceToScreeningSent(applicationId: string): Promise<void> {
   }
 }
 
-async function getOrigin(): Promise<string> {
-  const h = await headers();
-  const forwardedProto = h.get("x-forwarded-proto");
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  const proto = forwardedProto ?? (host?.startsWith("localhost") ? "http" : "https");
-  if (!host) throw new Error("Could not determine request origin");
-  return `${proto}://${host}`;
-}
-
 /**
  * Send screening questions to a single candidate. Creates the pending
  * response row, signs a token, and emails the candidate the link.
@@ -216,7 +207,7 @@ export async function sendScreeningQuestionsToCandidate(
   }
 
   const gmail = await getRecruiterGmailClient(userId);
-  const origin = await getOrigin();
+  const origin = await getRequestOrigin();
   await buildAndSendOne({
     gmail,
     applicationId: app.application_id,
@@ -347,7 +338,7 @@ export async function sendScreeningQuestionsBulk(
   }
 
   const gmail = await getRecruiterGmailClient(userId);
-  const origin = await getOrigin();
+  const origin = await getRequestOrigin();
   let sent = 0;
   let failed = 0;
   const errors: string[] = [];
