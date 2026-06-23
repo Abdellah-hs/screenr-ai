@@ -858,6 +858,7 @@ export type Database = {
         | "screening_sent"
         | "screening_completed"
         | "screening_scored"
+        | "interview_invited"
         | "interview_scheduling"
         | "interview_scheduled"
         | "interview_completed"
@@ -867,6 +868,7 @@ export type Database = {
         | "final_interview_scheduling"
         | "screening_expired"
         | "interview_no_show"
+        | "interview_expired"
         | "processing_failed"
         | "rejected"
         | "hired"
@@ -1025,6 +1027,7 @@ export const Constants = {
         "screening_sent",
         "screening_completed",
         "screening_scored",
+        "interview_invited",
         "interview_scheduling",
         "interview_scheduled",
         "interview_completed",
@@ -1034,6 +1037,7 @@ export const Constants = {
         "final_interview_scheduling",
         "screening_expired",
         "interview_no_show",
+        "interview_expired",
         "processing_failed",
         "rejected",
         "hired",

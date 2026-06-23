@@ -11,6 +11,7 @@ import {
  *   - screening_sent       → the questions email was sent + a response row created
  *   - screening_completed → a submitted candidate screening response exists
  *   - screening_scored    → an AI screening score is persisted as evidence
+ *   - interview_invited    → the on-demand interview invite was sent (link + deadline)
  *   - interview_scheduled  → the candidate booked a slot (a booking row exists)
  *   - interview_completed  → the interview actually took place (recording/transcript)
  *   - interview_scored     → an AI interview score is persisted
@@ -30,6 +31,7 @@ export const SYSTEM_PRODUCED_STATES: readonly ApplicationState[] = [
   "screening_sent",
   "screening_completed",
   "screening_scored",
+  "interview_invited",
   "interview_scheduled",
   "interview_completed",
   "interview_scored",
