@@ -11,6 +11,7 @@ import {
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { transitionApplication } from "@/lib/data/transitions";
+import { assertRecruiterSettableTarget } from "@/lib/rules/manual-stage-change";
 import { sendTransitionNotification } from "./transition-notifications";
 import { sendScreeningQuestionsToCandidate } from "./screening-questions";
 
@@ -391,6 +392,11 @@ export async function updateCandidateStage(
   uuidSchema.parse(applicationId);
   const validState = applicationStateSchema.parse(toState);
   const validRationale = stageChangeRationaleSchema.parse(rationale);
+
+  // A recruiter may route an application, but may not hand-set a state that
+  // asserts a candidate/AI artifact (e.g. screening_completed, screening_scored)
+  // — those would fabricate pipeline state with no response or score behind it.
+  assertRecruiterSettableTarget(validState);
 
   // Fetch campaign_id before updating so we can revalidate the right paths
   const campaignId = await fetchApplicationCampaignId(applicationId);

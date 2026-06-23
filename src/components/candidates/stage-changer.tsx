@@ -2,10 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
-import {
-  APPLICATION_STATE_TRANSITIONS,
-  type ApplicationState,
-} from "@/lib/constants";
+import { type ApplicationState } from "@/lib/constants";
+import { recruiterStageOptions } from "@/lib/rules/manual-stage-change";
 import { Modal, ModalFooter, ModalHeader, Textarea } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -48,10 +46,12 @@ export function StageChanger({
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // Only legal next-states from the state machine are offered — illegal
-  // transitions can't even be selected. transitionApplication() enforces the
-  // same rule server-side as a backstop.
-  const nextStates = APPLICATION_STATE_TRANSITIONS[currentState] ?? [];
+  // Only legal next-states a recruiter may actually set are offered: the state
+  // machine's legal transitions minus system-produced states (screening_completed,
+  // screening_scored, …) that reflect a candidate response or AI score. The
+  // server (assertRecruiterSettableTarget + transitionApplication) enforces the
+  // same rule as a backstop.
+  const nextStates = recruiterStageOptions(currentState);
   const isTerminal = nextStates.length === 0;
 
   function pickTarget(state: ApplicationState) {
