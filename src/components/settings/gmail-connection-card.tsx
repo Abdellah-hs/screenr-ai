@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Modal, ModalHeader, ModalFooter } from "@/components/ui/modal";
 import { disconnectGmail } from "@/lib/actions/integrations";
 import type { GmailConnectionStatus } from "@/lib/data/integrations";
 
@@ -17,6 +18,7 @@ export function GmailConnectionCard({ status, notice }: GmailConnectionCardProps
   const router = useRouter();
   const [banner, setBanner] = useState(notice);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
 
   const dismissBanner = () => {
     setBanner(null);
@@ -24,13 +26,15 @@ export function GmailConnectionCard({ status, notice }: GmailConnectionCardProps
     window.history.replaceState(null, "", "/settings");
   };
 
-  const handleDisconnect = async () => {
-    if (!window.confirm("Disconnect this Gmail account? Resume sync will stop until you reconnect.")) {
-      return;
-    }
+  // The Disconnect button opens an in-app confirmation modal rather than the
+  // native window.confirm() (which renders as an ugly, unstyled browser dialog).
+  const handleDisconnect = () => setShowDisconnectConfirm(true);
+
+  const confirmDisconnect = async () => {
     try {
       setIsDisconnecting(true);
       await disconnectGmail();
+      setShowDisconnectConfirm(false);
       router.refresh();
     } finally {
       setIsDisconnecting(false);
@@ -150,6 +154,60 @@ export function GmailConnectionCard({ status, notice }: GmailConnectionCardProps
           )}
         </div>
       </div>
+
+      <Modal
+        open={showDisconnectConfirm}
+        onClose={() => {
+          if (!isDisconnecting) setShowDisconnectConfirm(false);
+        }}
+        className="max-w-[440px] p-6"
+      >
+        <ModalHeader>
+          <div className="flex items-start gap-3">
+            <span
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#FEE2E2] text-[#DC2626]"
+              aria-hidden="true"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </span>
+            <div className="min-w-0">
+              <h3 className="text-base font-semibold text-[#111827]">Disconnect Gmail?</h3>
+              <p className="mt-1 text-sm text-[#6B7280]">
+                We&apos;ll stop pulling new resumes
+                {status.email ? (
+                  <>
+                    {" "}from{" "}
+                    <span className="font-medium text-[#374151]">{status.email}</span>
+                  </>
+                ) : null}{" "}
+                until you reconnect. Candidates already in your pipeline aren&apos;t affected.
+              </p>
+            </div>
+          </div>
+        </ModalHeader>
+        <ModalFooter>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setShowDisconnectConfirm(false)}
+            disabled={isDisconnecting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={confirmDisconnect}
+            disabled={isDisconnecting}
+          >
+            {isDisconnecting ? "Disconnecting…" : "Disconnect"}
+          </Button>
+        </ModalFooter>
+      </Modal>
     </div>
   );
 }

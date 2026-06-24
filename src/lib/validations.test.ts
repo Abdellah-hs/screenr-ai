@@ -43,7 +43,7 @@ describe('campaignFormSchema', () => {
     automation_mode: 'human_in_loop' as const,
     screening_threshold: 70,
     interview_persona: 'neutral' as const,
-    application_email: null,
+    application_email: 'careers+eng@company.com',
     interview_slot_minutes: null,
     interview_timezone: null,
     interview_booking_horizon_days: 14,
@@ -66,6 +66,14 @@ describe('campaignFormSchema', () => {
     const result = campaignFormSchema.safeParse({
       ...validCampaign,
       application_email: 'not-an-email',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a campaign with no application_email (now required)', () => {
+    const result = campaignFormSchema.safeParse({
+      ...validCampaign,
+      application_email: '',
     });
     expect(result.success).toBe(false);
   });
@@ -193,6 +201,7 @@ describe('parseCampaignFormData', () => {
     fd.set('automation_mode', 'human_in_loop');
     fd.set('screening_threshold', '70');
     fd.set('interview_persona', 'neutral');
+    fd.set('application_email', 'careers+eng@company.com');
     for (const [key, value] of Object.entries(overrides)) {
       fd.set(key, value);
     }
@@ -238,10 +247,10 @@ describe('parseCampaignFormData', () => {
     expect(result.application_email).toBe('careers+eng@company.com');
   });
 
-  it('maps a missing application_email to null', () => {
+  it('rejects a form with a missing application_email (now required)', () => {
     const fd = buildFormData();
-    const result = parseCampaignFormData(fd);
-    expect(result.application_email).toBeNull();
+    fd.delete('application_email');
+    expect(() => parseCampaignFormData(fd)).toThrow();
   });
 
   it('parses availability rules and the scalar interview-config fields', () => {

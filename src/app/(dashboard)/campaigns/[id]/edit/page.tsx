@@ -7,6 +7,7 @@ import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
 import type { Campaign } from "@/lib/constants";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
+import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
 import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
 
 export default function EditCampaignPage({
@@ -194,12 +195,13 @@ export default function EditCampaignPage({
 
         <div>
           <label htmlFor="application_email" className="block text-sm font-medium text-[#111827] mb-1">
-            Application email
+            Application email <span className="text-[#DC2626]">*</span>
           </label>
           <input
             id="application_email"
             name="application_email"
             type="email"
+            required
             defaultValue={campaign.application_email ?? ""}
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. careers+eng@yourcompany.com"
@@ -219,6 +221,12 @@ export default function EditCampaignPage({
         {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor initialRubrics={campaign.rubrics} campaignId={campaign.id} />
+        </div>
+
+        {/* SLA Timers — initialTimers seeds the editor so an edit-save preserves
+            existing timers (updateCampaignTx delete+re-inserts from this form). */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <SlaTimersEditor initialTimers={campaign.sla_timers} />
         </div>
 
         {/* AI Interview Availability */}

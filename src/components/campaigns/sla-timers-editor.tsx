@@ -18,7 +18,12 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
   const [timers, setTimers] = useState<SlaTimer[]>(initialTimers);
 
   const addTimer = () => {
-    setTimers([...timers, { ...DEFAULT_SLA }]);
+    // Default a new timer to the first stage that has no timer yet, so the new
+    // card is visibly distinct (a different stage) rather than a confusing
+    // duplicate of an existing one — and never creates two timers for one stage.
+    const nextStage = SLA_STAGES.find((s) => !timers.some((t) => t.stage === s.key));
+    if (!nextStage) return;
+    setTimers([...timers, { ...DEFAULT_SLA, stage: nextStage.key }]);
   };
 
   const removeTimer = (index: number) => {
@@ -38,7 +43,12 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[#111827]">SLA Timers</h3>
+        <h3 className="text-sm font-medium text-[#111827]">
+          SLA Timers
+          {timers.length > 0 && (
+            <span className="ml-2 text-xs font-normal text-[#6B7280]">({timers.length})</span>
+          )}
+        </h3>
         {availableStages.length > 0 && (
           <button
             type="button"

@@ -146,12 +146,13 @@ export default function NewCampaignPage() {
 
         <div>
           <label htmlFor="application_email" className="block text-sm font-medium text-[#111827] mb-1">
-            Application email
+            Application email <span className="text-[#DC2626]">*</span>
           </label>
           <input
             id="application_email"
             name="application_email"
             type="email"
+            required
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. careers+eng@yourcompany.com"
           />
