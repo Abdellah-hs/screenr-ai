@@ -64,6 +64,7 @@ vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
   fetchCampaignApplicationEmail: vi.fn(),
   fetchCampaignStatus: mockFetchCampaignStatus,
+  fetchActiveRubricVersion: vi.fn(),
 }));
 
 // Freeze guard — default to a no-op (active) so existing tests are unaffected;
@@ -99,7 +100,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import { decideHitlReview, syncResumesFromGmail, updateCandidateStage } from "./candidates";
-import { extractResumeData } from "@/lib/services/openai";
+import { extractResumeData, scoreResumeAgainstCriteria } from "@/lib/services/openai";
 import {
   fetchUnreadGmailResumes,
   getGmailMessage,
@@ -116,7 +117,11 @@ import {
   updateApplicationStage,
   fetchApplicationCampaignId,
 } from "@/lib/data/candidates";
-import { fetchCampaignScoringConfig, fetchCampaignApplicationEmail } from "@/lib/data/campaigns";
+import {
+  fetchCampaignScoringConfig,
+  fetchCampaignApplicationEmail,
+  fetchActiveRubricVersion,
+} from "@/lib/data/campaigns";
 
 beforeEach(() => {
   mockRequireUserId.mockReset();
@@ -634,5 +639,54 @@ describe("syncResumesFromGmail", () => {
     expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
     expect(result.success).toBe(true);
     expect(result.count).toBe(0);
+  });
+
+  // ─── Fully-auto auto-send ───────────────────────────────────────────────
+  // A campaign with scoring criteria configured. Each test sets the score and
+  // automation_mode to drive the resume-scoring rule to a specific outcome.
+  function configureScoring(
+    automation_mode: "fully_auto" | "human_in_loop",
+    overall_score: number,
+  ): void {
+    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload());
+    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
+      description: "Senior engineer role",
+      automation_mode,
+      screening_threshold: 70,
+      screening_criteria: [
+        { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
+      ],
+    } as never);
+    vi.mocked(fetchActiveRubricVersion).mockResolvedValue(1);
+    vi.mocked(scoreResumeAgainstCriteria).mockResolvedValue({
+      result: { overall_score, tier: "strong", rationale: "ok", factors: [] },
+      model: "gpt-test",
+      promptVersion: "v1",
+      rawOutput: "{}",
+    } as never);
+  }
+
+  it("auto-sends screening questions when fully-auto scoring approves the candidate", async () => {
+    configureScoring("fully_auto", 85); // ≥ threshold → screening_approved
+
+    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(mockSendScreeningQuestions).toHaveBeenCalledWith("app-1");
+  });
+
+  it("does not auto-send when fully-auto scoring rejects the candidate (below threshold)", async () => {
+    configureScoring("fully_auto", 40); // < threshold → rejected
+
+    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-send in human-in-the-loop mode (routes to manual review instead)", async () => {
+    configureScoring("human_in_loop", 85); // any score → screening_review_pending
+
+    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
   });
 });
