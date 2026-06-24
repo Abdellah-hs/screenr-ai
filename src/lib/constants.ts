@@ -1,6 +1,6 @@
 // ─── Campaign Types ──────────────────────────────────────────────────────────
 
-export type CampaignStatus = "draft" | "active" | "paused" | "closed" | "archived";
+export type CampaignStatus = "draft" | "active" | "paused" | "closed";
 export type AutomationMode = "fully_auto" | "human_in_loop";
 export type InterviewPersona = "neutral" | "pressure" | "collaborative" | "socratic";
 export type ReviewerRole = "lead" | "reviewer" | "observer";
@@ -68,8 +68,13 @@ export interface CampaignReviewer {
   assigned_at: string;
 }
 
+// SLA timers run against the coarse pipeline BUCKETS a candidate actually waits
+// in (the `CandidateStage` buckets), not the rubric stages (resume / screening_q
+// / interview). Terminal buckets (`hired`, `rejected`) carry no SLA.
+export type SlaStage = "applied" | "screening" | "interview" | "final_interview";
+
 export interface SlaTimer {
-  stage: PipelineStage | "applied" | "final_interview" | "hired";
+  stage: SlaStage;
   time_limit_hours: number;
   alert_threshold_hours: number;
   escalation_threshold_hours: number;
@@ -137,7 +142,6 @@ export const CAMPAIGN_STATUSES: { value: CampaignStatus; label: string }[] = [
   { value: "active", label: "Active" },
   { value: "paused", label: "Paused" },
   { value: "closed", label: "Closed" },
-  { value: "archived", label: "Archived" },
 ];
 
 export const STATUS_COLORS: Record<CampaignStatus, string> = {
@@ -145,16 +149,6 @@ export const STATUS_COLORS: Record<CampaignStatus, string> = {
   active: "bg-green-100 text-green-700",
   paused: "bg-amber-100 text-amber-700",
   closed: "bg-red-100 text-red-700",
-  archived: "bg-slate-100 text-slate-500",
-};
-
-/** Valid status transitions — key can move to any value in the array */
-export const STATUS_TRANSITIONS: Record<CampaignStatus, CampaignStatus[]> = {
-  draft: ["active", "archived"],
-  active: ["paused", "closed"],
-  paused: ["active", "closed"],
-  closed: ["archived"],
-  archived: [],
 };
 
 export const AUTOMATION_MODES: { value: AutomationMode; label: string; description: string }[] = [
@@ -175,6 +169,15 @@ export const PIPELINE_STAGES: { name: string; key: string }[] = [
   { name: "Interview", key: "interview" },
   { name: "Final Interview", key: "final_interview" },
   { name: "Hired", key: "hired" },
+];
+
+// The stages an SLA timer can target — the non-terminal pipeline buckets a
+// candidate can stall in. Mirrors PIPELINE_STAGES minus the terminal `hired`.
+export const SLA_STAGES: { name: string; key: SlaStage }[] = [
+  { name: "New", key: "applied" },
+  { name: "Screening", key: "screening" },
+  { name: "Interview", key: "interview" },
+  { name: "Final Interview", key: "final_interview" },
 ];
 
 // ─── Candidate Types ────────────────────────────────────────────────────────

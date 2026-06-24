@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 
 // ─── Campaign Validation ────────────────────────────────────────────────────
 
-const campaignStatusValues = ["draft", "active", "paused", "closed", "archived"] as const;
+const campaignStatusValues = ["draft", "active", "paused", "closed"] as const;
 const automationModeValues = ["fully_auto", "human_in_loop"] as const;
 const interviewPersonaValues = ["neutral", "pressure", "collaborative", "socratic"] as const;
 
@@ -17,15 +17,21 @@ export const campaignFormSchema = z.object({
   automation_mode: z.enum(automationModeValues),
   screening_threshold: z.number().int().min(0).max(100),
   interview_persona: z.enum(interviewPersonaValues),
-  // Address applicants send CVs to (a plus-alias of the connected inbox). The
-  // resume sync filters Gmail on this; null means "not set" (campaign can't sync).
-  application_email: z.email("Enter a valid email address").max(254).nullable(),
+  // Address applicants send CVs to (a plus-alias of the connected inbox).
+  // Required: the resume sync filters Gmail on this, so a campaign without it
+  // could never receive CVs.
+  application_email: z.email("Enter a valid email address").max(254),
   // AI-interview availability config (PRD 3.5.6). Slots are generated from the
   // weekly availabilityRules; these are the campaign-level knobs.
   interview_slot_minutes: z.number().int().min(5).max(240).nullable(),
   interview_timezone: z.string().max(64).nullable(),
   interview_booking_horizon_days: z.number().int().min(1).max(90),
 });
+
+// Standalone status validator for the inline / bulk status changers (a quick
+// status set outside the full edit form). Campaign status is freely settable,
+// so this just guards that the value is a real status.
+export const campaignStatusSchema = z.enum(campaignStatusValues);
 
 export const screeningCriterionSchema = z.object({
   id: z.string().optional(),
@@ -34,8 +40,13 @@ export const screeningCriterionSchema = z.object({
   is_mandatory: z.boolean(),
 });
 
+// SLA stages are the non-terminal pipeline buckets (match SlaStage / SLA_STAGES
+// in constants.ts). An older campaign may carry a legacy stage (e.g. the rubric
+// value "screening_q") — those no longer validate and get cleaned up on re-save.
+const slaStageValues = ["applied", "screening", "interview", "final_interview"] as const;
+
 export const slaTimerSchema = z.object({
-  stage: z.string().min(1).max(50),
+  stage: z.enum(slaStageValues),
   time_limit_hours: z.number().int().min(1),
   alert_threshold_hours: z.number().int().min(1),
   escalation_threshold_hours: z.number().int().min(1),
@@ -100,7 +111,7 @@ export function parseCampaignFormData(formData: FormData) {
     automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
     screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
-    application_email: (formData.get("application_email") as string)?.trim() || null,
+    application_email: ((formData.get("application_email") as string) ?? "").trim(),
     interview_slot_minutes: Number.isNaN(rawSlotMinutes) ? null : rawSlotMinutes,
     interview_timezone: (formData.get("interview_timezone") as string)?.trim() || null,
     interview_booking_horizon_days: Number.isNaN(rawHorizon) ? 14 : rawHorizon,
@@ -201,6 +212,13 @@ export const resolveDuplicateSchema = z.object({
 // ─── UUID Validation ────────────────────────────────────────────────────────
 
 export const uuidSchema = z.string().uuid("Invalid ID format");
+
+// A batch of campaign ids for bulk row actions (remove / set status). Capped to
+// keep a single request bounded.
+export const campaignIdsSchema = z
+  .array(uuidSchema)
+  .min(1, "Select at least one campaign")
+  .max(100, "Too many campaigns selected");
 
 // ─── Screening Questions ────────────────────────────────────────────────────
 

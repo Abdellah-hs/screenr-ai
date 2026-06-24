@@ -8,10 +8,9 @@ import {
   screeningAnswerSubmissionSchema,
   voiceScreeningSubmissionSchema,
 } from "@/lib/validations";
-import {
-  fetchApplicationForResponse,
-  fetchApplicationCampaignId,
-} from "@/lib/data/candidates";
+import { fetchApplicationForResponse } from "@/lib/data/candidates";
+import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
+import type { CampaignStatus } from "@/lib/constants";
 import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
@@ -47,6 +46,24 @@ async function getClientIp(): Promise<string> {
   const fwd = h.get("x-forwarded-for");
   if (fwd) return fwd.split(",")[0].trim();
   return h.get("x-real-ip") ?? "unknown";
+}
+
+// Candidate-facing message for a screening whose campaign isn't Active. Neutral
+// by design — it must not leak the internal status word or any ranking (PRD
+// candidate-facing constraints).
+const SCREENING_ON_HOLD_MESSAGE =
+  "This screening is currently on hold. Please check back later or contact the hiring team.";
+
+/**
+ * Freeze the candidate screening flow unless the owning campaign is Active —
+ * the candidate-side mirror of `assertCampaignActiveById`. A paused/closed/draft
+ * campaign must not let a candidate start, submit, or auto-score a screening,
+ * even via a link that went out while it was Active.
+ */
+function assertCampaignAcceptingResponses(status: CampaignStatus): void {
+  if (!isCampaignProcessingActive(status)) {
+    throw new ScreeningResponseError(SCREENING_ON_HOLD_MESSAGE);
+  }
 }
 
 export interface VerifiedResponseContext {
@@ -100,6 +117,10 @@ export async function loadResponseContext(
       expires_at,
     };
   }
+
+  // A done candidate (responded/scored) is handled above; an OPEN response on a
+  // frozen campaign must not show the form.
+  assertCampaignAcceptingResponses(app.campaign_status);
 
   assertResponseIsOpen(response.status);
 
@@ -159,12 +180,14 @@ export async function submitScreeningAnswers(input: {
   assertResponseNotResubmitted(existing.status);
 
   // Look up the application's campaign so we can reload the authoritative
-  // question set (with is_required flags).
-  const campaignId = await fetchApplicationCampaignId(application_id);
-  if (!campaignId) {
+  // question set (with is_required flags) — and freeze the submission if the
+  // campaign is no longer Active.
+  const app = await fetchApplicationForResponse(application_id);
+  if (!app) {
     throw new Error("This application no longer exists.");
   }
-  const questions = await fetchScreeningQuestionsByCampaignId(campaignId);
+  assertCampaignAcceptingResponses(app.campaign_status);
+  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
   if (questions.length === 0) {
     throw new Error("No screening questions are configured for this role.");
   }
@@ -309,6 +332,9 @@ export async function startCandidateVoiceScreening(
     );
   }
 
+  // Freeze the call unless the campaign is Active.
+  assertCampaignAcceptingResponses(app.campaign_status);
+
   assertResponseIsOpen(response.status);
 
   const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
@@ -374,6 +400,11 @@ export async function submitVoiceScreening(input: {
   }
 
   assertResponseNotResubmitted(existing.status);
+
+  // Freeze the submission (and the auto-score that follows) unless the campaign
+  // is Active.
+  const app = await fetchApplicationForResponse(application_id);
+  if (app) assertCampaignAcceptingResponses(app.campaign_status);
 
   await saveVoiceTranscript(application_id, parsed.transcript);
 

@@ -24,6 +24,9 @@ interface ScreeningThreadProps {
   applicationStatus: ApplicationState | null;
   questions: ScreeningQuestionRow[];
   response: ScreeningResponseRow | null;
+  // False when the campaign isn't Active — sends and scoring are frozen, so the
+  // buttons disable (mirrors the server-side freeze guard).
+  campaignActive: boolean;
 }
 
 function formatDate(iso: string | null): string {
@@ -49,6 +52,7 @@ export default function ScreeningThread({
   applicationStatus,
   questions,
   response,
+  campaignActive,
 }: ScreeningThreadProps) {
   const [sending, startSend] = useTransition();
   const [scoring, startScore] = useTransition();
@@ -99,13 +103,18 @@ export default function ScreeningThread({
   const transcript = response?.transcript ?? [];
   const isVoice = transcript.length > 0;
 
-  // Mirror the server-side guard in `sendScreeningQuestionsToCandidate`: the
-  // send/resend buttons stay disabled until the application has reached the
-  // screening stage, so a recruiter can't fire an email the action rejects.
+  // Mirror the server-side guards: the send/resend buttons stay disabled until
+  // the application reaches the screening stage AND the campaign is Active, so a
+  // recruiter can't fire an email (or score) the action would reject.
+  const frozenReason =
+    "This campaign isn't Active — set it to Active to send screening questions or score answers.";
   const canSend =
-    applicationStatus != null && isEligibleForScreeningSend(applicationStatus);
-  const sendDisabledReason =
-    "This candidate hasn't been approved into screening yet — screening questions can only be sent once they reach the screening stage.";
+    campaignActive &&
+    applicationStatus != null &&
+    isEligibleForScreeningSend(applicationStatus);
+  const sendDisabledReason = !campaignActive
+    ? frozenReason
+    : "This candidate hasn't been approved into screening yet — screening questions can only be sent once they reach the screening stage.";
 
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
@@ -142,7 +151,8 @@ export default function ScreeningThread({
           <button
             type="button"
             onClick={handleScore}
-            disabled={scoring}
+            disabled={scoring || !campaignActive}
+            title={campaignActive ? undefined : frozenReason}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {scoring ? (

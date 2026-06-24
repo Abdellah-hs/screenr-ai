@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { createCampaign } from "@/lib/actions/campaigns";
 import RubricEditor from "@/components/campaigns/rubric-editor";
@@ -13,14 +13,21 @@ export default function NewCampaignPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(formData: FormData) {
+  // Use onSubmit + preventDefault rather than the form `action` prop: React 19
+  // auto-resets an uncontrolled form once its action resolves, and since we
+  // catch validation errors here the action always "resolves" — which would
+  // wipe everything the recruiter typed on a failed submit. preventDefault
+  // keeps the entered values intact while native `required` checks still run.
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     setError(null);
     setLoading(true);
 
+    const formData = new FormData(e.currentTarget);
     try {
       await createCampaign(formData);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);
     }
   }
@@ -29,7 +36,7 @@ export default function NewCampaignPage() {
     <div className="max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold text-[#111827] mb-6">New Campaign</h1>
 
-      <form action={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
+      <form onSubmit={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
         {error && (
           <div className="p-3 text-sm text-[#DC2626] bg-[#FEF2F2] rounded-lg border border-[#FECACA]">
             {error}
@@ -139,12 +146,13 @@ export default function NewCampaignPage() {
 
         <div>
           <label htmlFor="application_email" className="block text-sm font-medium text-[#111827] mb-1">
-            Application email
+            Application email <span className="text-[#DC2626]">*</span>
           </label>
           <input
             id="application_email"
             name="application_email"
             type="email"
+            required
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. careers+eng@yourcompany.com"
           />

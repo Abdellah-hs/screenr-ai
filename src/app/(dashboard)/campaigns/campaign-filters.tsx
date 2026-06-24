@@ -3,13 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { Campaign } from "@/lib/constants";
-
-const statusColors: Record<string, string> = {
-  draft: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
-  active: "text-[#2563EB] bg-[#EFF6FF] border-[#BFDBFE]",
-  paused: "text-[#D97706] bg-[#FEF3C7] border-[#FDE68A]",
-  closed: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
-};
+import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
+import { CampaignRowActions } from "@/components/campaigns/campaign-row-actions";
+import { CampaignBulkActions } from "@/components/campaigns/campaign-bulk-actions";
 
 type SortField = "created_at" | "title";
 
@@ -17,6 +13,13 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortField>("created_at");
   const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Changing what's visible invalidates the current selection — clear it so a
+  // bulk action can never touch a row the recruiter can no longer see.
+  function clearSelection() {
+    setSelected(new Set());
+  }
 
   const filtered = campaigns
     .filter((c) => statusFilter === "all" || c.status === statusFilter)
@@ -36,6 +39,24 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
       return new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime();
     });
 
+  // Selection is always interpreted against the visible rows.
+  const selectedInView = filtered.filter((c) => selected.has(c.id));
+  const allChecked = filtered.length > 0 && selectedInView.length === filtered.length;
+  const someChecked = selectedInView.length > 0 && !allChecked;
+
+  function toggleAll() {
+    setSelected(allChecked ? new Set() : new Set(filtered.map((c) => c.id)));
+  }
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -48,7 +69,10 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
             type="text"
             placeholder="Search by title, department, location…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              clearSelection();
+            }}
             className="w-full pl-9 pr-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
           />
         </div>
@@ -56,7 +80,10 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              clearSelection();
+            }}
             className="bg-white border border-[#E5E7EB] text-[#111827] text-sm rounded-lg px-3 py-2 outline-none focus:border-[#2563EB] flex-1 sm:flex-none"
           >
             <option value="all">Filter: All</option>
@@ -74,13 +101,16 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
             <option value="created_at">Sort by Newest</option>
             <option value="title">Sort A-Z</option>
           </select>
-          
-          <button className="bg-white border border-[#E5E7EB] text-[#374151] hover:bg-[#F9FAFB] text-sm font-medium rounded-lg px-4 py-2 flex items-center gap-2 transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-            Export
-          </button>
         </div>
       </div>
+
+      {selectedInView.length > 0 && (
+        <CampaignBulkActions
+          selectedIds={selectedInView.map((c) => c.id)}
+          selectedStatuses={selectedInView.map((c) => c.status ?? "draft")}
+          onDone={clearSelection}
+        />
+      )}
 
       {filtered.length === 0 ? (
         <div className="text-center py-16 bg-white border border-[#E5E7EB] rounded-xl flex flex-col justify-center items-center">
@@ -98,7 +128,16 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
               <thead className="bg-[#F9FAFB] border-b border-[#E5E7EB] text-xs font-semibold text-[#6B7280] uppercase tracking-wider">
                 <tr>
                   <th scope="col" className="px-6 py-4 w-8 text-center text-[#D1D5DB]">
-                    <input type="checkbox" className="rounded border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB]" />
+                    <input
+                      type="checkbox"
+                      aria-label="Select all campaigns"
+                      checked={allChecked}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someChecked;
+                      }}
+                      onChange={toggleAll}
+                      className="rounded border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] cursor-pointer"
+                    />
                   </th>
                   <th scope="col" className="px-6 py-4">Title</th>
                   <th scope="col" className="px-6 py-4">Location</th>
@@ -111,10 +150,21 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
-                {filtered.map((campaign) => (
-                  <tr key={campaign.id} className="hover:bg-[#F9FAFB] transition-colors group">
+                {filtered.map((campaign) => {
+                  const isSelected = selected.has(campaign.id);
+                  return (
+                  <tr
+                    key={campaign.id}
+                    className={`transition-colors group ${isSelected ? "bg-[#EFF6FF]" : "hover:bg-[#F9FAFB]"}`}
+                  >
                     <td className="px-6 py-4 text-center">
-                      <input type="checkbox" className="rounded border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${campaign.title}`}
+                        checked={isSelected}
+                        onChange={() => toggleOne(campaign.id)}
+                        className={`rounded border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] cursor-pointer transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                      />
                     </td>
                     <td className="px-6 py-4">
                       <Link href={`/campaigns/${campaign.id}`} className="font-medium text-[#2563EB] hover:underline">
@@ -134,9 +184,10 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                       {campaign.created_at ? new Date(campaign.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "-"}
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex px-2.5 py-1 text-xs font-medium border rounded-md capitalize ${statusColors[campaign.status ?? "draft"]}`}>
-                        {campaign.status}
-                      </span>
+                      <CampaignStatusChanger
+                        campaignId={campaign.id}
+                        currentStatus={campaign.status ?? "draft"}
+                      />
                     </td>
                     <td className="px-6 py-4">
                       <Link
@@ -149,11 +200,15 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                         Show candidates
                       </Link>
                     </td>
-                    <td className="px-6 py-4 text-center text-[#9CA3AF] cursor-pointer hover:text-[#111827]">
-                      <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" /></svg>
+                    <td className="px-6 py-4 text-center">
+                      <CampaignRowActions
+                        campaignId={campaign.id}
+                        campaignTitle={campaign.title}
+                      />
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

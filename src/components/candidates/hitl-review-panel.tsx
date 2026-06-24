@@ -7,7 +7,15 @@ import { Modal, ModalFooter, ModalHeader } from "@/components/ui";
 
 type Decision = "approve" | "reject";
 
-export function HitlReviewPanel({ applicationId }: { applicationId: string }) {
+export function HitlReviewPanel({
+  applicationId,
+  campaignActive,
+}: {
+  applicationId: string;
+  // Approving processes the candidate (auto-sends screening), so it's frozen
+  // unless the campaign is Active. Rejecting stays available (a stop).
+  campaignActive: boolean;
+}) {
   const router = useRouter();
   const [decision, setDecision] = useState<Decision | null>(null);
   const [rationale, setRationale] = useState("");
@@ -99,7 +107,9 @@ export function HitlReviewPanel({ applicationId }: { applicationId: string }) {
         <button
           type="button"
           onClick={() => open("approve")}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#059669] rounded-lg cursor-pointer hover:bg-[#047857] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] focus-visible:ring-offset-1"
+          disabled={!campaignActive}
+          title={campaignActive ? undefined : "This campaign isn't Active — set it to Active to approve candidates into screening."}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#059669] rounded-lg cursor-pointer hover:bg-[#047857] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Approve for screening
         </button>

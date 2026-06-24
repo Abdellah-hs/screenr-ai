@@ -1,8 +1,14 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import type { Campaign } from "@/lib/constants";
-import { parseCampaignFormData, uuidSchema } from "@/lib/validations";
+import { revalidatePath } from "next/cache";
+import type { Campaign, CampaignStatus } from "@/lib/constants";
+import {
+  parseCampaignFormData,
+  uuidSchema,
+  campaignStatusSchema,
+  campaignIdsSchema,
+} from "@/lib/validations";
 import { requireUserId } from "@/lib/auth/guards";
 
 import {
@@ -12,6 +18,9 @@ import {
   updateCampaignTx,
   cloneCampaignTx,
   fetchCampaignScoringConfig,
+  fetchCampaignStatus,
+  updateCampaignStatusTx,
+  softDeleteCampaignTx,
 } from "@/lib/data/campaigns";
 
 // ─── GET all campaigns ───────────────────────────────────────────────────────
@@ -80,6 +89,83 @@ export async function createCampaign(formData: FormData) {
   );
 
   redirect(`/campaigns/${campaignId}`);
+}
+
+// ─── UPDATE campaign status (inline, outside the edit form) ──────────────────
+// A quick status flip from the campaign detail page. Reads the current status,
+// lets the rule layer veto an illegal transition, then persists + revalidates.
+
+export async function updateCampaignStatus(
+  campaignId: string,
+  status: CampaignStatus
+) {
+  const userId = await requireUserId();
+  uuidSchema.parse(campaignId);
+  const toStatus = campaignStatusSchema.parse(status);
+
+  // Campaign status is freely settable (no transition graph); we read the
+  // current status only to record the old → new pair in the audit log.
+  const fromStatus = await fetchCampaignStatus(campaignId, userId);
+  if (!fromStatus) throw new Error("Campaign not found");
+
+  await updateCampaignStatusTx(campaignId, fromStatus, toStatus, userId);
+
+  revalidatePath(`/campaigns/${campaignId}`);
+  revalidatePath("/campaigns");
+}
+
+// ─── DELETE campaign (soft) ──────────────────────────────────────────────────
+// The "Remove" row action. Soft-deletes so the campaign vanishes from the list
+// while its candidates/scores/audit trail survive. revalidates the list.
+
+export async function deleteCampaign(campaignId: string) {
+  const userId = await requireUserId();
+  uuidSchema.parse(campaignId);
+
+  await softDeleteCampaignTx(campaignId, userId);
+
+  revalidatePath("/campaigns");
+}
+
+// ─── BULK row actions (list multi-select) ────────────────────────────────────
+// Both orchestrate the single-campaign data helpers so ownership scoping, audit
+// rows and the transition graph behave exactly as the per-row actions do.
+
+export async function deleteCampaigns(campaignIds: string[]) {
+  const userId = await requireUserId();
+  const ids = campaignIdsSchema.parse(campaignIds);
+
+  await Promise.all(ids.map((id) => softDeleteCampaignTx(id, userId)));
+
+  revalidatePath("/campaigns");
+}
+
+export async function updateCampaignsStatus(
+  campaignIds: string[],
+  status: CampaignStatus
+) {
+  const userId = await requireUserId();
+  const ids = campaignIdsSchema.parse(campaignIds);
+  const toStatus = campaignStatusSchema.parse(status);
+
+  // Pass 1: read every current status (for the audit log) and confirm each
+  // campaign exists / is owned before mutating anything, so a bad id in the
+  // selection fails the whole batch rather than half-applying.
+  const froms = await Promise.all(
+    ids.map((id) => fetchCampaignStatus(id, userId))
+  );
+  const plan = ids.map((id, i) => {
+    const fromStatus = froms[i];
+    if (!fromStatus) throw new Error("Campaign not found");
+    return { id, fromStatus };
+  });
+
+  // Pass 2: apply. Status is freely settable, so any target is allowed.
+  await Promise.all(
+    plan.map((p) => updateCampaignStatusTx(p.id, p.fromStatus, toStatus, userId))
+  );
+
+  revalidatePath("/campaigns");
 }
 
 // ─── UPDATE campaign ─────────────────────────────────────────────────────────

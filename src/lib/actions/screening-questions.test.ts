@@ -32,8 +32,11 @@ vi.mock("@/lib/data/screening-questions", () => ({
   fetchScreeningResponseByApplicationId: vi.fn(),
   saveAnswerScores: vi.fn(),
 }));
+// Freeze guard — no-op (active) by default so existing tests are unaffected.
+vi.mock("./campaign-guards", () => ({ assertCampaignActiveById: vi.fn() }));
 
 import { scoreScreeningAnswers } from "./screening-questions";
+import { assertCampaignActiveById } from "./campaign-guards";
 import { requireUserId } from "@/lib/auth/guards";
 import { scoreAnswers, scoreTranscript } from "@/lib/services/screening-questions";
 import {
@@ -62,6 +65,7 @@ const mockScoreAnswers = vi.mocked(scoreAnswers);
 const mockScoreTranscript = vi.mocked(scoreTranscript);
 const mockSaveScores = vi.mocked(saveAnswerScores);
 const mockTransition = vi.mocked(transitionApplication);
+const mockAssertActive = vi.mocked(assertCampaignActiveById);
 
 const APP_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -196,5 +200,15 @@ describe("scoreScreeningAnswers — guards", () => {
     mockFetchResponse.mockResolvedValue(responseRow({ status: "scored" }));
 
     await expect(scoreScreeningAnswers(APP_ID)).rejects.toThrow(/already been scored/i);
+  });
+
+  it("refuses to score when the campaign isn't Active (frozen)", async () => {
+    mockAssertActive.mockRejectedValueOnce(
+      new Error("This campaign is paused. Set it to Active to sync resumes, score candidates, or send screening."),
+    );
+
+    await expect(scoreScreeningAnswers(APP_ID)).rejects.toThrow(/paused/i);
+    expect(mockScoreTranscript).not.toHaveBeenCalled();
+    expect(mockScoreAnswers).not.toHaveBeenCalled();
   });
 });

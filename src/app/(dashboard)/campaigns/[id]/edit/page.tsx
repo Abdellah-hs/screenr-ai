@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getCampaignById, updateCampaign } from "@/lib/actions/campaigns";
 import type { Campaign } from "@/lib/constants";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
+import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
 import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
 
 export default function EditCampaignPage({
@@ -34,15 +35,21 @@ export default function EditCampaignPage({
     load();
   }, [params, router]);
 
-  async function handleSubmit(formData: FormData) {
+  // onSubmit + preventDefault, not the form `action` prop: React 19 auto-resets
+  // an uncontrolled form when its action resolves, and our catch makes the
+  // action always resolve — which would discard the recruiter's unsaved edits
+  // on a failed save. preventDefault preserves them; native `required` still runs.
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     if (!campaign) return;
     setError(null);
     setSaving(true);
 
+    const formData = new FormData(e.currentTarget);
     try {
       await updateCampaign(campaign.id, formData);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
       setSaving(false);
     }
   }
@@ -75,7 +82,7 @@ export default function EditCampaignPage({
 
       <h1 className="text-2xl font-semibold text-[#111827] mb-6">Edit Campaign</h1>
 
-      <form action={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
+      <form onSubmit={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
         {error && (
           <div className="p-3 text-sm text-[#DC2626] bg-[#FEF2F2] rounded-lg border border-[#FECACA]">
             {error}
@@ -188,12 +195,13 @@ export default function EditCampaignPage({
 
         <div>
           <label htmlFor="application_email" className="block text-sm font-medium text-[#111827] mb-1">
-            Application email
+            Application email <span className="text-[#DC2626]">*</span>
           </label>
           <input
             id="application_email"
             name="application_email"
             type="email"
+            required
             defaultValue={campaign.application_email ?? ""}
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. careers+eng@yourcompany.com"
@@ -213,6 +221,12 @@ export default function EditCampaignPage({
         {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor initialRubrics={campaign.rubrics} campaignId={campaign.id} />
+        </div>
+
+        {/* SLA Timers — initialTimers seeds the editor so an edit-save preserves
+            existing timers (updateCampaignTx delete+re-inserts from this form). */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <SlaTimersEditor initialTimers={campaign.sla_timers} />
         </div>
 
         {/* AI Interview Availability */}

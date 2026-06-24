@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
 export interface ModalProps {
@@ -29,9 +30,14 @@ function Modal({ open, onClose, children, className }: ModalProps) {
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  // `open` only flips true via client interaction, so SSR returns null here.
+  if (!open || typeof document === "undefined") return null;
 
-  return (
+  // Portal to <body> so the modal isn't subject to an ancestor's inherited
+  // styles (e.g. a table's `whitespace-nowrap`, which would stop the body text
+  // wrapping) or `overflow` clipping. It's a fixed full-screen overlay, so its
+  // position is unaffected by where it lives in the tree.
+  return createPortal(
     <div
       ref={overlayRef}
       className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
@@ -41,13 +47,14 @@ function Modal({ open, onClose, children, className }: ModalProps) {
     >
       <div
         className={cn(
-          "bg-card rounded-2xl p-8 shadow-xl max-w-[500px] w-full animate-in fade-in zoom-in-95 duration-200",
+          "bg-card rounded-2xl p-8 shadow-xl max-w-[500px] w-full whitespace-normal animate-in fade-in zoom-in-95 duration-200",
           className
         )}
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

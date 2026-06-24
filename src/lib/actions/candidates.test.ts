@@ -12,6 +12,8 @@ const {
   mockRevalidatePath,
   mockFetchGmailConnection,
   mockSendScreeningQuestions,
+  mockFetchCampaignStatus,
+  mockAssertCampaignActiveById,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockCheckRateLimit: vi.fn(),
@@ -20,6 +22,8 @@ const {
   mockRevalidatePath: vi.fn(),
   mockFetchGmailConnection: vi.fn(),
   mockSendScreeningQuestions: vi.fn(),
+  mockFetchCampaignStatus: vi.fn(),
+  mockAssertCampaignActiveById: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -59,6 +63,13 @@ vi.mock("@/lib/actions/screening-questions", () => ({
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
   fetchCampaignApplicationEmail: vi.fn(),
+  fetchCampaignStatus: mockFetchCampaignStatus,
+}));
+
+// Freeze guard — default to a no-op (active) so existing tests are unaffected;
+// gate tests override it to reject.
+vi.mock("./campaign-guards", () => ({
+  assertCampaignActiveById: mockAssertCampaignActiveById,
 }));
 
 vi.mock("@/lib/services/gmail", () => ({
@@ -115,9 +126,15 @@ beforeEach(() => {
   mockRevalidatePath.mockReset();
   mockFetchGmailConnection.mockReset();
   mockSendScreeningQuestions.mockReset();
+  mockFetchCampaignStatus.mockReset();
+  mockAssertCampaignActiveById.mockReset();
 
   // Default happy-path setup — individual tests override what they need.
   mockRequireUserId.mockResolvedValue("user-1");
+  // Campaigns are Active by default so the freeze gate is transparent; the
+  // freeze tests override these.
+  mockFetchCampaignStatus.mockResolvedValue("active");
+  mockAssertCampaignActiveById.mockResolvedValue(undefined);
   mockFetchCandidateById.mockResolvedValue({
     id: VALID_APP_ID,
     campaign_id: VALID_CAMPAIGN_ID,
@@ -315,6 +332,40 @@ describe("decideHitlReview", () => {
     expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
   });
 
+  it("on approve: freezes (no transition, no send) when the campaign isn't Active", async () => {
+    mockAssertCampaignActiveById.mockRejectedValueOnce(
+      new Error("This campaign is paused. Set it to Active to sync resumes, score candidates, or send screening."),
+    );
+
+    await expect(
+      decideHitlReview({
+        applicationId: VALID_APP_ID,
+        decision: "approve",
+        rationale: VALID_RATIONALE,
+      }),
+    ).rejects.toThrow(/paused/i);
+
+    expect(mockTransitionApplication).not.toHaveBeenCalled();
+    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
+  });
+
+  it("on reject: is NOT frozen — rejecting works even on a non-active campaign", async () => {
+    // Guard would throw if consulted; rejecting must not consult it (a stop, not
+    // processing), so the rejection still goes through.
+    mockAssertCampaignActiveById.mockRejectedValue(new Error("frozen"));
+
+    await decideHitlReview({
+      applicationId: VALID_APP_ID,
+      decision: "reject",
+      rationale: VALID_RATIONALE,
+    });
+
+    expect(mockAssertCampaignActiveById).not.toHaveBeenCalled();
+    expect(mockTransitionApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ toState: "rejected", actor: "recruiter" }),
+    );
+  });
+
   it("checks the hitl-review rate limit against the authenticated user", async () => {
     await decideHitlReview({
       applicationId: VALID_APP_ID,
@@ -484,6 +535,18 @@ describe("syncResumesFromGmail", () => {
 
     // Campaign has an application alias so the sync proceeds past the guard.
     vi.mocked(fetchCampaignApplicationEmail).mockResolvedValue("careers+eng@company.com");
+  });
+
+  it("freezes the sync (no Gmail work) when the campaign isn't Active", async () => {
+    mockFetchCampaignStatus.mockResolvedValueOnce("draft");
+
+    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+
+    expect(result.success).toBe(false);
+    expect(result.count).toBe(0);
+    expect(result.message).toMatch(/draft/i);
+    expect(mockFetchGmailConnection).not.toHaveBeenCalled();
+    expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
   });
 
   it("returns a friendly message and does no work when no Gmail is connected", async () => {

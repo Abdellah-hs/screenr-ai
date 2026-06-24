@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { type SlaTimer, PIPELINE_STAGES } from "@/lib/constants";
+import { type SlaTimer, SLA_STAGES } from "@/lib/constants";
 
 interface Props {
   initialTimers?: SlaTimer[];
 }
 
 const DEFAULT_SLA: SlaTimer = {
-  stage: "screening_q",
+  stage: "screening",
   time_limit_hours: 48,
   alert_threshold_hours: 36,
   escalation_threshold_hours: 44,
@@ -18,7 +18,12 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
   const [timers, setTimers] = useState<SlaTimer[]>(initialTimers);
 
   const addTimer = () => {
-    setTimers([...timers, { ...DEFAULT_SLA }]);
+    // Default a new timer to the first stage that has no timer yet, so the new
+    // card is visibly distinct (a different stage) rather than a confusing
+    // duplicate of an existing one — and never creates two timers for one stage.
+    const nextStage = SLA_STAGES.find((s) => !timers.some((t) => t.stage === s.key));
+    if (!nextStage) return;
+    setTimers([...timers, { ...DEFAULT_SLA, stage: nextStage.key }]);
   };
 
   const removeTimer = (index: number) => {
@@ -31,14 +36,19 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
     setTimers(newTimers);
   };
 
-  const availableStages = PIPELINE_STAGES.filter(
+  const availableStages = SLA_STAGES.filter(
     (stage) => !timers.some((t) => t.stage === stage.key)
   );
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[#111827]">SLA Timers</h3>
+        <h3 className="text-sm font-medium text-[#111827]">
+          SLA Timers
+          {timers.length > 0 && (
+            <span className="ml-2 text-xs font-normal text-[#6B7280]">({timers.length})</span>
+          )}
+        </h3>
         {availableStages.length > 0 && (
           <button
             type="button"
@@ -80,7 +90,7 @@ export default function SlaTimersEditor({ initialTimers = [] }: Props) {
                     className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
                   >
                     <option value={timer.stage}>
-                      {PIPELINE_STAGES.find((s) => s.key === timer.stage)?.name || timer.stage}
+                      {SLA_STAGES.find((s) => s.key === timer.stage)?.name || timer.stage}
                     </option>
                     {availableStages.map((stage) => (
                       <option key={stage.key} value={stage.key}>

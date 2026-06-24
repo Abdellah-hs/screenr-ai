@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Database, Json } from "@/types/database.types";
+import type { SupabaseDb } from "@/lib/supabase/types";
 
 type DuplicateFlagRow = Database["public"]["Tables"]["duplicate_review_queue"]["Row"];
 type DuplicateFlagInsert = Database["public"]["Tables"]["duplicate_review_queue"]["Insert"];
@@ -45,8 +46,11 @@ function toDuplicateFlag(row: DuplicateFlagRow): DuplicateFlag {
 /**
  * Find an existing candidate by exact email match.
  */
-export async function findCandidateByEmail(email: string): Promise<{ id: string } | null> {
-  const supabase = await createClient();
+export async function findCandidateByEmail(
+  email: string,
+  db?: SupabaseDb,
+): Promise<{ id: string } | null> {
+  const supabase = db ?? (await createClient());
   const { data, error } = await supabase
     .from("candidates")
     .select("id")
@@ -60,8 +64,11 @@ export async function findCandidateByEmail(email: string): Promise<{ id: string 
 /**
  * Find an existing candidate by exact phone match (non-null phone only).
  */
-export async function findCandidateByPhone(phone: string): Promise<{ id: string } | null> {
-  const supabase = await createClient();
+export async function findCandidateByPhone(
+  phone: string,
+  db?: SupabaseDb,
+): Promise<{ id: string } | null> {
+  const supabase = db ?? (await createClient());
   const { data, error } = await supabase
     .from("candidates")
     .select("id")
@@ -75,12 +82,15 @@ export async function findCandidateByPhone(phone: string): Promise<{ id: string 
 /**
  * Insert a duplicate flag row so HR can review the match.
  */
-export async function flagDuplicateCandidate(params: {
-  candidateId: string;
-  matchedCandidateId: string;
-  matchSignals: MatchSignals;
-}): Promise<string> {
-  const supabase = await createClient();
+export async function flagDuplicateCandidate(
+  params: {
+    candidateId: string;
+    matchedCandidateId: string;
+    matchSignals: MatchSignals;
+  },
+  db?: SupabaseDb,
+): Promise<string> {
+  const supabase = db ?? (await createClient());
 
   const insert: DuplicateFlagInsert = {
     candidate_id: params.candidateId,

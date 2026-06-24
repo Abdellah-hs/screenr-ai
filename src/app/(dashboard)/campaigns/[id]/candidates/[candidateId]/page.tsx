@@ -294,6 +294,10 @@ export default async function CandidateDetailPage({
     notFound();
   }
 
+  // Candidate processing (score / send screening / approve) is frozen unless the
+  // campaign is Active — gate the per-candidate actions, mirroring the server.
+  const isActive = campaign.status === "active";
+
   const parsed = candidate.parsed_data;
 
   return (
@@ -357,8 +361,12 @@ export default async function CandidateDetailPage({
           {candidate.scores.length === 0 && (
             <ScoreResumeButton
               applicationId={candidateId}
-              disabled={!hasResumeCriteria}
-              disabledHint="Add screening criteria to this campaign to enable scoring."
+              disabled={!hasResumeCriteria || !isActive}
+              disabledHint={
+                !isActive
+                  ? "This campaign isn't Active — set it to Active to score candidates."
+                  : "Add screening criteria to this campaign to enable scoring."
+              }
             />
           )}
           <Link
@@ -641,10 +649,23 @@ export default async function CandidateDetailPage({
 
         {/* Right column — Background + Screening + Scores */}
         <div className="lg:col-span-2 space-y-4 min-w-0">
+          {!isActive && (
+            <div className="flex items-start gap-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-4 py-3 text-sm text-[#92400E]">
+              <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+              <span>
+                This campaign is <span className="font-medium capitalize">{campaign.status}</span>.
+                Scoring, screening sends and approvals are paused — set it to{" "}
+                <span className="font-medium">Active</span> to act on this candidate. Rejecting is still available.
+              </span>
+            </div>
+          )}
+
           <InterviewBookingBanner status={candidate.status} booking={booking} />
 
           {candidate.awaiting_human_review && (
-            <HitlReviewPanel applicationId={candidateId} />
+            <HitlReviewPanel applicationId={candidateId} campaignActive={isActive} />
           )}
 
           {parsed && parsed.experience.length > 0 && (
@@ -678,6 +699,7 @@ export default async function CandidateDetailPage({
             applicationStatus={screeningState.status}
             questions={screeningState.questions}
             response={screeningState.response}
+            campaignActive={isActive}
           />
 
           <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider">
