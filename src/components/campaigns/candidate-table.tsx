@@ -13,7 +13,6 @@ import {
   FUNNEL_STAGES,
   ARCHIVED_FUNNEL_STAGE,
   FunnelCard,
-  PipelineSummary,
 } from "./pipeline-funnel";
 
 const stageColors: Record<CandidateStage, string> = {
@@ -111,14 +110,6 @@ export default function CandidateTable({
     ? [...FUNNEL_STAGES, ARCHIVED_FUNNEL_STAGE]
     : FUNNEL_STAGES;
   const funnelStages = [ALL_FUNNEL_STAGE, ...stageCards];
-  const total = candidates.length;
-  const activeCount =
-    (stageCounts.applied ?? 0) +
-    (stageCounts.screening ?? 0) +
-    (stageCounts.interview ?? 0) +
-    (stageCounts.final_interview ?? 0);
-  const hiredCount = stageCounts.hired ?? 0;
-  const closedCount = total - activeCount - hiredCount;
 
   const filtered = useMemo(() => {
     return candidates
@@ -162,37 +153,26 @@ export default function CandidateTable({
     <div className="space-y-4">
       {/* Pipeline funnel — doubles as the stage filter. Click a card to filter,
           click it again to clear. */}
-      <div>
-        <div
-          className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:[grid-template-columns:repeat(var(--funnel-cols),minmax(0,1fr))]"
-          style={{ "--funnel-cols": funnelStages.length } as CSSProperties}
-        >
-          {funnelStages.map((stage) => {
-            const isAll = stage.key === "all";
-            const count = stageCounts[stage.key] ?? 0;
-            const isActive = effectiveFilter === stage.key;
-            return (
-              <FunnelCard
-                key={stage.key}
-                stage={stage}
-                count={count}
-                active={isActive}
-                onClick={() =>
-                  setStageFilter(isActive && !isAll ? "all" : stage.key)
-                }
-              />
-            );
-          })}
-        </div>
-
-        <div className="mt-3">
-          <PipelineSummary
-            total={total}
-            active={activeCount}
-            hired={hiredCount}
-            closed={closedCount}
-          />
-        </div>
+      <div
+        className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:[grid-template-columns:repeat(var(--funnel-cols),minmax(0,1fr))]"
+        style={{ "--funnel-cols": funnelStages.length } as CSSProperties}
+      >
+        {funnelStages.map((stage) => {
+          const isAll = stage.key === "all";
+          const count = stageCounts[stage.key] ?? 0;
+          const isActive = effectiveFilter === stage.key;
+          return (
+            <FunnelCard
+              key={stage.key}
+              stage={stage}
+              count={count}
+              active={isActive}
+              onClick={() =>
+                setStageFilter(isActive && !isAll ? "all" : stage.key)
+              }
+            />
+          );
+        })}
       </div>
 
       {/* Pending review — an attention banner that doubles as a filter. Shown

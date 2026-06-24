@@ -7,7 +7,7 @@
  * reaches its server component, and 500s when `requireUserId()` throws — which
  * is exactly how /settings regressed.
  */
-const PROTECTED_PREFIXES = ["/campaigns", "/admin", "/settings"] as const;
+const PROTECTED_PREFIXES = ["/overview", "/campaigns", "/admin", "/settings"] as const;
 
 /**
  * True when `pathname` belongs to an authenticated area. Matches the exact

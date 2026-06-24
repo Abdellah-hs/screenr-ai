@@ -57,13 +57,7 @@ export default async function CandidatesPage({
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-[#111827]">Candidates</h1>
-          <p className="text-sm text-[#6B7280] mt-1">
-            {candidates.length} candidate{candidates.length !== 1 ? "s" : ""}{" "}
-            for {campaign.title}
-          </p>
-        </div>
+        <h1 className="text-2xl font-semibold text-[#111827]">Candidates</h1>
         <Link
           href={`/campaigns/${id}`}
           className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200"
