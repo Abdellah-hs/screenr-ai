@@ -7,7 +7,6 @@ import RubricDisplay from "@/components/campaigns/rubric-display";
 import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
-import { SendScreeningQuestionsBulkButton } from "@/components/candidates/send-screening-questions-button";
 import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
 import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
@@ -163,13 +162,6 @@ export default async function CampaignDetailPage({
               campaignId={id}
               disabled={!isActive}
               disabledReason={frozenReason}
-            />
-            <SendScreeningQuestionsBulkButton
-              campaignId={id}
-              disabled={!isActive || screeningQuestions.length === 0}
-              disabledReason={
-                !isActive ? frozenReason : "Set up screening questions first"
-              }
             />
           </div>
           <Link

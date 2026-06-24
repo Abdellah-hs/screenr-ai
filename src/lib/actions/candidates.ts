@@ -228,6 +228,7 @@ export async function syncResumesFromGmail(campaignId: string) {
             const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
             await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
             await sendTransitionNotification(applicationId, decision.toState, userId);
+            await autoSendScreeningIfApproved(applicationId, decision.toState);
           }
         } catch (scoreErr) {
           console.error("Resume scoring failed (non-blocking):", scoreErr);
@@ -308,6 +309,31 @@ function scoredScreeningResponse(
     ? responses.find((r) => r.status === "scored") ?? null
     : responses;
   return response?.status === "scored" ? response : null;
+}
+
+/**
+ * Fully-auto auto-send. Resume scoring only advances an application straight to
+ * `screening_approved` in fully_auto mode — human_in_loop routes to
+ * `screening_review_pending` and sends on the recruiter's manual approval. So
+ * when scoring lands on `screening_approved`, email the screening questions
+ * right away (mirroring what HITL approval does) instead of leaving the
+ * candidate stranded waiting for a button press. Best-effort: a missing
+ * question set or send failure must NOT undo the scoring, so it is logged, not
+ * thrown — the candidate stays approved and a recruiter can resend manually.
+ */
+async function autoSendScreeningIfApproved(
+  applicationId: string,
+  toState: ApplicationState,
+): Promise<void> {
+  if (toState !== "screening_approved") return;
+  try {
+    await sendScreeningQuestionsToCandidate(applicationId);
+  } catch (err) {
+    console.warn(
+      `Auto-send screening questions failed for ${applicationId} (non-blocking):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
@@ -588,6 +614,7 @@ export async function scoreResume(applicationId: string) {
       const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
       await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
       await sendTransitionNotification(applicationId, decision.toState, userId);
+      await autoSendScreeningIfApproved(applicationId, decision.toState);
     }
 
     revalidatePath(`/campaigns/${data.campaign_id}`);
