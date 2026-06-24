@@ -7,6 +7,10 @@ describe("isProtectedPath", () => {
     expect(isProtectedPath("/campaigns/123/candidates/456")).toBe(true);
   });
 
+  it("protects the overview home page", () => {
+    expect(isProtectedPath("/overview")).toBe(true);
+  });
+
   it("protects admin pages", () => {
     expect(isProtectedPath("/admin/duplicates")).toBe(true);
   });

@@ -111,6 +111,29 @@
     @apply w-full px-4 py-2.5 border border-[#D1D5DB] rounded-lg text-base text-[#111827] bg-white placeholder-[#9CA3AF] transition-colors focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none min-h-[44px];
   }
   
+  /* Upward-opening popover entrance (e.g. the sidebar account menu) */
+  .animate-pop-up {
+    animation: pop-up 160ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: bottom center;
+  }
+
+  @keyframes pop-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-pop-up {
+      animation: none;
+    }
+  }
+
   /* Modals */
   .modal-overlay {
     @apply fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4;
