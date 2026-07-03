@@ -1,6 +1,5 @@
 "use server";
 
-import type { gmail_v1 } from "googleapis";
 import { revalidatePath } from "next/cache";
 import {
   uuidSchema,
@@ -18,27 +17,12 @@ import { assertCampaignActiveById } from "./campaign-guards";
 
 // Services
 import {
-  fetchUnreadGmailResumes,
-  getGmailMessage,
-  getGmailAttachmentBuffer,
-  markGmailMessageAsRead,
-  isSupportedResumeMimeType,
-  createGmailClient,
-} from "@/lib/services/gmail";
-import { fetchGmailConnection } from "@/lib/data/integrations";
-import { extractMarkdownWithMarker } from "@/lib/services/marker";
-import {
-  extractResumeData,
   scoreResumeAgainstCriteria,
   type ParsedResumeData,
 } from "@/lib/services/openai";
 
 // Data Access
 import {
-  uploadResumeToStorage,
-  upsertCandidate,
-  createApplicationIfNotExists,
-  logAiAudit,
   fetchCandidatesByCampaignId,
   fetchCandidateById,
   updateApplicationStage,
@@ -50,7 +34,6 @@ import {
 import {
   fetchCampaignScoringConfig,
   fetchActiveRubricVersion,
-  fetchCampaignApplicationEmail,
   fetchCampaignStatus,
 } from "@/lib/data/campaigns";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
@@ -82,173 +65,6 @@ type ApplicationWithCandidate = ApplicationRow & {
     | null;
 };
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
-
-/**
- * Action to trigger syncing of resumes from a Gmail inbox
- */
-export async function syncResumesFromGmail(campaignId: string) {
-  try {
-    const userId = await requireUserId();
-
-    // Rate limit: 5 Gmail syncs per 10 minutes per user
-    checkRateLimit(userId, { name: "gmail-sync", maxRequests: 5, windowMs: 10 * 60 * 1000 });
-
-    // Freeze ingestion unless the campaign is Active — a draft/paused/closed
-    // campaign must not pull in (or auto-score) new candidates. Friendly return
-    // to match the button's result UI rather than throwing. The lookup is
-    // user-scoped, so it also gates ownership.
-    const campaignStatus = await fetchCampaignStatus(campaignId, userId);
-    if (!campaignStatus) {
-      return { success: false, count: 0, message: "Campaign not found." };
-    }
-    if (!isCampaignProcessingActive(campaignStatus)) {
-      return {
-        success: false,
-        count: 0,
-        message: `This campaign is ${campaignStatus}. Set it to Active to sync resumes.`,
-      };
-    }
-
-    // Resolve the recruiter's connected inbox. No connection → nothing to sync;
-    // return a friendly message pointing them at Settings rather than throwing.
-    const connection = await fetchGmailConnection(userId);
-    if (!connection) {
-      return {
-        success: false,
-        count: 0,
-        message: "No Gmail connected. Connect an inbox in Settings to sync resumes.",
-      };
-    }
-
-    // Resolve the campaign's application alias. Without one we refuse to sync
-    // rather than pull the entire shared inbox into this campaign — that would
-    // mix other roles' applicants in. The lookup is user-scoped, so it also
-    // gates ownership of the campaign.
-    const applicationEmail = await fetchCampaignApplicationEmail(campaignId, userId);
-    if (!applicationEmail) {
-      return {
-        success: false,
-        count: 0,
-        message:
-          "No application email set for this campaign. Add one in the campaign settings to sync its resumes.",
-      };
-    }
-
-    const gmail = createGmailClient(connection.refresh_token);
-
-    // Find up to 5 recent unread emails addressed to this campaign's alias
-    const messages = await fetchUnreadGmailResumes(gmail, 5, applicationEmail);
-
-    if (messages.length === 0) {
-      return { success: true, count: 0, message: "No new unread resumes found in Gmail." };
-    }
-
-    let processedCount = 0;
-
-    for (const msg of messages) {
-      if (!msg.id) continue;
-
-      // Get the full message
-      const msgData = await getGmailMessage(gmail, msg.id);
-      const parts: gmail_v1.Schema$MessagePart[] = msgData.payload?.parts || [];
-      const resumeParts = parts.filter(
-        (p) => p.mimeType && isSupportedResumeMimeType(p.mimeType) && p.filename
-      );
-
-      for (const part of resumeParts) {
-        if (!part.body?.attachmentId) continue;
-
-        // Fetch attachment data
-        const fileBuffer = await getGmailAttachmentBuffer(gmail, msg.id, part.body.attachmentId);
-        if (!fileBuffer) continue;
-
-        // 1. Upload to Supabase Storage
-        const resumeUrl = await uploadResumeToStorage(campaignId, part.filename || "resume.pdf", fileBuffer);
-
-        // 2. Extract markdown via Datalab Marker (layout-aware OCR; one provider
-        //    handles both PDF and DOCX). Marker failures (unreachable, status
-        //    failed, timeout) are non-blocking: warn and skip this attachment so
-        //    the sync never bubbles a 500. The message is marked read by the
-        //    outer loop, retiring it.
-        let textContent: string;
-        try {
-          textContent = (await extractMarkdownWithMarker(fileBuffer, part.mimeType || "")).markdown;
-        } catch (markerErr) {
-          console.warn(
-            `syncResumesFromGmail: Marker extraction failed for ${part.filename ?? "(unnamed attachment)"} — skipping.`,
-            markerErr,
-          );
-          continue;
-        }
-
-        // 3. Extract structured data + classify the document using OpenAI.
-        const structuredData = await extractResumeData(textContent);
-
-        // Skip non-CV documents (e.g. a motivation letter sent in the same
-        // thread). We only ingest CVs. Marked read at the end of the outer loop.
-        if (structuredData.document_type !== "cv") {
-          console.warn(
-            `syncResumesFromGmail: skipping ${part.filename ?? "(unnamed attachment)"} — document_type=${structuredData.document_type}.`,
-          );
-          continue;
-        }
-
-        // Skip resumes the AI could not extract an email from — the candidates
-        // table requires email NOT NULL, and inventing one would violate the
-        // "AI must not fabricate evidence" rule. The message is marked read at
-        // the end of the outer loop so we don't loop on it next sync.
-        if (structuredData.email == null) {
-          console.warn(
-            `syncResumesFromGmail: skipping ${part.filename ?? "(unnamed attachment)"} — no email extracted.`,
-          );
-          continue;
-        }
-
-        // 4. Insert or Update Candidate Record
-        const candidateId = await upsertCandidate({ ...structuredData, email: structuredData.email });
-
-        // 5. Create Application link
-        const applicationId = await createApplicationIfNotExists(candidateId, campaignId, resumeUrl, structuredData);
-
-        // 6. Log to AI Audit Log
-        await logAiAudit({
-          campaignId,
-          candidateId,
-          textContent,
-          filename: part.filename || "resume.pdf",
-          structuredData,
-        });
-
-        // 7. Score resume against campaign criteria (if configured), then let
-        //    the rule layer decide whether to advance. Scoring failures are
-        //    non-blocking — the application still lands in `new` either way.
-        try {
-          const scored = await scoreApplicationResume(applicationId, campaignId, candidateId, userId, structuredData);
-          if (scored) {
-            const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
-            await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
-            await sendTransitionNotification(applicationId, decision.toState, userId);
-            await autoSendScreeningIfApproved(applicationId, decision.toState);
-          }
-        } catch (scoreErr) {
-          console.error("Resume scoring failed (non-blocking):", scoreErr);
-        }
-
-        processedCount++;
-      }
-
-      // Mark the email as READ so we don't process it again
-      await markGmailMessageAsRead(gmail, msg.id);
-    }
-
-    revalidatePath(`/campaigns/${campaignId}`);
-    return { success: true, count: processedCount, message: `Successfully synced ${processedCount} resume(s) from Gmail.` };
-
-  } catch (error) {
-    console.error("Gmail Sync Error:", error);
-    throw new Error(error instanceof Error ? error.message : "Failed to sync resumes from Gmail");
-  }
-}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -510,6 +326,53 @@ async function scoreApplicationResume(
   return { result: evidence.result, config };
 }
 
+/**
+ * Score every candidate in a campaign that has no resume score yet — the
+ * automatic replacement for the retired manual "Score Resume" button. Run after
+ * a campaign's criteria/rubric is saved (see `updateCampaign`) so candidates who
+ * arrived before criteria existed, or before the latest rubric, get evaluated
+ * without a manual click.
+ *
+ * No-ops when the campaign has no criteria or isn't Active (the freeze rule).
+ * Best-effort per candidate: one candidate's failure is logged and never blocks
+ * the rest — or the caller (the campaign save). Already-scored candidates are
+ * left untouched (we never overwrite an existing score).
+ */
+export async function scoreUnscoredCampaignCandidates(
+  campaignId: string,
+  userId: string,
+): Promise<void> {
+  const config = await fetchCampaignScoringConfig(campaignId, userId);
+  if (!config || config.screening_criteria.length === 0) return; // nothing to score against
+
+  const status = await fetchCampaignStatus(campaignId, userId);
+  if (!status || !isCampaignProcessingActive(status)) return; // freeze rule
+
+  const applications = await fetchCandidatesByCampaignId(campaignId, userId);
+
+  for (const app of applications) {
+    if (app.resume_score != null) continue; // already scored — don't overwrite
+    const parsedResume = app.parsed_data as ParsedResumeData | null;
+    const candidateId = app.candidates?.id;
+    if (!parsedResume || !candidateId) continue; // nothing to score against / orphan row
+
+    try {
+      const scored = await scoreApplicationResume(app.id, campaignId, candidateId, userId, parsedResume);
+      if (scored) {
+        const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
+        await advanceApplicationStatus(app.id, decision.toState as CandidateStageEnum, decision.rationale);
+        await sendTransitionNotification(app.id, decision.toState, userId);
+        await autoSendScreeningIfApproved(app.id, decision.toState);
+      }
+    } catch (err) {
+      console.error(
+        `scoreUnscoredCampaignCandidates: scoring ${app.id} failed (non-blocking):`,
+        err,
+      );
+    }
+  }
+}
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 // When automation_mode = human_in_loop, the resume-scoring rule routes
 // applications to `screening_review_pending` instead of approving/rejecting
@@ -587,42 +450,4 @@ export async function decideHitlReview(input: {
     screeningEmailSent,
     screeningWarning,
   };
-}
-
-/**
- * Manually trigger resume scoring for an existing candidate.
- * Used when a candidate was imported before criteria were set up,
- * or to re-score after criteria changes.
- */
-export async function scoreResume(applicationId: string) {
-  try {
-    const userId = await requireUserId();
-
-    checkRateLimit(userId, { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 });
-
-    const data = (await fetchCandidateById(applicationId, userId)) as ApplicationWithCandidate | null;
-    if (!data) throw new Error("Application not found");
-
-    // Freeze scoring unless the campaign is Active.
-    await assertCampaignActiveById(data.campaign_id, userId);
-
-    const parsedResume = data.parsed_data as ParsedResumeData | null;
-    if (!parsedResume) throw new Error("No parsed resume data available for scoring");
-
-    const scored = await scoreApplicationResume(applicationId, data.campaign_id, data.candidates.id, userId, parsedResume);
-    if (scored) {
-      const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
-      await advanceApplicationStatus(applicationId, decision.toState as CandidateStageEnum, decision.rationale);
-      await sendTransitionNotification(applicationId, decision.toState, userId);
-      await autoSendScreeningIfApproved(applicationId, decision.toState);
-    }
-
-    revalidatePath(`/campaigns/${data.campaign_id}`);
-    revalidatePath(`/campaigns/${data.campaign_id}/candidates/${applicationId}`);
-    return { success: true };
-  } catch (err) {
-    console.error("scoreResume failed:", err);
-    if (err instanceof Error) throw err;
-    throw new Error(typeof err === "string" ? err : "Resume scoring failed");
-  }
 }

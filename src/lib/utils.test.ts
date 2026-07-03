@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { initialsFromEmail } from "./utils";
+import { initialsFromEmail, slugifyTitle } from "./utils";
 
 describe("initialsFromEmail", () => {
   it("combines the first letter of each segment when the local part is dotted", () => {
@@ -37,5 +37,35 @@ describe("initialsFromEmail", () => {
     const result = initialsFromEmail("");
 
     expect(result).toBe("?");
+  });
+});
+
+describe("slugifyTitle", () => {
+  it("lowercases and hyphenates a normal title", () => {
+    expect(slugifyTitle("Senior Frontend Engineer")).toBe("senior-frontend-engineer");
+  });
+
+  it("collapses runs of punctuation and whitespace into a single hyphen", () => {
+    expect(slugifyTitle("Data   Scientist (ML/AI) — 2026!")).toBe("data-scientist-ml-ai-2026");
+  });
+
+  it("trims leading and trailing separators", () => {
+    expect(slugifyTitle("  --Backend Dev--  ")).toBe("backend-dev");
+  });
+
+  it("strips accents/diacritics down to ascii", () => {
+    expect(slugifyTitle("Développeur Sénior")).toBe("developpeur-senior");
+  });
+
+  it("falls back to 'campaign' when nothing slug-able remains", () => {
+    expect(slugifyTitle("!!!")).toBe("campaign");
+    expect(slugifyTitle("")).toBe("campaign");
+  });
+
+  it("caps the slug length without leaving a trailing hyphen", () => {
+    const result = slugifyTitle("a".repeat(100));
+
+    expect(result.length).toBeLessThanOrEqual(60);
+    expect(result.endsWith("-")).toBe(false);
   });
 });

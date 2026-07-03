@@ -13,7 +13,7 @@ interface RateLimitEntry {
 const stores = new Map<string, Map<string, RateLimitEntry>>();
 
 interface RateLimitOptions {
-  /** Unique name for this limiter (e.g. "ai-generate", "gmail-sync") */
+  /** Unique name for this limiter (e.g. "ai-generate", "apply-submit") */
   name: string;
   /** Maximum number of requests allowed in the window */
   maxRequests: number;

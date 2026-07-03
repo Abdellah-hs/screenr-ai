@@ -18,3 +18,27 @@ export function initialsFromEmail(email: string): string {
   if (segments.length === 1) return segments[0].slice(0, 2).toUpperCase();
   return (segments[0][0] + segments[1][0]).toUpperCase();
 }
+
+const SLUG_MAX_LENGTH = 60;
+
+/**
+ * Derives a URL-safe slug from a campaign title for the public apply link
+ * (`/apply/<slug>`). Lower-cases, strips accents to ASCII, collapses any run of
+ * non-alphanumerics into a single hyphen, trims edge hyphens, and caps the
+ * length without leaving a trailing hyphen. Falls back to "campaign" when the
+ * title has no slug-able characters (e.g. emoji- or punctuation-only titles),
+ * so the result is always a non-empty base. Uniqueness is the caller's job —
+ * the data layer disambiguates collisions before persisting.
+ */
+export function slugifyTitle(title: string): string {
+  const base = title
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "") // strip combining diacritical marks
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/g, ""); // re-trim in case the slice landed mid-hyphen
+
+  return base || "campaign";
+}

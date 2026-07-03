@@ -10,7 +10,6 @@ const {
   mockFetchCandidateById,
   mockTransitionApplication,
   mockRevalidatePath,
-  mockFetchGmailConnection,
   mockSendScreeningQuestions,
   mockFetchCampaignStatus,
   mockAssertCampaignActiveById,
@@ -20,7 +19,6 @@ const {
   mockFetchCandidateById: vi.fn(),
   mockTransitionApplication: vi.fn(),
   mockRevalidatePath: vi.fn(),
-  mockFetchGmailConnection: vi.fn(),
   mockSendScreeningQuestions: vi.fn(),
   mockFetchCampaignStatus: vi.fn(),
   mockAssertCampaignActiveById: vi.fn(),
@@ -38,10 +36,6 @@ vi.mock("@/lib/data/candidates", () => ({
   fetchCandidateById: mockFetchCandidateById,
   // The action module also imports these, even if decideHitlReview doesn't use
   // them — they must be mocked for the module to load.
-  uploadResumeToStorage: vi.fn(),
-  upsertCandidate: vi.fn(),
-  createApplicationIfNotExists: vi.fn(),
-  logAiAudit: vi.fn(),
   fetchCandidatesByCampaignId: vi.fn(),
   updateApplicationStage: vi.fn(),
   advanceApplicationStatus: vi.fn(),
@@ -62,7 +56,6 @@ vi.mock("@/lib/actions/screening-questions", () => ({
 
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
-  fetchCampaignApplicationEmail: vi.fn(),
   fetchCampaignStatus: mockFetchCampaignStatus,
   fetchActiveRubricVersion: vi.fn(),
 }));
@@ -73,25 +66,7 @@ vi.mock("./campaign-guards", () => ({
   assertCampaignActiveById: mockAssertCampaignActiveById,
 }));
 
-vi.mock("@/lib/services/gmail", () => ({
-  fetchUnreadGmailResumes: vi.fn(),
-  getGmailMessage: vi.fn(),
-  getGmailAttachmentBuffer: vi.fn(),
-  markGmailMessageAsRead: vi.fn(),
-  isSupportedResumeMimeType: vi.fn().mockReturnValue(true),
-  createGmailClient: vi.fn(),
-}));
-
-vi.mock("@/lib/data/integrations", () => ({
-  fetchGmailConnection: mockFetchGmailConnection,
-}));
-
-vi.mock("@/lib/services/marker", () => ({
-  extractMarkdownWithMarker: vi.fn(),
-}));
-
 vi.mock("@/lib/services/openai", () => ({
-  extractResumeData: vi.fn(),
   scoreResumeAgainstCriteria: vi.fn(),
 }));
 
@@ -99,27 +74,21 @@ vi.mock("next/cache", () => ({
   revalidatePath: mockRevalidatePath,
 }));
 
-import { decideHitlReview, syncResumesFromGmail, updateCandidateStage } from "./candidates";
-import { extractResumeData, scoreResumeAgainstCriteria } from "@/lib/services/openai";
 import {
-  fetchUnreadGmailResumes,
-  getGmailMessage,
-  getGmailAttachmentBuffer,
-  markGmailMessageAsRead,
-  createGmailClient,
-} from "@/lib/services/gmail";
-import { extractMarkdownWithMarker } from "@/lib/services/marker";
+  decideHitlReview,
+  scoreUnscoredCampaignCandidates,
+  updateCandidateStage,
+} from "./candidates";
+import { scoreResumeAgainstCriteria } from "@/lib/services/openai";
 import {
-  upsertCandidate,
-  createApplicationIfNotExists,
-  uploadResumeToStorage,
-  logAiAudit,
   updateApplicationStage,
   fetchApplicationCampaignId,
+  fetchCandidatesByCampaignId,
+  advanceApplicationStatus,
+  saveResumeScore,
 } from "@/lib/data/candidates";
 import {
   fetchCampaignScoringConfig,
-  fetchCampaignApplicationEmail,
   fetchActiveRubricVersion,
 } from "@/lib/data/campaigns";
 
@@ -129,7 +98,6 @@ beforeEach(() => {
   mockFetchCandidateById.mockReset();
   mockTransitionApplication.mockReset();
   mockRevalidatePath.mockReset();
-  mockFetchGmailConnection.mockReset();
   mockSendScreeningQuestions.mockReset();
   mockFetchCampaignStatus.mockReset();
   mockAssertCampaignActiveById.mockReset();
@@ -477,216 +445,84 @@ describe("updateCandidateStage", () => {
   });
 });
 
-describe("syncResumesFromGmail", () => {
-  const PDF_MIME = "application/pdf";
-  const fakeGmail = { __brand: "gmail-client" } as never;
-
-  function resumePayload(overrides: Record<string, unknown> = {}) {
+// Auto-scoring on criteria save — replaces the retired manual "Score Resume"
+// button. Sets up the scoring chain's mocks (config + rubric + score).
+describe("scoreUnscoredCampaignCandidates", () => {
+  function appRow(over: Record<string, unknown> = {}) {
     return {
-      document_type: "cv" as const,
-      first_name: "Alice",
-      last_name: "Smith",
-      headline: null,
-      summary: null,
-      email: "alice@example.com",
-      phone: "+1-555-0100",
-      location: "NYC",
-      linkedin_url: null,
-      github_url: null,
-      portfolio_url: null,
-      skills: ["React"],
-      languages: [],
-      interests: [],
-      certifications: [],
-      experience: [],
-      education: [],
-      ...overrides,
+      id: "app-1",
+      resume_score: null,
+      parsed_data: { first_name: "Alice" },
+      candidates: { id: "cand-1" },
+      ...over,
     };
   }
 
   beforeEach(() => {
-    // A connected inbox + a Gmail client built from its refresh token.
-    mockFetchGmailConnection.mockResolvedValue({ refresh_token: "rt-1" });
-    vi.mocked(createGmailClient).mockReturnValue(fakeGmail);
-
-    // Single message, single PDF attachment, fetchable buffer.
-    vi.mocked(fetchUnreadGmailResumes).mockResolvedValue([{ id: "msg-1" }]);
-    vi.mocked(getGmailMessage).mockResolvedValue({
-      payload: {
-        parts: [
-          {
-            mimeType: PDF_MIME,
-            filename: "alice.pdf",
-            body: { attachmentId: "att-1" },
-          },
-        ],
-      },
-    });
-    vi.mocked(getGmailAttachmentBuffer).mockResolvedValue(Buffer.from("fake-pdf"));
-    vi.mocked(extractMarkdownWithMarker).mockResolvedValue({
-      markdown: "Alice's resume text",
-      pageCount: 1,
-      parseQualityScore: 0.95,
-      costBreakdown: null,
-    });
-
-    vi.mocked(uploadResumeToStorage).mockResolvedValue("campaigns/c1/alice.pdf");
-    vi.mocked(createApplicationIfNotExists).mockResolvedValue("app-1");
-    vi.mocked(upsertCandidate).mockResolvedValue("candidate-1");
-    vi.mocked(logAiAudit).mockResolvedValue(undefined);
-
-    // No scoring config configured for this campaign — skip the scoring path.
-    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
-
-    // Campaign has an application alias so the sync proceeds past the guard.
-    vi.mocked(fetchCampaignApplicationEmail).mockResolvedValue("careers+eng@company.com");
-  });
-
-  it("freezes the sync (no Gmail work) when the campaign isn't Active", async () => {
-    mockFetchCampaignStatus.mockResolvedValueOnce("draft");
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(result.success).toBe(false);
-    expect(result.count).toBe(0);
-    expect(result.message).toMatch(/draft/i);
-    expect(mockFetchGmailConnection).not.toHaveBeenCalled();
-    expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
-  });
-
-  it("returns a friendly message and does no work when no Gmail is connected", async () => {
-    mockFetchGmailConnection.mockResolvedValueOnce(null);
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(result.success).toBe(false);
-    expect(result.count).toBe(0);
-    expect(result.message).toMatch(/no gmail connected/i);
-    expect(vi.mocked(createGmailClient)).not.toHaveBeenCalled();
-    expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
-  });
-
-  it("refuses to sync when the campaign has no application email set", async () => {
-    vi.mocked(fetchCampaignApplicationEmail).mockResolvedValueOnce(null);
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(result.success).toBe(false);
-    expect(result.count).toBe(0);
-    expect(result.message).toMatch(/application email/i);
-    expect(vi.mocked(createGmailClient)).not.toHaveBeenCalled();
-    expect(vi.mocked(fetchUnreadGmailResumes)).not.toHaveBeenCalled();
-  });
-
-  it("scopes the Gmail search to the campaign's application email", async () => {
-    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload());
-
-    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(vi.mocked(fetchUnreadGmailResumes)).toHaveBeenCalledWith(
-      fakeGmail,
-      expect.any(Number),
-      "careers+eng@company.com",
-    );
-  });
-
-  it("skips messages where the AI could not extract an email and marks them read", async () => {
-    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload({ email: null }));
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
-    expect(vi.mocked(createApplicationIfNotExists)).not.toHaveBeenCalled();
-    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
-    expect(result.count).toBe(0);
-  });
-
-  it("ingests a message when the AI extracts an email", async () => {
-    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload());
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(vi.mocked(upsertCandidate)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(upsertCandidate)).toHaveBeenCalledWith(
-      expect.objectContaining({ email: "alice@example.com" }),
-    );
-    expect(vi.mocked(createApplicationIfNotExists)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
-    expect(result.count).toBe(1);
-  });
-
-  it("skips a document the AI classifies as a non-CV (e.g. motivation letter) and marks it read", async () => {
-    vi.mocked(extractResumeData).mockResolvedValueOnce(
-      resumePayload({ document_type: "motivation_letter" }),
-    );
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
-    expect(vi.mocked(createApplicationIfNotExists)).not.toHaveBeenCalled();
-    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
-    expect(result.success).toBe(true);
-    expect(result.count).toBe(0);
-  });
-
-  it("skips an attachment when Marker extraction throws, without aborting the sync", async () => {
-    vi.mocked(extractMarkdownWithMarker).mockRejectedValueOnce(new Error("Marker timed out"));
-
-    const result = await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(vi.mocked(extractResumeData)).not.toHaveBeenCalled();
-    expect(vi.mocked(upsertCandidate)).not.toHaveBeenCalled();
-    expect(vi.mocked(markGmailMessageAsRead)).toHaveBeenCalledWith(fakeGmail, "msg-1");
-    expect(result.success).toBe(true);
-    expect(result.count).toBe(0);
-  });
-
-  // ─── Fully-auto auto-send ───────────────────────────────────────────────
-  // A campaign with scoring criteria configured. Each test sets the score and
-  // automation_mode to drive the resume-scoring rule to a specific outcome.
-  function configureScoring(
-    automation_mode: "fully_auto" | "human_in_loop",
-    overall_score: number,
-  ): void {
-    vi.mocked(extractResumeData).mockResolvedValueOnce(resumePayload());
+    mockFetchCampaignStatus.mockResolvedValue("active");
     vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
       description: "Senior engineer role",
-      automation_mode,
+      automation_mode: "fully_auto",
       screening_threshold: 70,
       screening_criteria: [
         { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
       ],
     } as never);
     vi.mocked(fetchActiveRubricVersion).mockResolvedValue(1);
+    vi.mocked(saveResumeScore).mockResolvedValue(undefined as never);
     vi.mocked(scoreResumeAgainstCriteria).mockResolvedValue({
-      result: { overall_score, tier: "strong", rationale: "ok", factors: [] },
+      result: { overall_score: 85, tier: "strong", rationale: "ok", factors: [] },
       model: "gpt-test",
       promptVersion: "v1",
       rawOutput: "{}",
     } as never);
-  }
-
-  it("auto-sends screening questions when fully-auto scoring approves the candidate", async () => {
-    configureScoring("fully_auto", 85); // ≥ threshold → screening_approved
-
-    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
-
-    expect(mockSendScreeningQuestions).toHaveBeenCalledWith("app-1");
   });
 
-  it("does not auto-send when fully-auto scoring rejects the candidate (below threshold)", async () => {
-    configureScoring("fully_auto", 40); // < threshold → rejected
+  it("does nothing when the campaign has no criteria", async () => {
+    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
 
-    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
-    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
+    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+    expect(vi.mocked(advanceApplicationStatus)).not.toHaveBeenCalled();
   });
 
-  it("does not auto-send in human-in-the-loop mode (routes to manual review instead)", async () => {
-    configureScoring("human_in_loop", 85); // any score → screening_review_pending
+  it("does nothing when the campaign isn't Active (freeze rule)", async () => {
+    mockFetchCampaignStatus.mockResolvedValue("paused");
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
 
-    await syncResumesFromGmail(VALID_CAMPAIGN_ID);
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
-    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
+    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+  });
+
+  it("scores only unscored candidates that have parsed resume data", async () => {
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([
+      appRow({ id: "app-unscored" }),
+      appRow({ id: "app-scored", resume_score: 90 }), // already scored — skip
+      appRow({ id: "app-noparse", parsed_data: null }), // nothing to score — skip
+    ] as never);
+
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+
+    expect(vi.mocked(scoreResumeAgainstCriteria)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(advanceApplicationStatus)).toHaveBeenCalledWith(
+      "app-unscored",
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it("keeps scoring the rest when one candidate fails (best-effort)", async () => {
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([
+      appRow({ id: "app-1" }),
+      appRow({ id: "app-2", candidates: { id: "cand-2" } }),
+    ] as never);
+    vi.mocked(scoreResumeAgainstCriteria).mockRejectedValueOnce(new Error("openai down"));
+
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+
+    expect(vi.mocked(scoreResumeAgainstCriteria)).toHaveBeenCalledTimes(2);
   });
 });

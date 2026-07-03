@@ -116,7 +116,8 @@ export interface Campaign {
   deadline: string | null;
   location: string | null;
   timezone: string | null;
-  application_email: string | null;
+  /** URL-safe slug for the public apply page (`/apply/<slug>`). */
+  public_slug: string | null;
   automation_mode: AutomationMode;
   screening_threshold: number;
   interview_persona: InterviewPersona;

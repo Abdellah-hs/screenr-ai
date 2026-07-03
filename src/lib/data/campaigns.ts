@@ -14,6 +14,7 @@ import type {
   PipelineStageCount,
 } from "@/lib/constants";
 import { deriveDimensionFields } from "@/lib/rubric-weights";
+import { slugifyTitle } from "@/lib/utils";
 import type { Database } from "@/types/database.types";
 
 type CampaignInsert = Database["public"]["Tables"]["campaigns"]["Insert"];
@@ -52,6 +53,15 @@ type AvailabilityRuleInput = {
   end_minute: number;
 };
 
+// Slug-collision retry budget for insertCampaignTx. A handful of suffixed
+// attempts is plenty — collisions are rare (only same-titled campaigns).
+const MAX_SLUG_ATTEMPTS = 5;
+
+/** Short, URL-safe random suffix to disambiguate a colliding campaign slug. */
+function randomSlugSuffix(): string {
+  return Math.random().toString(36).slice(2, 6);
+}
+
 const DEFAULT_PIPELINE: PipelineStageCount[] = [
   { name: "New", key: "applied", count: 0 },
   { name: "Screening", key: "screening", count: 0 },
@@ -77,7 +87,7 @@ function assembleCampaign(
     deadline: (row.deadline as string) || null,
     location: (row.location as string) || null,
     timezone: (row.timezone as string) || null,
-    application_email: (row.application_email as string) || null,
+    public_slug: (row.public_slug as string) || null,
     automation_mode: row.automation_mode as AutomationMode,
     screening_threshold: row.screening_threshold as number,
     interview_persona: row.interview_persona as InterviewPersona,
@@ -281,26 +291,6 @@ export async function verifyCampaignOwnership(
 }
 
 /**
- * The address applicants send CVs to for this campaign (a plus-alias of the
- * recruiter's connected inbox). Returns null when unset. Scoped to user_id, so
- * it doubles as an ownership gate for the resume sync. SELECT-only.
- */
-export async function fetchCampaignApplicationEmail(
-  campaignId: string,
-  userId: string
-): Promise<string | null> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("campaigns")
-    .select("application_email")
-    .eq("id", campaignId)
-    .eq("user_id", userId)
-    .is("deleted_at", null)
-    .single();
-  return data?.application_email ?? null;
-}
-
-/**
  * The campaign's current status, scoped to the owning user (doubles as an
  * ownership gate). Returns null when the campaign is missing or not owned.
  * SELECT-only — used by the inline status changer to validate the transition
@@ -395,32 +385,41 @@ export async function softDeleteCampaignTx(
   });
 }
 
+export interface CampaignBySlug {
+  campaign_id: string;
+  user_id: string;
+  title: string;
+  status: CampaignStatus;
+}
+
 /**
- * Active, non-deleted campaigns that have an application alias set — the set the
- * scheduled resume-sync sweep iterates. Session-less (service-role) so the cron
- * can read across all owners; returns each campaign's owner so the sweep can
- * resolve their Gmail connection. SELECT-only.
+ * Public, session-less lookup of a campaign by its `public_slug` — backs the
+ * candidate apply page (`/apply/<slug>`). Service-role by default so it reads
+ * without an account (campaigns are owner-RLS). SELECT-only.
+ *
+ * Returns the status (NOT filtered to active) so the caller can tell apart a
+ * non-existent slug (null) from a real campaign that simply isn't accepting
+ * applications right now — the page shows different copy for each.
  */
-export async function fetchActiveCampaignsForResumeSync(): Promise<
-  { campaign_id: string; user_id: string; application_email: string }[]
-> {
-  const supabase = createAdminClient();
-  const { data, error } = await supabase
+export async function fetchCampaignBySlug(
+  slug: string,
+  db?: SupabaseDb,
+): Promise<CampaignBySlug | null> {
+  const supabase = db ?? createAdminClient();
+  const { data } = await supabase
     .from("campaigns")
-    .select("id, user_id, application_email")
-    .eq("status", "active")
+    .select("id, user_id, title, status")
+    .eq("public_slug", slug)
     .is("deleted_at", null)
-    .not("application_email", "is", null);
+    .single();
 
-  if (error || !data) return [];
-
-  return data
-    .filter((r) => r.application_email)
-    .map((r) => ({
-      campaign_id: r.id as string,
-      user_id: r.user_id as string,
-      application_email: r.application_email as string,
-    }));
+  if (!data) return null;
+  return {
+    campaign_id: data.id as string,
+    user_id: data.user_id as string,
+    title: data.title as string,
+    status: data.status as CampaignStatus,
+  };
 }
 
 // ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
@@ -619,14 +618,28 @@ export async function insertCampaignTx(
 ): Promise<string> {
   const supabase = await createClient();
 
-  // 1. Insert campaign
-  const { data: campaign, error } = await supabase
-    .from("campaigns")
-    .insert({ ...payload, user_id: userId })
-    .select()
-    .single();
+  // 1. Insert campaign with a unique public_slug derived from the title. The
+  //    slug is set once here and never changes, so a shared apply link survives
+  //    later title edits. On the rare slug collision (Postgres 23505 against
+  //    idx_campaigns_public_slug) retry with a short random suffix.
+  const baseSlug = slugifyTitle(payload.title);
+  let campaign: { id: string } | null = null;
+  for (let attempt = 0; attempt <= MAX_SLUG_ATTEMPTS; attempt++) {
+    const publicSlug = attempt === 0 ? baseSlug : `${baseSlug}-${randomSlugSuffix()}`;
+    const { data, error } = await supabase
+      .from("campaigns")
+      .insert({ ...payload, user_id: userId, public_slug: publicSlug })
+      .select()
+      .single();
 
-  if (error || !campaign) throw new Error(error?.message || "Failed to create campaign");
+    if (data) {
+      campaign = data;
+      break;
+    }
+    if (error?.code === "23505" && attempt < MAX_SLUG_ATTEMPTS) continue;
+    throw new Error(error?.message || "Failed to create campaign");
+  }
+  if (!campaign) throw new Error("Failed to create campaign: could not allocate a unique slug");
 
   // 2. Insert rubrics and dimensions — the resume rubric is the single source
   //    of truth for CV scoring (issue #65); screening_criteria is retired.
@@ -797,8 +810,6 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
       interview_slot_minutes: source.interview_slot_minutes,
       interview_timezone: source.interview_timezone,
       interview_booking_horizon_days: source.interview_booking_horizon_days,
-      // application_email intentionally NOT copied: one alias routes to one
-      // campaign per recruiter (unique index), so a clone starts unset.
       user_id: userId,
     })
     .select()

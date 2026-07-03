@@ -17,10 +17,6 @@ export const campaignFormSchema = z.object({
   automation_mode: z.enum(automationModeValues),
   screening_threshold: z.number().int().min(0).max(100),
   interview_persona: z.enum(interviewPersonaValues),
-  // Address applicants send CVs to (a plus-alias of the connected inbox).
-  // Required: the resume sync filters Gmail on this, so a campaign without it
-  // could never receive CVs.
-  application_email: z.email("Enter a valid email address").max(254),
   // AI-interview availability config (PRD 3.5.6). Slots are generated from the
   // weekly availabilityRules; these are the campaign-level knobs.
   interview_slot_minutes: z.number().int().min(5).max(240).nullable(),
@@ -111,7 +107,6 @@ export function parseCampaignFormData(formData: FormData) {
     automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
     screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
-    application_email: ((formData.get("application_email") as string) ?? "").trim(),
     interview_slot_minutes: Number.isNaN(rawSlotMinutes) ? null : rawSlotMinutes,
     interview_timezone: (formData.get("interview_timezone") as string)?.trim() || null,
     interview_booking_horizon_days: Number.isNaN(rawHorizon) ? 14 : rawHorizon,

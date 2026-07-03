@@ -4,7 +4,6 @@ import { getCampaignById, getResumeCriteriaCount } from "@/lib/actions/campaigns
 import { getCandidateById } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { getInterviewBooking } from "@/lib/actions/schedule";
-import { ScoreResumeButton } from "@/components/candidates/score-resume-button";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
@@ -303,7 +302,7 @@ export default async function CandidateDetailPage({
   return (
     <div className="max-w-4xl mx-auto">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-4">
+      <div className="flex items-baseline gap-2 text-sm text-[#6B7280] mb-4">
         <Link
           href="/campaigns"
           className="hover:text-[#0369A1] transition-all duration-200"
@@ -358,17 +357,6 @@ export default async function CandidateDetailPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {candidate.scores.length === 0 && (
-            <ScoreResumeButton
-              applicationId={candidateId}
-              disabled={!hasResumeCriteria || !isActive}
-              disabledHint={
-                !isActive
-                  ? "This campaign isn't Active — set it to Active to score candidates."
-                  : "Add screening criteria to this campaign to enable scoring."
-              }
-            />
-          )}
           <Link
             href={`/campaigns/${id}/candidates`}
             className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#0C4A6E] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"

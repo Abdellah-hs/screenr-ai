@@ -50,14 +50,11 @@ vi.mock("googleapis", () => ({
   },
 }));
 
-import type { gmail_v1 } from "googleapis";
 import {
-  isSupportedResumeMimeType,
   buildGmailConsentUrl,
   exchangeCodeForTokens,
   getConnectedEmail,
   verifyRefreshToken,
-  fetchUnreadGmailResumes,
 } from "./gmail";
 
 const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
@@ -71,30 +68,6 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.GOOGLE_CLIENT_ID;
   delete process.env.GOOGLE_CLIENT_SECRET;
-});
-
-describe("isSupportedResumeMimeType", () => {
-  it("returns true for application/pdf", () => {
-    expect(isSupportedResumeMimeType("application/pdf")).toBe(true);
-  });
-
-  it("returns true for the DOCX OOXML mime type", () => {
-    expect(
-      isSupportedResumeMimeType(
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      )
-    ).toBe(true);
-  });
-
-  it("returns false for legacy .doc (application/msword)", () => {
-    expect(isSupportedResumeMimeType("application/msword")).toBe(false);
-  });
-
-  it("returns false for unrelated mime types", () => {
-    expect(isSupportedResumeMimeType("image/png")).toBe(false);
-    expect(isSupportedResumeMimeType("text/plain")).toBe(false);
-    expect(isSupportedResumeMimeType("")).toBe(false);
-  });
 });
 
 describe("buildGmailConsentUrl", () => {
@@ -194,38 +167,5 @@ describe("verifyRefreshToken", () => {
     mockGetAccessToken.mockRejectedValue(new Error("ETIMEDOUT"));
 
     await expect(verifyRefreshToken("rt-live")).rejects.toThrow("ETIMEDOUT");
-  });
-});
-
-describe("fetchUnreadGmailResumes", () => {
-  function fakeGmail(list: ReturnType<typeof vi.fn>): gmail_v1.Gmail {
-    return { users: { messages: { list } } } as unknown as gmail_v1.Gmail;
-  }
-
-  it("scopes the search to the campaign address when one is given", async () => {
-    const list = vi.fn().mockResolvedValue({ data: { messages: [{ id: "m1" }] } });
-
-    await fetchUnreadGmailResumes(fakeGmail(list), 5, "careers+eng@company.com");
-
-    const q = (list.mock.calls[0][0] as { q: string }).q;
-    expect(q).toContain("to:careers+eng@company.com");
-    expect(q).toContain("is:unread has:attachment");
-  });
-
-  it("omits the to: filter when no address is given", async () => {
-    const list = vi.fn().mockResolvedValue({ data: { messages: [] } });
-
-    await fetchUnreadGmailResumes(fakeGmail(list), 5);
-
-    const q = (list.mock.calls[0][0] as { q: string }).q;
-    expect(q).not.toContain("to:");
-  });
-
-  it("returns an empty array when Gmail reports no messages", async () => {
-    const list = vi.fn().mockResolvedValue({ data: {} });
-
-    const result = await fetchUnreadGmailResumes(fakeGmail(list), 5, "x@y.com");
-
-    expect(result).toEqual([]);
   });
 });

@@ -306,7 +306,6 @@ export type Database = {
       }
       campaigns: {
         Row: {
-          application_email: string | null
           automation_mode: Database["public"]["Enums"]["automation_mode_enum"]
           created_at: string
           deadline: string | null
@@ -320,6 +319,7 @@ export type Database = {
           interview_timezone: string | null
           location: string | null
           positions: number
+          public_slug: string | null
           screening_threshold: number
           status: Database["public"]["Enums"]["campaign_status_enum"]
           timezone: string | null
@@ -328,7 +328,6 @@ export type Database = {
           user_id: string
         }
         Insert: {
-          application_email?: string | null
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null
@@ -342,6 +341,7 @@ export type Database = {
           interview_timezone?: string | null
           location?: string | null
           positions?: number
+          public_slug?: string | null
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null
@@ -350,7 +350,6 @@ export type Database = {
           user_id: string
         }
         Update: {
-          application_email?: string | null
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null
@@ -364,6 +363,7 @@ export type Database = {
           interview_timezone?: string | null
           location?: string | null
           positions?: number
+          public_slug?: string | null
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null

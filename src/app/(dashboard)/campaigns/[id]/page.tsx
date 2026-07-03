@@ -6,9 +6,9 @@ import { getScreeningQuestions } from "@/lib/actions/screening-questions";
 import RubricDisplay from "@/components/campaigns/rubric-display";
 import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
-import { GmailSyncButton } from "@/components/candidates/gmail-sync-button";
 import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
 import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
+import { CampaignApplyLink } from "@/components/campaigns/campaign-apply-link";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
 
 export default async function CampaignDetailPage({
@@ -33,14 +33,13 @@ export default async function CampaignDetailPage({
     stageCounts[stageStr] = (stageCounts[stageStr] || 0) + 1;
   }
 
-  // The pipeline is frozen unless the campaign is Active — gate the processing
-  // actions (resume sync, screening sends) and explain why.
+  // The pipeline is frozen unless the campaign is Active — the public apply link
+  // stops accepting submissions and screening sends pause. Explain why below.
   const isActive = campaign.status === "active";
-  const frozenReason = `This campaign is ${campaign.status ?? "draft"} — set it to Active to process candidates.`;
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-4">
+      <div className="flex items-baseline gap-2 text-sm text-[#6B7280] mb-4">
         <Link href="/campaigns" className="hover:text-[#111827] transition-colors">
           Campaigns
         </Link>
@@ -131,6 +130,13 @@ export default async function CampaignDetailPage({
         </div>
       </div>
 
+      {/* Public apply link — recruiters share this to source candidates directly */}
+      {campaign.public_slug && (
+        <div className="mb-6">
+          <CampaignApplyLink slug={campaign.public_slug} isActive={isActive} />
+        </div>
+      )}
+
       {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
       {campaign.rubrics.length > 0 && (
         <div className="mb-6">
@@ -158,11 +164,6 @@ export default async function CampaignDetailPage({
             <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
               Pipeline
             </h2>
-            <GmailSyncButton
-              campaignId={id}
-              disabled={!isActive}
-              disabledReason={frozenReason}
-            />
           </div>
           <Link
             href={`/campaigns/${id}/candidates`}
@@ -177,8 +178,8 @@ export default async function CampaignDetailPage({
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
             </svg>
             <span>
-              This campaign is <span className="font-medium capitalize">{campaign.status}</span>. Resume
-              sync and screening are paused — set it to <span className="font-medium">Active</span> to
+              This campaign is <span className="font-medium capitalize">{campaign.status}</span>. New
+              applications and screening are paused — set it to <span className="font-medium">Active</span> to
               process candidates.
             </span>
           </div>

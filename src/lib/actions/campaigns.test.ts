@@ -40,6 +40,13 @@ vi.mock("next/cache", () => ({
   revalidatePath: mockRevalidatePath,
 }));
 
+// updateCampaign delegates post-save scoring to this action. Mock it so importing
+// campaigns.ts doesn't pull in the real candidates module (which instantiates an
+// OpenAI client at load via the screening-questions service).
+vi.mock("./candidates", () => ({
+  scoreUnscoredCampaignCandidates: vi.fn(),
+}));
+
 import {
   getResumeCriteriaCount,
   updateCampaignStatus,
