@@ -17,13 +17,22 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   dimensionsEqual,
-  fetchCampaignApplicationEmail,
   fetchCampaignStatus,
+  fetchCampaignBySlug,
+  insertCampaignTx,
   updateCampaignStatusTx,
   softDeleteCampaignTx,
   mapAvailabilityRows,
 } from "./campaigns";
 import type { DimensionImportance } from "@/lib/constants";
+import type { Database } from "@/types/database.types";
+import type { SupabaseDb } from "@/lib/supabase/types";
+
+type CampaignInsert = Database["public"]["Tables"]["campaigns"]["Insert"];
+
+function campaignPayload(title: string): Omit<CampaignInsert, "user_id"> {
+  return { title, description: "A role", status: "draft" } as Omit<CampaignInsert, "user_id">;
+}
 
 type AvailabilityRow = {
   id: string;
@@ -106,38 +115,6 @@ describe("dimensionsEqual", () => {
   });
 });
 
-describe("fetchCampaignApplicationEmail", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("returns the address scoped to the campaign and owning user", async () => {
-    mockSingle.mockResolvedValue({
-      data: { application_email: "careers+eng@company.com" },
-      error: null,
-    });
-
-    const result = await fetchCampaignApplicationEmail("camp-1", "user-1");
-
-    expect(result).toBe("careers+eng@company.com");
-    expect(mockFrom).toHaveBeenCalledWith("campaigns");
-    expect(mockEqId).toHaveBeenCalledWith("id", "camp-1");
-    expect(mockEqUser).toHaveBeenCalledWith("user_id", "user-1");
-  });
-
-  it("returns null when the campaign has no address set", async () => {
-    mockSingle.mockResolvedValue({ data: { application_email: null }, error: null });
-
-    expect(await fetchCampaignApplicationEmail("camp-1", "user-1")).toBeNull();
-  });
-
-  it("returns null when the campaign is missing or not owned by the user", async () => {
-    mockSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
-
-    expect(await fetchCampaignApplicationEmail("camp-1", "user-1")).toBeNull();
-  });
-});
-
 describe("fetchCampaignStatus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -158,6 +135,44 @@ describe("fetchCampaignStatus", () => {
     mockSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
 
     expect(await fetchCampaignStatus("camp-1", "user-1")).toBeNull();
+  });
+});
+
+describe("fetchCampaignBySlug", () => {
+  // Self-contained chain: from("campaigns").select(...).eq("public_slug", …)
+  //   .is("deleted_at", null).single(). Passed in as `db` so the function never
+  //   reaches createAdminClient() — and so this block is order-independent.
+  const single = vi.fn();
+  const eqIs = { is: vi.fn(() => ({ single })) };
+  const eq = vi.fn(() => eqIs);
+  const select = vi.fn(() => ({ eq }));
+  const db = { from: vi.fn(() => ({ select })) } as unknown as SupabaseDb;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns the campaign mapped to id/user/title/status", async () => {
+    single.mockResolvedValue({
+      data: { id: "camp-1", user_id: "user-1", title: "Backend Engineer", status: "active" },
+      error: null,
+    });
+
+    const result = await fetchCampaignBySlug("backend-engineer", db);
+
+    expect(result).toEqual({
+      campaign_id: "camp-1",
+      user_id: "user-1",
+      title: "Backend Engineer",
+      status: "active",
+    });
+    expect(eq).toHaveBeenCalledWith("public_slug", "backend-engineer");
+  });
+
+  it("returns null when no campaign owns the slug", async () => {
+    single.mockResolvedValue({ data: null, error: { message: "no rows" } });
+
+    expect(await fetchCampaignBySlug("missing", db)).toBeNull();
   });
 });
 
@@ -288,5 +303,62 @@ describe("softDeleteCampaignTx", () => {
 
     await expect(softDeleteCampaignTx("camp-1", "user-1")).rejects.toThrow();
     expect(auditInsert).not.toHaveBeenCalled();
+  });
+});
+
+// Kept last: overrides mockFrom to expose the campaign insert + audit chains, so
+// it must not run before the default-select describes above. Empty rubric / SLA /
+// reviewer / availability arrays keep the Tx down to the campaign + audit writes,
+// isolating the new slug-derivation + collision-retry logic.
+describe("insertCampaignTx", () => {
+  const insertSingle = vi.fn();
+  // Capture each campaign insert payload so we can assert on the derived slug.
+  const insertedPayloads: Record<string, unknown>[] = [];
+  const campaignInsert = vi.fn((payload: Record<string, unknown>) => {
+    insertedPayloads.push(payload);
+    return { select: () => ({ single: insertSingle }) };
+  });
+  const auditInsert = vi.fn(() => Promise.resolve({ error: null }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    insertedPayloads.length = 0;
+    mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
+      if (table === "campaign_audit_log") return { insert: auditInsert };
+      return { insert: campaignInsert };
+    });
+  });
+
+  it("derives the public_slug from the title and returns the new id", async () => {
+    insertSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+
+    const id = await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1");
+
+    expect(id).toBe("camp-1");
+    expect(insertedPayloads[0]).toMatchObject({
+      user_id: "user-1",
+      public_slug: "backend-engineer",
+    });
+  });
+
+  it("retries with a suffixed slug on a unique-violation (23505) collision", async () => {
+    insertSingle
+      .mockResolvedValueOnce({ data: null, error: { code: "23505" } })
+      .mockResolvedValueOnce({ data: { id: "camp-2" }, error: null });
+
+    const id = await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1");
+
+    expect(id).toBe("camp-2");
+    expect(insertedPayloads).toHaveLength(2);
+    expect(insertedPayloads[1].public_slug as string).toMatch(/^backend-engineer-[a-z0-9]+$/);
+  });
+
+  it("throws without retrying on a non-collision error", async () => {
+    insertSingle.mockResolvedValue({ data: null, error: { code: "500", message: "db down" } });
+
+    await expect(
+      insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1"),
+    ).rejects.toThrow("db down");
+    expect(insertedPayloads).toHaveLength(1);
   });
 });

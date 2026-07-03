@@ -68,7 +68,7 @@ export default function EditCampaignPage({
   return (
     <div className="max-w-3xl mx-auto">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-6">
+      <div className="flex items-baseline gap-2 text-sm text-[#6B7280] mb-6">
         <Link href="/campaigns" className="hover:text-[#111827] transition-colors">
           Campaigns
         </Link>
@@ -191,25 +191,6 @@ export default function EditCampaignPage({
             className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             placeholder="e.g. Remote, New York, NY"
           />
-        </div>
-
-        <div>
-          <label htmlFor="application_email" className="block text-sm font-medium text-[#111827] mb-1">
-            Application email <span className="text-[#DC2626]">*</span>
-          </label>
-          <input
-            id="application_email"
-            name="application_email"
-            type="email"
-            required
-            defaultValue={campaign.application_email ?? ""}
-            className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            placeholder="e.g. careers+eng@yourcompany.com"
-          />
-          <p className="text-xs text-[#6B7280] mt-1">
-            The address applicants send CVs to — typically a plus-alias of your connected inbox.
-            Gmail sync only pulls resumes sent to this address.
-          </p>
         </div>
 
         <AiSettingsFields

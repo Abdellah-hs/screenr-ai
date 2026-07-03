@@ -1,5 +1,4 @@
-import type { ScoreFactor, ApplicationState } from "@/lib/constants";
-import type { fetchCampaignScoringConfig } from "@/lib/data/campaigns";
+import type { ScoreFactor, ApplicationState, AutomationMode } from "@/lib/constants";
 
 /**
  * Shape of the AI's resume-scoring output. Defined here (not in the action
@@ -14,9 +13,32 @@ export interface ResumeScoreResult {
   factors: ScoreFactor[];
 }
 
-export type CampaignScoringConfig = NonNullable<
-  Awaited<ReturnType<typeof fetchCampaignScoringConfig>>
->;
+/**
+ * One scoring criterion the rule reads — a resume-rubric dimension with its
+ * per-dimension knockout fail line (`min_score`).
+ */
+export interface ScoringCriterion {
+  id: string;
+  label: string;
+  weight: number;
+  is_mandatory: boolean;
+  min_score: number;
+}
+
+/**
+ * The campaign evidence this rule decides on. Owned by the rule layer — the
+ * decisioner declares what it needs and the data layer (`fetchCampaignScoringConfig`)
+ * produces a conforming object. Declaring it here (rather than deriving it from
+ * the data function's return type) keeps the dependency arrow pointing
+ * rules → constants only, never rules → data.
+ */
+export interface CampaignScoringConfig {
+  id: string;
+  description: string;
+  automation_mode: AutomationMode;
+  screening_threshold: number;
+  screening_criteria: ScoringCriterion[];
+}
 
 /**
  * A deferred state-machine transition. The rule layer returns one of these;

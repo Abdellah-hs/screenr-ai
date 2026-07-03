@@ -37,7 +37,7 @@ export default async function CandidatesPage({
   return (
     <div className="max-w-5xl mx-auto">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-[#6B7280] mb-4">
+      <div className="flex items-baseline gap-2 text-sm text-[#6B7280] mb-4">
         <Link
           href="/campaigns"
           className="hover:text-[#111827] transition-colors"

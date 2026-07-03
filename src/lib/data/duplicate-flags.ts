@@ -44,7 +44,12 @@ function toDuplicateFlag(row: DuplicateFlagRow): DuplicateFlag {
 }
 
 /**
- * Find an existing candidate by exact email match.
+ * Find an existing candidate by exact email match. Returns the earliest live
+ * (non-soft-deleted) match. Uses limit(1)+maybeSingle rather than single() so a
+ * pre-existing duplicate (two candidates already share this email) doesn't make
+ * the lookup error out — which would silently stop flagging every later
+ * applicant with that email. Merged-away candidates (deleted_at set) are skipped
+ * so we never flag against a dead record.
  */
 export async function findCandidateByEmail(
   email: string,
@@ -55,14 +60,19 @@ export async function findCandidateByEmail(
     .from("candidates")
     .select("id")
     .eq("email", email)
-    .single();
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data) return null;
   return data;
 }
 
 /**
- * Find an existing candidate by exact phone match (non-null phone only).
+ * Find an existing candidate by exact phone match (non-null phone only). Same
+ * earliest-live-match semantics as findCandidateByEmail — tolerant of
+ * pre-existing duplicates and skips soft-deleted records.
  */
 export async function findCandidateByPhone(
   phone: string,
@@ -73,7 +83,10 @@ export async function findCandidateByPhone(
     .from("candidates")
     .select("id")
     .eq("phone", phone)
-    .single();
+    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (error || !data) return null;
   return data;

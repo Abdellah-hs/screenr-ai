@@ -52,6 +52,7 @@ A strict layered pattern is enforced for all data flow. Respect the boundaries �
 2. **Rules Layer** (`src/lib/rules/`) — **pure** decision functions. Reads already-validated evidence (e.g. an AI score, a response status, a list of required questions vs answers) and returns a decision — usually a `TransitionDescriptor` `{ toState, rationale }` or a guard that throws on bad state. The action executes the transition; the rule only decides. **MUST NOT** import from `@/lib/supabase/*`, `@/lib/actions/*`, or call `revalidatePath` / `redirect`. See `src/lib/rules/README.md` for the full contract. This is the layer that implements "Control > AI > Data" — AI produces evidence, rules decide.
 3. **Data Layer** (`src/lib/data/`) — pure Supabase query/mutation functions (e.g. `insertCampaignTx`, `fetchCandidatesByCampaignId`, `transitionApplication`). No auth checks, no validation — that is the action's job. Functions ending in `Tx` perform multi-table writes that should be treated as a logical transaction. **All `applications.status` writes go through `transitionApplication()` in `src/lib/data/transitions.ts`** — never `.update({ status: ... })` directly.
 4. **Services** (`src/lib/services/`) — third-party integrations: `openai.ts` (resume extraction, screening criteria/rubric generation, scoring), `gmail.ts` (inbox sync for resume ingestion), `pdf.ts` (PDF text extraction via `pdf-parse`), `email.ts`, `screening-questions.ts`, `email-templates/`.
+5. **Orchestration / Pipelines** (`src/lib/resume-ingest/`, `src/lib/screening/`, `src/lib/scheduling/`) — multi-step **use-cases** that compose the lower layers (services → data → rules → `transition()`) into one reusable flow. They exist because a flow like resume ingest may be driven from **more than one entry point** (today the public apply action; a session-less caller like a cron sweep could reuse it tomorrow), so it can't live inside any single action. A pipeline runs on an **injected `db` client** (`SupabaseDb`) so it works with or without a recruiter session (service-role for cron). **MUST NOT** perform auth, Zod validation, or rate-limiting — those stay in the action that calls it (a cron route does its own `CRON_SECRET` guard). It **MUST** still route every `applications.status` change through `transition()` and keep AI advisory (score → rule decides → transition). Think of it as an "action body" lifted out so several callers can share it. The canonical example is `ingestResumeDocument` (extract → classify → upload → upsert → score → rule → advance).
 
 Auto-generated Supabase types live in `src/types/database.types.ts`. The `src/app/api/` directory exists but is currently empty — there are **no API routes**; everything goes through Server Actions.
 
@@ -408,7 +409,7 @@ SUPABASE_SERVICE_ROLE_KEY     # Service-role key for session-less server writes 
 CRON_SECRET                   # Shared secret guarding the scheduled-job endpoints (e.g. screening expiry sweep)
 ```
 
-Gmail sync (`src/lib/services/gmail.ts`) uses the `googleapis` SDK. The OAuth **app** credentials (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) live in env; the per-recruiter **refresh token** is obtained via the consent flow and stored in the `gmail_connections` table (one row per `user_id`). A recruiter connects/changes their inbox under **Settings → Integrations**, which drives the OAuth round-trip through the route handlers in `src/app/api/integrations/gmail/{connect,callback}/route.ts`. `syncResumesFromGmail` reads the stored token (server-side only) to build the Gmail client. The refresh token is a secret: protected by owner-only RLS, never returned to the browser; encryption-at-rest (pgcrypto / Supabase Vault) is a future hardening step. **Setup:** in the Google Cloud OAuth client, register the redirect URI `<origin>/api/integrations/gmail/callback` (e.g. `http://localhost:3000/...`) and allow the `gmail.modify` scope.
+Gmail integration (`src/lib/services/gmail.ts`) uses the `googleapis` SDK and is now **outbound-only** — it sends candidate emails (screening/interview links) from the recruiter's connected inbox. (Inbound CV sync was retired; candidates submit CVs exclusively through the public apply page `/apply/<slug>`.) The OAuth **app** credentials (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`) live in env; the per-recruiter **refresh token** is obtained via the consent flow and stored in the `gmail_connections` table (one row per `user_id`). A recruiter connects/changes their inbox under **Settings → Integrations**, which drives the OAuth round-trip through the route handlers in `src/app/api/integrations/gmail/{connect,callback}/route.ts`. Outbound sends (`src/lib/actions/gmail-sender.ts`) read the stored token (server-side only) to build the Gmail client. The refresh token is a secret: protected by owner-only RLS, never returned to the browser; encryption-at-rest (pgcrypto / Supabase Vault) is a future hardening step. **Setup:** in the Google Cloud OAuth client, register the redirect URI `<origin>/api/integrations/gmail/callback` (e.g. `http://localhost:3000/...`) and allow the `gmail.modify` scope (a superset of `gmail.send`).
 
 Resume text extraction (`src/lib/services/marker.ts`) uses the hosted Datalab Marker API for all document types — it replaced the legacy `pdf-parse` (PDF) and `mammoth` (DOCX) extractors. The OpenAI resume parser classifies each document (`document_type`: `cv` | `motivation_letter` | `other`); only CVs are ingested.
 
@@ -422,19 +423,7 @@ It is exposed at **`GET /api/cron/expire-screenings`**, guarded by `Authorizatio
 - **Supabase pg_cron + pg_net** — schedule an HTTP POST/GET to the deployed URL with the bearer header.
 - **External cron / GitHub Actions** — `curl -H "Authorization: Bearer $CRON_SECRET" <origin>/api/cron/expire-screenings`.
 
-**Automatic resume sync** is the second scheduled job. The recruiter's "Sync from Gmail" button is an on-demand pull; the proactive counterpart (`sweepResumeSync` in `src/lib/resume-sync/sync-sweep.ts`) ingests new CVs into **every Active campaign** on a schedule, so recruiters don't have to press anything. It runs session-less (service-role client) and resolves each campaign's owner to build their Gmail client; only Active campaigns are touched (the freeze rule). Reuses the same ingest+score pipeline as the button via injected-client data functions (`db?: SupabaseDb` — see `src/lib/supabase/types.ts`).
-
-It is exposed at **`GET /api/cron/sync-resumes`**, same `CRON_SECRET` guard. With Supabase pg_cron + pg_net (a 15-min cadence is reasonable for an inbox):
-
-```sql
-select cron.schedule(
-  'sync-resumes', '*/15 * * * *',
-  $$ select net.http_get(
-       url     => '<origin>/api/cron/sync-resumes',
-       headers => jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>')) $$);
-```
-
-There is no scheduler wired by default — both endpoints are inert until one is pointed at them.
+There is no scheduler wired by default — the endpoint is inert until one is pointed at it.
 
 ## Notes for Future Work
 

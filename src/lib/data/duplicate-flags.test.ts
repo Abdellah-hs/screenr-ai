@@ -4,6 +4,9 @@ const mockFrom = vi.fn();
 const mockSelect = vi.fn();
 const mockEq = vi.fn();
 const mockSingle = vi.fn();
+const mockMaybeSingle = vi.fn();
+const mockIs = vi.fn();
+const mockLimit = vi.fn();
 const mockInsert = vi.fn();
 const mockUpdate = vi.fn();
 const mockOrder = vi.fn();
@@ -60,10 +63,21 @@ beforeEach(() => {
     eq: mockEq,
     single: mockSingle,
     order: mockOrder,
+    is: mockIs,
+  }));
+
+  // Finder chain: .is("deleted_at", null).order(...).limit(1).maybeSingle()
+  mockIs.mockImplementation(() => ({
+    order: mockOrder,
   }));
 
   mockOrder.mockImplementation(() => ({
     single: mockSingle,
+    limit: mockLimit,
+  }));
+
+  mockLimit.mockImplementation(() => ({
+    maybeSingle: mockMaybeSingle,
   }));
 });
 
@@ -72,8 +86,8 @@ afterEach(() => {
 });
 
 describe("findCandidateByEmail", () => {
-  it("returns the candidate id when a match exists", async () => {
-    mockSingle.mockResolvedValue(chainReturn({ id: "candidate-1" }));
+  it("returns the earliest live candidate id when a match exists", async () => {
+    mockMaybeSingle.mockResolvedValue(chainReturn({ id: "candidate-1" }));
 
     const result = await findCandidateByEmail("alice@example.com");
 
@@ -81,29 +95,43 @@ describe("findCandidateByEmail", () => {
     expect(mockFrom).toHaveBeenCalledWith("candidates");
     expect(mockSelect).toHaveBeenCalledWith("id");
     expect(mockEq).toHaveBeenCalledWith("email", "alice@example.com");
+    // Merged-away (soft-deleted) records must not be matched.
+    expect(mockIs).toHaveBeenCalledWith("deleted_at", null);
   });
 
   it("returns null when no match is found", async () => {
-    mockSingle.mockResolvedValue(chainError("No rows found"));
+    mockMaybeSingle.mockResolvedValue(chainReturn(null));
 
     const result = await findCandidateByEmail("nobody@example.com");
 
     expect(result).toBeNull();
   });
+
+  it("still returns a match when the email already has duplicates (no single() throw)", async () => {
+    // Pre-existing duplicate: limit(1)+maybeSingle yields the first row rather
+    // than erroring — so later applicants keep getting flagged.
+    mockMaybeSingle.mockResolvedValue(chainReturn({ id: "candidate-oldest" }));
+
+    const result = await findCandidateByEmail("dupe@example.com");
+
+    expect(result).toEqual({ id: "candidate-oldest" });
+    expect(mockLimit).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("findCandidateByPhone", () => {
-  it("returns the candidate id when a match exists", async () => {
-    mockSingle.mockResolvedValue(chainReturn({ id: "candidate-2" }));
+  it("returns the earliest live candidate id when a match exists", async () => {
+    mockMaybeSingle.mockResolvedValue(chainReturn({ id: "candidate-2" }));
 
     const result = await findCandidateByPhone("+1-555-1234");
 
     expect(result).toEqual({ id: "candidate-2" });
     expect(mockEq).toHaveBeenCalledWith("phone", "+1-555-1234");
+    expect(mockIs).toHaveBeenCalledWith("deleted_at", null);
   });
 
   it("returns null when no match is found", async () => {
-    mockSingle.mockResolvedValue(chainError("No rows found"));
+    mockMaybeSingle.mockResolvedValue(chainReturn(null));
 
     const result = await findCandidateByPhone("+1-000-0000");
 

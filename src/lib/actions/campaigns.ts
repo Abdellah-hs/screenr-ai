@@ -10,6 +10,7 @@ import {
   campaignIdsSchema,
 } from "@/lib/validations";
 import { requireUserId } from "@/lib/auth/guards";
+import { scoreUnscoredCampaignCandidates } from "./candidates";
 
 import {
   fetchAllCampaigns,
@@ -58,7 +59,7 @@ export async function createCampaign(formData: FormData) {
   const {
     title, description, department, positions, status, deadline, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
-    interview_persona: interviewPersona, application_email: applicationEmail,
+    interview_persona: interviewPersona,
     interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
     interview_booking_horizon_days: interviewBookingHorizonDays,
     rubrics, slaTimers, reviewers, availabilityRules
@@ -76,7 +77,6 @@ export async function createCampaign(formData: FormData) {
       automation_mode: automationMode,
       screening_threshold: screeningThreshold,
       interview_persona: interviewPersona,
-      application_email: applicationEmail,
       interview_slot_minutes: interviewSlotMinutes,
       interview_timezone: interviewTimezone,
       interview_booking_horizon_days: interviewBookingHorizonDays,
@@ -179,7 +179,7 @@ export async function updateCampaign(id: string, formData: FormData) {
   const {
     title, description, department, positions, status, deadline, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
-    interview_persona: interviewPersona, application_email: applicationEmail,
+    interview_persona: interviewPersona,
     interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
     interview_booking_horizon_days: interviewBookingHorizonDays,
     rubrics, slaTimers, availabilityRules
@@ -198,7 +198,6 @@ export async function updateCampaign(id: string, formData: FormData) {
       automation_mode: automationMode,
       screening_threshold: screeningThreshold,
       interview_persona: interviewPersona,
-      application_email: applicationEmail,
       interview_slot_minutes: interviewSlotMinutes,
       interview_timezone: interviewTimezone,
       interview_booking_horizon_days: interviewBookingHorizonDays,
@@ -208,6 +207,16 @@ export async function updateCampaign(id: string, formData: FormData) {
     availabilityRules,
     userId
   );
+
+  // Criteria/rubric may have just been added or changed — score any candidate
+  // that doesn't have a resume score yet (the automatic replacement for the old
+  // manual "Score Resume" button). Best-effort: a scoring failure must never
+  // block the campaign save.
+  try {
+    await scoreUnscoredCampaignCandidates(id, userId);
+  } catch (err) {
+    console.error("Post-save candidate scoring failed (non-blocking):", err);
+  }
 
   redirect(`/campaigns/${id}`);
 }

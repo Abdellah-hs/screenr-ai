@@ -1,20 +1,13 @@
 import { google, type gmail_v1, type Auth } from "googleapis";
 
-const SUPPORTED_RESUME_MIME_TYPES = new Set([
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-export function isSupportedResumeMimeType(mimeType: string): boolean {
-  return SUPPORTED_RESUME_MIME_TYPES.has(mimeType);
-}
-
 // ─── OAuth ───────────────────────────────────────────────────────────────────
 // The Google OAuth *app* identity (client id/secret) lives in env — it is the
 // same for every recruiter. What differs per recruiter is the refresh token,
 // which is obtained via the consent flow and persisted in `gmail_connections`.
 
-// gmail.modify covers reading messages AND marking them read (markGmailMessageAsRead).
+// gmail.modify is a superset of gmail.send, which is what outbound candidate
+// email (screening/interview links) needs. Kept as-is so existing connections
+// don't have to re-consent.
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 
 function getOAuthCredentials(): { clientId: string; clientSecret: string } {
@@ -139,59 +132,3 @@ export function createGmailClient(refreshToken: string): gmail_v1.Gmail {
   return google.gmail({ version: "v1", auth: oauth2Client });
 }
 
-// ─── Inbox operations ────────────────────────────────────────────────────────
-// Each takes a pre-built `gmail` client so the connected account is resolved
-// once per sync (in the action layer) and threaded through.
-
-export async function fetchUnreadGmailResumes(
-  gmail: gmail_v1.Gmail,
-  maxResults: number = 5,
-  toAddress?: string,
-) {
-  // Scope to the campaign's application alias when provided so one campaign's
-  // sync only pulls its own applicants out of the shared inbox. Gmail's `to:`
-  // matches plus-aliases (careers+eng@…) delivered to the connected mailbox.
-  const base = "is:unread has:attachment (filename:pdf OR filename:docx)";
-  const q = toAddress ? `to:${toAddress} ${base}` : base;
-
-  const res = await gmail.users.messages.list({
-    userId: "me",
-    q,
-    maxResults,
-  });
-
-  return res.data.messages || [];
-}
-
-export async function getGmailMessage(gmail: gmail_v1.Gmail, messageId: string) {
-  const msgData = await gmail.users.messages.get({
-    userId: "me",
-    id: messageId,
-  });
-  return msgData.data;
-}
-
-export async function getGmailAttachmentBuffer(
-  gmail: gmail_v1.Gmail,
-  messageId: string,
-  attachmentId: string,
-) {
-  const attachment = await gmail.users.messages.attachments.get({
-    userId: "me",
-    messageId,
-    id: attachmentId,
-  });
-
-  if (!attachment.data.data) return null;
-  return Buffer.from(attachment.data.data, "base64");
-}
-
-export async function markGmailMessageAsRead(gmail: gmail_v1.Gmail, messageId: string) {
-  await gmail.users.messages.modify({
-    userId: "me",
-    id: messageId,
-    requestBody: {
-      removeLabelIds: ["UNREAD"],
-    },
-  });
-}
