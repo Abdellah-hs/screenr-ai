@@ -9,9 +9,11 @@ import { DottedSurface } from "@/components/ui/dotted-surface";
 export default function BrandPanel() {
   return (
     <div className="hidden lg:flex p-3">
-      <div className="relative flex-1 rounded-3xl bg-gradient-to-br from-[#2B3A78] to-[#161C3D] flex flex-col justify-between p-10 xl:p-14 overflow-hidden">
+      <div className="relative flex-1 rounded-3xl bg-gradient-to-br from-[#2B3A78] to-[#161C3D] flex flex-col p-10 xl:p-14 overflow-hidden">
         <DottedSurface dots="light" />
-        <MatiousLogo className="relative z-10 text-xl text-white opacity-90" />
+        <div className="relative z-10 flex flex-1 items-center justify-center">
+          <MatiousLogo className="text-5xl xl:text-6xl text-white" />
+        </div>
         <div className="relative z-10">
           <p className="text-2xl xl:text-3xl font-semibold leading-snug text-white">
             &ldquo;We believe in hiring smart, diverse, and interesting people — and giving
