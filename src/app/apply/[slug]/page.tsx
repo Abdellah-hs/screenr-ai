@@ -23,7 +23,7 @@ function InfoCard({
           <MatiousLogo className="text-xl" />
         </header>
         <div className="flex flex-1 items-center justify-center py-8">
-          <div className="w-full max-w-sm">
+          <div className="w-full max-w-lg">
             <div className={`w-12 h-12 rounded-full ${iconWrap} flex items-center justify-center mb-4`}>
               <svg className={`w-6 h-6 ${iconColor}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path

@@ -116,7 +116,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
         </header>
 
         <div className="flex flex-1 items-center justify-center py-8">
-          <div className="w-full max-w-sm">
+          <div className="w-full max-w-lg">
             {submitted ? (
               <div className="text-center">
                 <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center mb-4 mx-auto">
@@ -135,8 +135,8 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
               <>
                 {step === 1 ? (
                   <>
-                    <h1 className="text-2xl font-semibold text-[#111827]">Apply for this role</h1>
-                    <p className="mt-1.5 text-sm font-semibold text-[#0369A1]">{campaignTitle}</p>
+                    <h1 className="text-2xl xl:text-3xl font-semibold text-[#111827]">Apply for this role</h1>
+                    <p className="mt-1.5 text-sm xl:text-base font-semibold text-[#0369A1]">{campaignTitle}</p>
                   </>
                 ) : (
                   <>
@@ -154,7 +154,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                       </svg>
                       Back
                     </button>
-                    <h1 className="text-2xl font-semibold text-[#111827]">Almost done</h1>
+                    <h1 className="text-2xl xl:text-3xl font-semibold text-[#111827]">Almost done</h1>
                     <p className="mt-1.5 text-sm text-[#6B7280]">
                       Attach your CV to finish your application to{" "}
                       <span className="font-semibold text-[#0369A1]">{campaignTitle}</span>.
