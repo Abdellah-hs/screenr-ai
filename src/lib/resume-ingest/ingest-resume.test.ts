@@ -187,6 +187,29 @@ describe("ingestResumeDocument", () => {
     );
   });
 
+  it("prefers applicant profile links but falls back to the CV's when left blank", async () => {
+    mockExtractData.mockResolvedValue(
+      parsedCv({ linkedin_url: "https://www.linkedin.com/in/cv-alice", portfolio_url: "https://cv-alice.dev" }),
+    );
+    const applicant = {
+      first_name: "Alicia",
+      last_name: "Smythe",
+      email: "alicia@form.com",
+      linkedin_url: "https://www.linkedin.com/in/form-alicia",
+      portfolio_url: null,
+    };
+
+    await ingestResumeDocument(args({ applicant }));
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkedin_url: "https://www.linkedin.com/in/form-alicia",
+        portfolio_url: "https://cv-alice.dev",
+      }),
+      DB,
+    );
+  });
+
   it("ingests a CV with no extractable email when the applicant supplied one", async () => {
     mockExtractData.mockResolvedValue(parsedCv({ email: null }));
     const applicant = { first_name: "Alicia", last_name: "Smythe", email: "alicia@form.com" };

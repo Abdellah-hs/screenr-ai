@@ -46,6 +46,9 @@ export interface ApplicantIdentity {
   first_name: string;
   last_name: string;
   email: string;
+  /** Normalized profile links; null/absent means the candidate left them blank. */
+  linkedin_url?: string | null;
+  portfolio_url?: string | null;
 }
 
 export interface IngestResumeArgs {
@@ -97,11 +100,19 @@ export async function ingestResumeDocument(args: IngestResumeArgs): Promise<Inge
     return { outcome: "rejected", reason: "no_email" };
   }
 
-  // Candidate/application rows carry the merged identity (self-declared wins);
-  // the AI audit below keeps the raw extraction so the evidence stays untouched.
+  // Candidate/application rows carry the merged identity (self-declared wins,
+  // but a blank optional link falls back to whatever the CV carries); the AI
+  // audit below keeps the raw extraction so the evidence stays untouched.
   const structured: ParsedResumeData & { email: string } = {
     ...extracted,
-    ...(applicant ? { first_name: applicant.first_name, last_name: applicant.last_name } : {}),
+    ...(applicant
+      ? {
+          first_name: applicant.first_name,
+          last_name: applicant.last_name,
+          linkedin_url: applicant.linkedin_url ?? extracted.linkedin_url,
+          portfolio_url: applicant.portfolio_url ?? extracted.portfolio_url,
+        }
+      : {}),
     email,
   };
 

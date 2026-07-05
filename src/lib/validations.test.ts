@@ -315,7 +315,7 @@ describe('applyApplicantSchema', () => {
       email: ' Alice@Example.COM ',
     });
 
-    expect(result.success && result.data).toEqual(valid);
+    expect(result.success && result.data).toEqual({ ...valid, linkedin: null, website: null });
   });
 
   it('rejects an empty first name', () => {
@@ -335,6 +335,47 @@ describe('applyApplicantSchema', () => {
 
   it('rejects an over-long name', () => {
     const result = applyApplicantSchema.safeParse({ ...valid, first_name: 'a'.repeat(101) });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('applyApplicantSchema profile links', () => {
+  const base = { first_name: 'Alice', last_name: 'Smith', email: 'alice@example.com' };
+
+  it('normalizes a bare LinkedIn handle to a full profile URL', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, linkedin: 'in/alice-smith' });
+    expect(result.success && result.data.linkedin).toBe('https://www.linkedin.com/in/alice-smith');
+  });
+
+  it('accepts a pasted full LinkedIn URL without doubling the host', () => {
+    const result = applyApplicantSchema.safeParse({
+      ...base,
+      linkedin: 'https://www.linkedin.com/in/alice-smith',
+    });
+    expect(result.success && result.data.linkedin).toBe('https://www.linkedin.com/in/alice-smith');
+  });
+
+  it('normalizes a personal site to https', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, website: 'alice.dev' });
+    expect(result.success && result.data.website).toBe('https://alice.dev');
+  });
+
+  it('keeps an already-https personal site intact', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, website: 'https://alice.dev' });
+    expect(result.success && result.data.website).toBe('https://alice.dev');
+  });
+
+  it('turns blank or omitted links into null', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, linkedin: '  ' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.linkedin).toBeNull();
+      expect(result.data.website).toBeNull();
+    }
+  });
+
+  it('rejects a website that is not a plausible address', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, website: 'not a website' });
     expect(result.success).toBe(false);
   });
 });

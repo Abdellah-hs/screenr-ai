@@ -276,9 +276,17 @@ export const bookInterviewSlotSchema = z.object({
 
 // ─── Public Apply Form ──────────────────────────────────────────────────────
 
+/** Drop a leading protocol/www so prefix-style inputs normalize predictably. */
+function stripProtocol(value: string): string {
+  return value.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+}
+
 // Identity the candidate types on the public apply page. Names are trimmed;
 // the email is normalized to lowercase before the format check so candidate
-// dedup (which matches on email) stays case-insensitive.
+// dedup (which matches on email) stays case-insensitive. The profile links are
+// optional prefix inputs (the UI shows "linkedin.com/" / "https://"), so users
+// paste anything from a bare handle to a full URL — both normalize to a full
+// https URL, and blank normalizes to null.
 export const applyApplicantSchema = z.object({
   first_name: z
     .string()
@@ -296,6 +304,28 @@ export const applyApplicantSchema = z.object({
     .toLowerCase()
     .max(254, "Email address is too long")
     .pipe(z.email("Please enter a valid email address")),
+  linkedin: z
+    .string()
+    .trim()
+    .max(200, "LinkedIn profile is too long")
+    .default("")
+    .transform((v): string | null => {
+      const path = stripProtocol(v).replace(/^linkedin\.com\//i, "").replace(/^\/+/, "");
+      return path ? `https://www.linkedin.com/${path}` : null;
+    }),
+  website: z
+    .string()
+    .trim()
+    .max(200, "Website address is too long")
+    .default("")
+    .refine(
+      (v) => v === "" || /^\S+\.\S+$/.test(stripProtocol(v)),
+      "Please enter a valid website address",
+    )
+    .transform((v): string | null => {
+      const rest = stripProtocol(v);
+      return rest ? `https://${rest}` : null;
+    }),
 });
 
 // ─── HITL Screening Review ──────────────────────────────────────────────────

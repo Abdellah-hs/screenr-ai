@@ -121,13 +121,21 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
     first_name: String(formData.get("first_name") ?? ""),
     last_name: String(formData.get("last_name") ?? ""),
     email: String(formData.get("email") ?? ""),
+    linkedin: String(formData.get("linkedin") ?? ""),
+    website: String(formData.get("website") ?? ""),
   });
   if (!parsedApplicant.success) {
     throw new Error(
       parsedApplicant.error.issues[0]?.message ?? "Please check your details and try again.",
     );
   }
-  const applicant: ApplicantIdentity = parsedApplicant.data;
+  const applicant: ApplicantIdentity = {
+    first_name: parsedApplicant.data.first_name,
+    last_name: parsedApplicant.data.last_name,
+    email: parsedApplicant.data.email,
+    linkedin_url: parsedApplicant.data.linkedin,
+    portfolio_url: parsedApplicant.data.website,
+  };
 
   // Rate-limit by IP before reading the file body or touching the database.
   const ip = await getClientIp();

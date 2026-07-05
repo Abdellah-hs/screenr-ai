@@ -126,7 +126,30 @@ describe("submitApplication", () => {
 
     expect(mockIngest).toHaveBeenCalledWith(
       expect.objectContaining({
-        applicant: { first_name: "Alice", last_name: "Smith", email: "alice@example.com" },
+        applicant: {
+          first_name: "Alice",
+          last_name: "Smith",
+          email: "alice@example.com",
+          linkedin_url: null,
+          portfolio_url: null,
+        },
+      }),
+    );
+  });
+
+  it("normalizes optional profile links before handing them to the pipeline", async () => {
+    const data = form();
+    data.set("linkedin", "in/alice-smith");
+    data.set("website", "alice.dev");
+
+    await submitApplication(data);
+
+    expect(mockIngest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicant: expect.objectContaining({
+          linkedin_url: "https://www.linkedin.com/in/alice-smith",
+          portfolio_url: "https://alice.dev",
+        }),
       }),
     );
   });
