@@ -6,3 +6,4 @@ export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, 
 export { Badge, type BadgeProps } from "./badge";
 export { Modal, ModalHeader, ModalFooter, type ModalProps } from "./modal";
 export { AnchoredMenu } from "./anchored-menu";
+export { DottedSurface } from "./dotted-surface";

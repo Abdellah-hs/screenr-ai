@@ -1,4 +1,5 @@
 import MatiousLogo from "@/components/matious-logo";
+import { DottedSurface } from "@/components/ui/dotted-surface";
 
 /**
  * Brand panel filling the right half of the apply pages on desktop (hidden on
@@ -8,9 +9,10 @@ import MatiousLogo from "@/components/matious-logo";
 export default function BrandPanel() {
   return (
     <div className="hidden lg:flex p-3">
-      <div className="flex-1 rounded-3xl bg-gradient-to-br from-[#2B3A78] to-[#161C3D] flex flex-col justify-between p-10 xl:p-14 overflow-hidden">
-        <MatiousLogo className="text-xl text-white opacity-90" />
-        <div>
+      <div className="relative flex-1 rounded-3xl bg-gradient-to-br from-[#2B3A78] to-[#161C3D] flex flex-col justify-between p-10 xl:p-14 overflow-hidden">
+        <DottedSurface dots="light" />
+        <MatiousLogo className="relative z-10 text-xl text-white opacity-90" />
+        <div className="relative z-10">
           <p className="text-2xl xl:text-3xl font-semibold leading-snug text-white">
             &ldquo;We believe in hiring smart, diverse, and interesting people — and giving
             them the space to do the best work of their careers.&rdquo;
