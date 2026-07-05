@@ -168,7 +168,6 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                   name="first_name"
                   type="text"
                   autoComplete="given-name"
-                  placeholder="Alex"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   disabled={submitting}
@@ -184,7 +183,6 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                   name="last_name"
                   type="text"
                   autoComplete="family-name"
-                  placeholder="Morgan"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   disabled={submitting}
