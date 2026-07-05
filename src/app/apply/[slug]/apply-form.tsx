@@ -155,19 +155,19 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
 
           <form
             onSubmit={handleSubmit}
-            noValidate
             className="bg-white rounded-2xl border border-[#E5E7EB] shadow-sm p-5 sm:p-8 space-y-5"
           >
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor="apply-first-name" className="block text-sm font-medium text-[#111827] mb-1.5">
-                  First name
+                  First name <span className="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <input
                   id="apply-first-name"
                   name="first_name"
                   type="text"
                   autoComplete="given-name"
+                  required
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   disabled={submitting}
@@ -176,13 +176,14 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
               </div>
               <div>
                 <label htmlFor="apply-last-name" className="block text-sm font-medium text-[#111827] mb-1.5">
-                  Last name
+                  Last name <span className="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <input
                   id="apply-last-name"
                   name="last_name"
                   type="text"
                   autoComplete="family-name"
+                  required
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   disabled={submitting}
@@ -193,7 +194,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
 
             <div>
               <label htmlFor="apply-email" className="block text-sm font-medium text-[#111827] mb-1.5">
-                Email address
+                Email address <span className="text-red-500" aria-hidden="true">*</span>
               </label>
               <input
                 id="apply-email"
@@ -201,6 +202,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                 type="email"
                 autoComplete="email"
                 inputMode="email"
+                required
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -213,7 +215,9 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
             </div>
 
             <div>
-              <span className="block text-sm font-medium text-[#111827] mb-1.5">CV / Resume</span>
+              <span className="block text-sm font-medium text-[#111827] mb-1.5">
+                CV / Resume <span className="text-red-500" aria-hidden="true">*</span>
+              </span>
               <input
                 ref={inputRef}
                 type="file"
