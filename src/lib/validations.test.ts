@@ -7,6 +7,7 @@ import {
   parseCampaignFormData,
   applicationStateSchema,
   stageChangeRationaleSchema,
+  applyApplicantSchema,
 } from './validations';
 
 describe('uuidSchema', () => {
@@ -292,5 +293,48 @@ describe('stageChangeRationaleSchema', () => {
 
   it('rejects a whitespace-only string', () => {
     expect(stageChangeRationaleSchema.safeParse('   ').success).toBe(false);
+  });
+});
+
+describe('applyApplicantSchema', () => {
+  const valid = {
+    first_name: 'Alice',
+    last_name: 'Smith',
+    email: 'alice@example.com',
+  };
+
+  it('accepts a complete applicant identity', () => {
+    const result = applyApplicantSchema.safeParse(valid);
+    expect(result.success).toBe(true);
+  });
+
+  it('trims names and lowercases the email', () => {
+    const result = applyApplicantSchema.safeParse({
+      first_name: '  Alice ',
+      last_name: ' Smith ',
+      email: ' Alice@Example.COM ',
+    });
+
+    expect(result.success && result.data).toEqual(valid);
+  });
+
+  it('rejects an empty first name', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, first_name: '  ' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty last name', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, last_name: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a malformed email address', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, email: 'not-an-email' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an over-long name', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, first_name: 'a'.repeat(101) });
+    expect(result.success).toBe(false);
   });
 });

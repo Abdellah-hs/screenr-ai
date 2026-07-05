@@ -2,14 +2,25 @@
 
 import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { fetchCampaignBySlug } from "@/lib/data/campaigns";
+import { fetchGmailConnection } from "@/lib/data/integrations";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import { isSupportedResumeMimeType } from "@/lib/resume-ingest/mime";
 import {
   ingestResumeDocument,
+  type ApplicantIdentity,
   type IngestRejectionReason,
 } from "@/lib/resume-ingest/ingest-resume";
+import { applyApplicantSchema } from "@/lib/validations";
+import { createGmailClient } from "@/lib/services/gmail";
+import { sendEmail } from "@/lib/services/email";
+import { buildApplicationReceivedEmail } from "@/lib/services/email-templates/application-received";
+
+// Candidate-facing brand on the apply flow (confirmation email signature and
+// From display name). The ATS is internal to MatiousCorp, so this is fixed.
+const COMPANY_NAME = "Matious";
 
 // Resumes are small; 10 MB is generous and keeps an abusive upload from buffering
 // a huge file into memory before we even look at it.
@@ -105,6 +116,19 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
     throw new Error("Please attach your CV before submitting.");
   }
 
+  // Self-declared identity — validated here, authoritative over CV extraction.
+  const parsedApplicant = applyApplicantSchema.safeParse({
+    first_name: String(formData.get("first_name") ?? ""),
+    last_name: String(formData.get("last_name") ?? ""),
+    email: String(formData.get("email") ?? ""),
+  });
+  if (!parsedApplicant.success) {
+    throw new Error(
+      parsedApplicant.error.issues[0]?.message ?? "Please check your details and try again.",
+    );
+  }
+  const applicant: ApplicantIdentity = parsedApplicant.data;
+
   // Rate-limit by IP before reading the file body or touching the database.
   const ip = await getClientIp();
   checkRateLimit(ip, APPLY_RATE_LIMIT);
@@ -131,6 +155,7 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
     filename: safeFilename(file.name),
     mimeType: file.type,
     buffer,
+    applicant,
     source: "apply_form",
   });
 
@@ -138,5 +163,51 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
     throw new Error(rejectionMessage(result.reason));
   }
 
+  await sendConfirmationEmail({
+    db,
+    ownerUserId: campaign.user_id,
+    applicant,
+    campaignTitle: campaign.title,
+  });
+
   return { ok: true };
+}
+
+/**
+ * Best-effort application-received confirmation, sent from the campaign
+ * owner's connected Gmail (fetched on the admin client — there is no session
+ * here). A missing connection or a send failure must never undo a successful
+ * ingest, so every failure path logs and returns instead of throwing.
+ */
+async function sendConfirmationEmail(args: {
+  db: SupabaseDb;
+  ownerUserId: string;
+  applicant: ApplicantIdentity;
+  campaignTitle: string;
+}): Promise<void> {
+  try {
+    const connection = await fetchGmailConnection(args.ownerUserId, args.db);
+    if (!connection) {
+      console.warn(
+        "submitApplication: campaign owner has no Gmail connected; skipping confirmation email",
+      );
+      return;
+    }
+
+    const gmail = createGmailClient(connection.refresh_token);
+    const { subject, html, text } = buildApplicationReceivedEmail({
+      candidateName: `${args.applicant.first_name} ${args.applicant.last_name}`,
+      campaignTitle: args.campaignTitle,
+      companyName: COMPANY_NAME,
+    });
+    await sendEmail(gmail, {
+      to: args.applicant.email,
+      subject,
+      html,
+      text,
+      fromName: `${COMPANY_NAME} Recruiting`,
+    });
+  } catch (err) {
+    console.error("submitApplication: confirmation email failed (non-blocking):", err);
+  }
 }

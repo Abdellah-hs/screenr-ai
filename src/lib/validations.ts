@@ -274,6 +274,30 @@ export const bookInterviewSlotSchema = z.object({
     .refine((v) => !Number.isNaN(Date.parse(v)), "Invalid slot time"),
 });
 
+// ─── Public Apply Form ──────────────────────────────────────────────────────
+
+// Identity the candidate types on the public apply page. Names are trimmed;
+// the email is normalized to lowercase before the format check so candidate
+// dedup (which matches on email) stays case-insensitive.
+export const applyApplicantSchema = z.object({
+  first_name: z
+    .string()
+    .trim()
+    .min(1, "Please enter your first name")
+    .max(100, "First name is too long"),
+  last_name: z
+    .string()
+    .trim()
+    .min(1, "Please enter your last name")
+    .max(100, "Last name is too long"),
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254, "Email address is too long")
+    .pipe(z.email("Please enter a valid email address")),
+});
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 
 // Recruiter approve/reject decision on a screening_review_pending application.
