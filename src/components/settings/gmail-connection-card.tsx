@@ -45,12 +45,13 @@ export function GmailConnectionCard({ status, notice }: GmailConnectionCardProps
     <div className="space-y-4">
       {banner === "connected" && (
         <Banner tone="success" onDismiss={dismissBanner}>
-          Gmail connected. New resumes from this inbox will be picked up on sync.
+          Google account connected. Candidate emails send from this inbox, and interview
+          slots can respect your calendar availability.
         </Banner>
       )}
       {banner === "error" && (
         <Banner tone="error" onDismiss={dismissBanner}>
-          We couldn&apos;t connect that Gmail account. Please try again.
+          We couldn&apos;t connect that Google account. Please try again.
         </Banner>
       )}
 
@@ -63,13 +64,24 @@ export function GmailConnectionCard({ status, notice }: GmailConnectionCardProps
             </svg>
           </span>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-base font-semibold text-[#111827]">Gmail</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold text-[#111827]">Google</h3>
               {status.connected ? (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#DCFCE7] px-2.5 py-0.5 text-xs font-medium text-[#15803D]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" aria-hidden="true" />
-                  Connected
-                </span>
+                <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#DCFCE7] px-2.5 py-0.5 text-xs font-medium text-[#15803D]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E]" aria-hidden="true" />
+                    Connected
+                  </span>
+                  {status.calendarEnabled ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#DCFCE7] px-2.5 py-0.5 text-xs font-medium text-[#15803D]">
+                      Calendar on
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-xs font-medium text-[#B45309]">
+                      Calendar off
+                    </span>
+                  )}
+                </>
               ) : status.needsReconnect ? (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-xs font-medium text-[#B45309]">
                   <span className="h-1.5 w-1.5 rounded-full bg-[#F59E0B]" aria-hidden="true" />
@@ -84,19 +96,35 @@ export function GmailConnectionCard({ status, notice }: GmailConnectionCardProps
             <p className="mt-1 text-sm text-[#6B7280]">
               {status.connected ? (
                 <>
-                  Receiving resumes at{" "}
+                  Sending candidate emails from{" "}
                   <span className="font-medium text-[#374151]">{status.email}</span>
                 </>
               ) : status.needsReconnect ? (
                 <>
                   We can&apos;t reach{" "}
                   <span className="font-medium text-[#374151]">{status.email}</span> — the
-                  connection was revoked or expired. Reconnect to resume resume sync.
+                  connection was revoked or expired. Reconnect to resume candidate emails.
                 </>
               ) : (
-                "Connect the inbox where candidates send their CVs so resumes sync automatically."
+                "Connect your Google account to send candidate emails from your inbox and offer interview slots from your calendar."
               )}
             </p>
+            {status.connected && !status.calendarEnabled && (
+              <p className="mt-2 flex items-start gap-2 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2 text-sm text-[#92400E]">
+                <svg className="mt-0.5 h-4 w-4 shrink-0 text-[#D97706]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect width="18" height="18" x="3" y="4" rx="2" />
+                  <path d="M16 2v4M8 2v4M3 10h18" />
+                </svg>
+                <span>
+                  Calendar access isn&apos;t granted yet, so candidates can&apos;t be limited to
+                  times you&apos;re actually free.{" "}
+                  <a href={CONNECT_URL} className="font-semibold underline hover:text-[#78350F]">
+                    Reconnect to enable it
+                  </a>
+                  .
+                </span>
+              </p>
+            )}
           </div>
         </div>
 

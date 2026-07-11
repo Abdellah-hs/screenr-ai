@@ -71,19 +71,31 @@ export default async function SchedulePage({
             Choose a time for your <strong>{ctx.campaign_title}</strong> interview.
           </p>
         </div>
-        {ctx.timezone ? (
+        {ctx.calendar_unavailable ? (
+          // Strict calendar mode: the interviewer's calendar couldn't be
+          // consulted, so no times are offered. Candidate-safe wording only.
+          <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
+            <p className="text-sm text-[#6B7280]">
+              Scheduling is temporarily unavailable. Please try again a bit later —
+              or contact the hiring team if this keeps happening.
+            </p>
+          </div>
+        ) : ctx.no_hours ? (
+          // The interviewer hasn't published "Interview hours" blocks yet.
+          <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
+            <p className="text-sm text-[#6B7280]">
+              Interview times haven&apos;t been opened up yet. Please check back soon —
+              your link stays valid.
+            </p>
+          </div>
+        ) : (
           <InterviewScheduler
             token={token}
             campaignTitle={ctx.campaign_title}
-            timezone={ctx.timezone}
+            timezone={ctx.timezone ?? "UTC"}
             slots={ctx.slots}
+            recommendedIso={ctx.recommended_iso}
           />
-        ) : (
-          <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
-            <p className="text-sm text-[#6B7280]">
-              Interview scheduling isn&apos;t available yet. The hiring team will be in touch.
-            </p>
-          </div>
         )}
       </div>
     </div>

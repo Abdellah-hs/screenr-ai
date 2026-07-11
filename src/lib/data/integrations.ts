@@ -10,6 +10,12 @@ export type GmailConnectionStatus = {
   connected: boolean;
   /** A row exists but Google rejected the token — the recruiter must reconnect. */
   needsReconnect: boolean;
+  /**
+   * The stored grant covers the calendar scopes (free/busy + events). False
+   * for connections made before calendar-aware scheduling — those recruiters
+   * reconnect once to upgrade.
+   */
+  calendarEnabled: boolean;
   email: string | null;
   connectedAt: string | null;
 };

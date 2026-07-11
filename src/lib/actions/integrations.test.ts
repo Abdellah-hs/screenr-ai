@@ -25,16 +25,29 @@ vi.mock("@/lib/data/integrations", () => ({
   deleteGmailConnection: mockDeleteGmailConnection,
 }));
 
-vi.mock("@/lib/services/gmail", () => ({
-  revokeRefreshToken: mockRevokeRefreshToken,
-  verifyRefreshToken: mockVerifyRefreshToken,
-}));
+// Only the network-touching functions are mocked; `hasCalendarScopes` is pure
+// and stays real so the calendarEnabled derivation is actually exercised.
+vi.mock("@/lib/services/gmail", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/services/gmail")>();
+  return {
+    ...actual,
+    revokeRefreshToken: mockRevokeRefreshToken,
+    verifyRefreshToken: mockVerifyRefreshToken,
+  };
+});
 
 vi.mock("next/cache", () => ({
   revalidatePath: mockRevalidatePath,
 }));
 
 import { getGmailConnectionStatus, disconnectGmail } from "./integrations";
+import {
+  CALENDAR_EVENTS_SCOPE,
+  CALENDAR_FREEBUSY_SCOPE,
+} from "@/lib/services/gmail";
+
+const GMAIL_ONLY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+const FULL_SCOPE = `${GMAIL_ONLY_SCOPE} ${CALENDAR_FREEBUSY_SCOPE} ${CALENDAR_EVENTS_SCOPE}`;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -55,6 +68,7 @@ describe("getGmailConnectionStatus", () => {
     await expect(getGmailConnectionStatus()).resolves.toEqual({
       connected: false,
       needsReconnect: false,
+      calendarEnabled: false,
       email: null,
       connectedAt: null,
     });
@@ -66,16 +80,47 @@ describe("getGmailConnectionStatus", () => {
       refresh_token: "rt-1",
       email: "jobs@acme.com",
       connected_at: "2026-06-06T00:00:00Z",
+      scope: GMAIL_ONLY_SCOPE,
     });
     mockVerifyRefreshToken.mockResolvedValue(true);
 
     await expect(getGmailConnectionStatus()).resolves.toEqual({
       connected: true,
       needsReconnect: false,
+      calendarEnabled: false,
       email: "jobs@acme.com",
       connectedAt: "2026-06-06T00:00:00Z",
     });
     expect(mockVerifyRefreshToken).toHaveBeenCalledWith("rt-1");
+  });
+
+  it("reports calendarEnabled when the grant covers the calendar scopes", async () => {
+    mockFetchGmailConnection.mockResolvedValue({
+      refresh_token: "rt-1",
+      email: "jobs@acme.com",
+      connected_at: "2026-06-06T00:00:00Z",
+      scope: FULL_SCOPE,
+    });
+    mockVerifyRefreshToken.mockResolvedValue(true);
+
+    const status = await getGmailConnectionStatus();
+
+    expect(status.connected).toBe(true);
+    expect(status.calendarEnabled).toBe(true);
+  });
+
+  it("never reports calendarEnabled on a dead connection, even with calendar scopes stored", async () => {
+    mockFetchGmailConnection.mockResolvedValue({
+      refresh_token: "rt-dead",
+      email: "jobs@acme.com",
+      connected_at: "2026-06-06T00:00:00Z",
+      scope: FULL_SCOPE,
+    });
+    mockVerifyRefreshToken.mockResolvedValue(false);
+
+    const status = await getGmailConnectionStatus();
+
+    expect(status.calendarEnabled).toBe(false);
   });
 
   it("reports needsReconnect when a stored token is rejected by Google", async () => {
@@ -83,12 +128,14 @@ describe("getGmailConnectionStatus", () => {
       refresh_token: "rt-dead",
       email: "jobs@acme.com",
       connected_at: "2026-06-06T00:00:00Z",
+      scope: GMAIL_ONLY_SCOPE,
     });
     mockVerifyRefreshToken.mockResolvedValue(false);
 
     await expect(getGmailConnectionStatus()).resolves.toEqual({
       connected: false,
       needsReconnect: true,
+      calendarEnabled: false,
       email: "jobs@acme.com",
       connectedAt: "2026-06-06T00:00:00Z",
     });

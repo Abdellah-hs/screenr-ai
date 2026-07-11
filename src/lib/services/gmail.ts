@@ -6,9 +6,29 @@ import { google, type gmail_v1, type Auth } from "googleapis";
 // which is obtained via the consent flow and persisted in `gmail_connections`.
 
 // gmail.modify is a superset of gmail.send, which is what outbound candidate
-// email (screening/interview links) needs. Kept as-is so existing connections
-// don't have to re-consent.
+// email (screening/interview links) needs.
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+
+
+export const CALENDAR_FREEBUSY_SCOPE =
+  "https://www.googleapis.com/auth/calendar.freebusy";
+export const CALENDAR_EVENTS_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events";
+
+
+const CONSENT_SCOPES = [GMAIL_SCOPE, CALENDAR_FREEBUSY_SCOPE, CALENDAR_EVENTS_SCOPE];
+
+/**
+ * Whether a stored grant (the space-delimited `scope` string Google returned
+ * at consent) covers calendar-aware scheduling. Exact-token match — substring
+ * checks would accept e.g. `calendar.events.readonly` for `calendar.events`.
+ */
+
+export function hasCalendarScopes(scope: string | null): boolean {
+  if (!scope) return false;
+  const granted = new Set(scope.split(/\s+/));
+  return granted.has(CALENDAR_FREEBUSY_SCOPE) && granted.has(CALENDAR_EVENTS_SCOPE);
+}
 
 function getOAuthCredentials(): { clientId: string; clientSecret: string } {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -34,12 +54,14 @@ export function getGoogleOAuthClient(redirectUri: string): Auth.OAuth2Client {
  * The Google consent URL the recruiter is redirected to from Settings.
  * `access_type: offline` + `prompt: consent` guarantees a refresh_token is
  * returned every time (including on reconnect with a different account).
+ * Requests Gmail + Calendar scopes together, so one reconnect upgrades a
+ * pre-calendar connection.
  */
 export function buildGmailConsentUrl(redirectUri: string, state: string): string {
   return getGoogleOAuthClient(redirectUri).generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: [GMAIL_SCOPE],
+    scope: CONSENT_SCOPES,
     state,
     include_granted_scopes: true,
   });
@@ -121,14 +143,20 @@ export async function revokeRefreshToken(refreshToken: string): Promise<void> {
 }
 
 /**
- * Build a Gmail client bound to a recruiter's refresh token. The googleapis
+ * OAuth2 client bound to a recruiter's refresh token — the shared auth object
+ * for every Google API called on their behalf (Gmail, Calendar). The googleapis
  * SDK transparently mints short-lived access tokens from the refresh token, so
  * we only ever persist the refresh token.
  */
-export function createGmailClient(refreshToken: string): gmail_v1.Gmail {
+export function createGoogleAuthClient(refreshToken: string): Auth.OAuth2Client {
   const { clientId, clientSecret } = getOAuthCredentials();
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
   oauth2Client.setCredentials({ refresh_token: refreshToken });
-  return google.gmail({ version: "v1", auth: oauth2Client });
+  return oauth2Client;
+}
+
+/** Gmail client bound to a recruiter's refresh token. */
+export function createGmailClient(refreshToken: string): gmail_v1.Gmail {
+  return google.gmail({ version: "v1", auth: createGoogleAuthClient(refreshToken) });
 }
 

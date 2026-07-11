@@ -9,14 +9,23 @@ interface Props {
   campaignTitle: string;
   timezone: string;
   slots: GeneratedSlot[];
+  /** Slot starts (ISO) the server suggests first — rendered as quick picks. */
+  recommendedIso?: string[];
 }
 
 /**
- * Candidate-facing AI-interview scheduler (PRD 3.5.6). Slots are grouped by day
- * and shown in the campaign timezone; selecting one and confirming books it via
- * the token-gated server action. Mobile-friendly tap targets (PRD 3.9.3).
+ * Candidate-facing final-interview scheduler. Slots come from the interviewer's
+ * published calendar hours minus their real conflicts, grouped by day and shown
+ * in the interviewer's timezone; selecting one and confirming books it via the
+ * token-gated server action. Mobile-friendly tap targets (PRD 3.9.3).
  */
-export default function InterviewScheduler({ token, campaignTitle, timezone, slots }: Props) {
+export default function InterviewScheduler({
+  token,
+  campaignTitle,
+  timezone,
+  slots,
+  recommendedIso = [],
+}: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +49,16 @@ export default function InterviewScheduler({ token, campaignTitle, timezone, slo
     }
     return [...map.values()];
   }, [slots]);
+
+  // Resolve the server's recommended picks against the offered slots — a
+  // recommendation that no longer exists (raced away) is silently dropped.
+  const recommended = useMemo(
+    () =>
+      recommendedIso
+        .map((iso) => slots.find((s) => s.startIso === iso))
+        .filter((s): s is GeneratedSlot => Boolean(s)),
+    [recommendedIso, slots],
+  );
 
   function confirm() {
     if (!selected) return;
@@ -90,6 +109,41 @@ export default function InterviewScheduler({ token, campaignTitle, timezone, slo
         <strong>{timezone}</strong>.
       </p>
 
+      {recommended.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#B45309]">
+            Recommended times
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            {recommended.map((slot) => {
+              const isSelected = selected === slot.startIso;
+              return (
+                <button
+                  key={slot.startIso}
+                  type="button"
+                  onClick={() => setSelected(slot.startIso)}
+                  aria-pressed={isSelected}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                    isSelected
+                      ? "border-[#0369A1] bg-[#0369A1] text-white"
+                      : "border-[#FDE68A] bg-[#FFFBEB] text-[#92400E] hover:bg-[#FEF3C7]"
+                  }`}
+                >
+                  <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path
+                      fillRule="evenodd"
+                      d="M10.868 2.884c-.321-.772-1.415-.772-1.736 0l-1.83 4.401-4.753.381c-.833.067-1.171 1.107-.536 1.651l3.62 3.102-1.106 4.637c-.194.813.691 1.456 1.405 1.02L10 15.591l4.069 2.485c.713.436 1.598-.207 1.404-1.02l-1.106-4.637 3.62-3.102c.635-.544.297-1.584-.536-1.65l-4.752-.382-1.831-4.401z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  {dayFmt.format(new Date(slot.startIso))} · {timeFmt.format(new Date(slot.startIso))}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-5">
         {groups.map((daySlots) => (
           <div key={daySlots[0].dayKey}>
@@ -105,7 +159,7 @@ export default function InterviewScheduler({ token, campaignTitle, timezone, slo
                     type="button"
                     onClick={() => setSelected(slot.startIso)}
                     aria-pressed={isSelected}
-                    className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
+                    className={`cursor-pointer rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors ${
                       isSelected
                         ? "border-[#0369A1] bg-[#0369A1] text-white"
                         : "border-[#BAE6FD] bg-[#F0F9FF] text-[#0369A1] hover:bg-[#E0F2FE]"
@@ -130,7 +184,7 @@ export default function InterviewScheduler({ token, campaignTitle, timezone, slo
         type="button"
         onClick={confirm}
         disabled={!selected || pending}
-        className="w-full rounded-lg bg-[#0369A1] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0C4A6E] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+        className="w-full cursor-pointer rounded-lg bg-[#0369A1] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#0C4A6E] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
       >
         {pending ? "Booking…" : "Confirm interview time"}
       </button>
