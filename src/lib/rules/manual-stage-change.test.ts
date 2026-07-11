@@ -16,8 +16,12 @@ describe("isRecruiterSettableTarget", () => {
   it("allows routing states a recruiter legitimately owns", () => {
     expect(isRecruiterSettableTarget("rejected")).toBe(true);
     expect(isRecruiterSettableTarget("screening_expired")).toBe(true);
-    expect(isRecruiterSettableTarget("interview_scheduling")).toBe(true);
     expect(isRecruiterSettableTarget("interview_no_show")).toBe(true);
+    expect(isRecruiterSettableTarget("final_interview_scheduling")).toBe(true);
+  });
+
+  it("allows interview_invited until the AI-interview invite artifact exists (interim routing decision)", () => {
+    expect(isRecruiterSettableTarget("interview_invited")).toBe(true);
   });
 });
 
@@ -54,7 +58,23 @@ describe("recruiterStageOptions", () => {
     // screening_scored is reached by the system; from there the recruiter still
     // decides advancement vs rejection — neither is a system-produced state.
     expect(recruiterStageOptions("screening_scored")).toEqual([
-      "interview_scheduling",
+      "interview_invited",
+      "rejected",
+    ]);
+  });
+
+  it("lets the recruiter route manager_review into final-interview scheduling", () => {
+    expect(recruiterStageOptions("manager_review")).toEqual([
+      "final_interview_scheduling",
+      "hired",
+      "rejected",
+    ]);
+  });
+
+  it("offers the off-platform shortcut to manager_review from interview_invited, but never interview_completed", () => {
+    expect(recruiterStageOptions("interview_invited")).toEqual([
+      "manager_review",
+      "interview_expired",
       "rejected",
     ]);
   });

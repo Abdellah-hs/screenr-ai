@@ -80,7 +80,7 @@ export interface SlaTimer {
   escalation_threshold_hours: number;
 }
 
-// One weekly AI-interview availability rule (PRD 3.5.6). `weekday` is
+// One weekly final-interview availability rule. `weekday` is
 // 0=Sunday..6=Saturday (matching JS Date.getDay()); times are minutes from
 // midnight in the campaign's `interview_timezone`.
 export interface InterviewAvailabilityRule {
@@ -124,7 +124,7 @@ export interface Campaign {
   rubrics: EvaluationRubric[];
   reviewers: CampaignReviewer[];
   sla_timers: SlaTimer[];
-  // AI-interview availability config (PRD 3.5.6).
+  // Final-interview availability config (candidate slot booking).
   interview_slot_minutes: number | null;
   interview_timezone: string | null;
   interview_booking_horizon_days: number;
@@ -184,7 +184,7 @@ export const SLA_STAGES: { name: string; key: SlaStage }[] = [
 // ─── Candidate Types ────────────────────────────────────────────────────────
 
 export type CandidateStage = "applied" | "screening" | "interview" | "final_interview" | "hired" | "rejected";
-export type ScreeningTier = "strong" | "moderate" | "weak";
+export type ScreeningTier = "strong" | "moderate" | "weak" | "no_match";
 
 export interface ScoreFactor {
   name: string;
@@ -263,12 +263,14 @@ export const TIER_COLORS: Record<ScreeningTier, string> = {
   strong: "bg-green-100 text-green-700",
   moderate: "bg-amber-100 text-amber-700",
   weak: "bg-red-100 text-red-700",
+  no_match: "bg-red-200 text-red-800",
 };
 
 export const TIER_LABELS: Record<ScreeningTier, string> = {
   strong: "Strong",
   moderate: "Moderate",
   weak: "Weak",
+  no_match: "No Match",
 };
 
 export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "final_interview", "hired"];
@@ -290,6 +292,8 @@ export type ApplicationState =
   | "screening_scored"
   // Canonical interview stages
   | "interview_invited"
+  // Deprecated slot-booking pair — unreachable for new applications; kept for
+  // in-flight rows until a cleanup migration drops the enum values.
   | "interview_scheduling"
   | "interview_scheduled"
   | "interview_completed"
@@ -330,14 +334,26 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   screening_approved: ["screening_sent", "rejected"],
   screening_sent: ["screening_completed", "screening_expired", "rejected"],
   screening_completed: ["screening_scored", "processing_failed", "rejected"],
-  screening_scored: ["interview_scheduling", "interview_invited", "rejected"],
+  screening_scored: ["interview_invited", "rejected"],
 
-  // On-demand AI interview (PRD 3.5.6): invited via a token link → completed or
-  // expired. Supersedes the scheduling/scheduled pair below, which stays valid
-  // until a cleanup migration retires it (and screening_scored is rerouted here).
-  interview_invited: ["interview_completed", "interview_expired", "rejected"],
+  // On-demand AI interview: invited via a token link → completed or expired.
+  // This is the only path out of screening — slot booking now belongs to the
+  // final human interview (`final_interview_scheduling`), per the 2026-06-23
+  // decision superseding PRD 3.5.6.
+  // TEMPORARY: `manager_review` is a recruiter shortcut for interviews
+  // conducted off-platform while the AI interview isn't built (it can't reach
+  // `interview_completed`/`interview_scored`, which need real artifacts).
+  // Remove this edge when the AI interview ships.
+  interview_invited: [
+    "interview_completed",
+    "manager_review",
+    "interview_expired",
+    "rejected",
+  ],
 
-  // Canonical interview track
+  // DEPRECATED slot-booking pair — no inbound edges remain, so new applications
+  // can't enter. The keys (and their outbound edges) stay until a cleanup
+  // migration retires the enum values, so in-flight applications keep working.
   interview_scheduling: ["interview_scheduled", "rejected"],
   interview_scheduled: ["interview_completed", "interview_no_show", "rejected"],
   interview_completed: ["interview_scored", "processing_failed", "rejected"],

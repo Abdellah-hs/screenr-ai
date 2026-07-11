@@ -4,10 +4,13 @@ import {
   APPLICATION_STAGE_BUCKET,
   toCandidateStage,
   pipelineDisplayScore,
+  TIER_COLORS,
+  TIER_LABELS,
   type ApplicationState,
   type CandidateScore,
   type CandidateStage,
 } from "./constants";
+import { Constants } from "@/types/database.types";
 
 const ALL_STATES = Object.keys(
   APPLICATION_STATE_TRANSITIONS,
@@ -58,6 +61,9 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
     }
     for (const state of ALL_STATES) {
       if (state === "new") continue; // entry state — no inbound transition expected
+      // Deprecated slot-booking entry state: its inbound edge was cut when
+      // scheduling moved to the final interview. Key kept for in-flight rows.
+      if (state === "interview_scheduling") continue;
       expect(reachable, `no inbound transition into ${state}`).toContain(state);
     }
   });
@@ -66,17 +72,27 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
     expect(APPLICATION_STATE_TRANSITIONS.archived).toEqual([]);
   });
 
-  it("routes the on-demand interview invite to completed or expired", () => {
+  it("routes the on-demand interview invite to completed or expired (plus the interim off-platform shortcut)", () => {
     expect(APPLICATION_STATE_TRANSITIONS.interview_invited).toEqual([
       "interview_completed",
+      // Interim recruiter shortcut while the AI interview isn't built —
+      // remove alongside the edge in constants.ts when it ships.
+      "manager_review",
       "interview_expired",
       "rejected",
     ]);
   });
 
-  it("makes interview_invited reachable from screening_scored", () => {
-    expect(APPLICATION_STATE_TRANSITIONS.screening_scored).toContain(
+  it("routes a scored screening only to the AI interview or rejection — never slot booking", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.screening_scored).toEqual([
       "interview_invited",
+      "rejected",
+    ]);
+  });
+
+  it("keeps slot booking for the final interview stage (after manager review)", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.manager_review).toContain(
+      "final_interview_scheduling",
     );
   });
 });
@@ -237,5 +253,23 @@ describe("pipelineDisplayScore", () => {
 
   it("returns null when the candidate has no scores", () => {
     expect(pipelineDisplayScore({ stage: "applied", scores: [] })).toBeNull();
+  });
+});
+
+describe("screening tier display config", () => {
+  // The DB enum is the source of truth for tier values. If a migration adds a
+  // tier and these maps aren't updated, the UI falls back to rendering the raw
+  // enum value (e.g. "No_match") with no badge colors — the bug this guards.
+  const DB_TIERS = Constants.public.Enums.screening_tier_enum;
+
+  it.each(DB_TIERS)("gives %s a human-readable label", (tier) => {
+    const label = TIER_LABELS[tier];
+
+    expect(label).toBeDefined();
+    expect(label).not.toMatch(/_/);
+  });
+
+  it.each(DB_TIERS)("gives %s badge colors", (tier) => {
+    expect(TIER_COLORS[tier]).toBeDefined();
   });
 });

@@ -14,6 +14,12 @@ describe("buildInterviewSchedulingEmail", () => {
     expect(email.subject).toContain("Senior Engineer");
   });
 
+  it("frames the booking as the final interview, not the screening or AI round", () => {
+    const email = buildInterviewSchedulingEmail(base);
+    expect(email.subject.toLowerCase()).toContain("final");
+    expect(email.text.toLowerCase()).toContain("final interview");
+  });
+
   it("includes the booking link in both text and HTML bodies", () => {
     const email = buildInterviewSchedulingEmail(base);
     expect(email.text).toContain("https://hire.example.com/schedule/abc.def");

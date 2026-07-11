@@ -11,7 +11,6 @@ import {
  *   - screening_sent       → the questions email was sent + a response row created
  *   - screening_completed → a submitted candidate screening response exists
  *   - screening_scored    → an AI screening score is persisted as evidence
- *   - interview_invited    → the on-demand interview invite was sent (link + deadline)
  *   - interview_scheduled  → the candidate booked a slot (a booking row exists)
  *   - interview_completed  → the interview actually took place (recording/transcript)
  *   - interview_scored     → an AI interview score is persisted
@@ -25,13 +24,18 @@ import {
  *
  * Routing decisions a recruiter SHOULD own are unaffected: reject, mark
  * `screening_expired` / `interview_no_show`, approve into screening, advance a
- * scored candidate to `interview_scheduling`, etc. — none assert a machine artifact.
+ * scored candidate to `interview_invited`, etc. — none assert a machine artifact.
+ *
+ * `interview_invited` is deliberately NOT in this list yet: until the AI
+ * interview ships a real invite artifact (token link + deadline), the state
+ * only means "cleared for the AI interview round" — a routing decision the
+ * recruiter owns in HITL mode. When the invite flow exists, move it back here
+ * so only the system's invite sender can set it (like `screening_sent`).
  */
 export const SYSTEM_PRODUCED_STATES: readonly ApplicationState[] = [
   "screening_sent",
   "screening_completed",
   "screening_scored",
-  "interview_invited",
   "interview_scheduled",
   "interview_completed",
   "interview_scored",

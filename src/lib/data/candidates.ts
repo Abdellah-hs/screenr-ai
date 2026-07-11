@@ -442,8 +442,9 @@ export interface ApplicationEmailContext {
  */
 export async function fetchApplicationEmailContext(
   applicationId: string,
+  db?: SupabaseDb,
 ): Promise<ApplicationEmailContext | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
 
   const select = `campaigns!inner ( title ), candidates!inner ( first_name, last_name, email )`;
   const { data, error } = await supabase
