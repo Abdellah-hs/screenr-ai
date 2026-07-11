@@ -48,12 +48,14 @@ vi.mock("./candidates", () => ({
 }));
 
 import {
+  getCampaignById,
   getResumeCriteriaCount,
   updateCampaignStatus,
   deleteCampaign,
   deleteCampaigns,
   updateCampaignsStatus,
 } from "./campaigns";
+import { fetchCampaignById } from "@/lib/data/campaigns";
 
 const VALID_CAMPAIGN_ID = "660e8400-e29b-41d4-a716-446655440001";
 const VALID_CAMPAIGN_ID_2 = "770e8400-e29b-41d4-a716-446655440002";
@@ -61,6 +63,23 @@ const VALID_CAMPAIGN_ID_2 = "770e8400-e29b-41d4-a716-446655440002";
 beforeEach(() => {
   vi.clearAllMocks();
   mockRequireUserId.mockResolvedValue("user-1");
+});
+
+describe("getCampaignById", () => {
+  it("returns null for a malformed id without querying the database", async () => {
+    // e.g. a literal /campaigns/undefined URL — must not reach Supabase.
+    await expect(getCampaignById("undefined")).resolves.toBeNull();
+    expect(vi.mocked(fetchCampaignById)).not.toHaveBeenCalled();
+  });
+
+  it("delegates to fetchCampaignById for a valid uuid", async () => {
+    vi.mocked(fetchCampaignById).mockResolvedValue({ id: VALID_CAMPAIGN_ID } as never);
+
+    await expect(getCampaignById(VALID_CAMPAIGN_ID)).resolves.toEqual({
+      id: VALID_CAMPAIGN_ID,
+    });
+    expect(vi.mocked(fetchCampaignById)).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, "user-1");
+  });
 });
 
 describe("getResumeCriteriaCount", () => {
@@ -142,7 +161,7 @@ describe("updateCampaignStatus", () => {
     );
   });
 
-  it("persists the change and revalidates the campaign pages", async () => {
+  it("persists the change and revalidates the campaign subtree and list", async () => {
     mockFetchCampaignStatus.mockResolvedValue("draft");
 
     await updateCampaignStatus(VALID_CAMPAIGN_ID, "active");
@@ -153,7 +172,12 @@ describe("updateCampaignStatus", () => {
       "active",
       "user-1",
     );
-    expect(mockRevalidatePath).toHaveBeenCalledWith(`/campaigns/${VALID_CAMPAIGN_ID}`);
+    // "layout" so the candidate detail pages under the campaign (whose
+    // controls are freeze-gated on this status) refresh too.
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/campaigns/${VALID_CAMPAIGN_ID}`,
+      "layout",
+    );
     expect(mockRevalidatePath).toHaveBeenCalledWith("/campaigns");
   });
 });
@@ -245,5 +269,22 @@ describe("updateCampaignsStatus (bulk)", () => {
       "user-1",
     );
     expect(mockRevalidatePath).toHaveBeenCalledWith("/campaigns");
+  });
+
+  it("revalidates each selected campaign's subtree", async () => {
+    mockFetchCampaignStatus
+      .mockResolvedValueOnce("draft")
+      .mockResolvedValueOnce("active");
+
+    await updateCampaignsStatus([VALID_CAMPAIGN_ID, VALID_CAMPAIGN_ID_2], "paused");
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/campaigns/${VALID_CAMPAIGN_ID}`,
+      "layout",
+    );
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/campaigns/${VALID_CAMPAIGN_ID_2}`,
+      "layout",
+    );
   });
 });

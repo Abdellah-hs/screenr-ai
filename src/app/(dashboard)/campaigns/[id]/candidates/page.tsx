@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
 import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import CandidateTable from "@/components/campaigns/candidate-table";
+import { uuidSchema } from "@/lib/validations";
 
 const VALID_FILTERS = new Set([
   "all",
@@ -24,6 +25,9 @@ export default async function CandidatesPage({
   searchParams: Promise<{ stage?: string }>;
 }) {
   const [{ id }, { stage }] = await Promise.all([params, searchParams]);
+  // Malformed campaign id in the URL → 404 before touching the database.
+  if (!uuidSchema.safeParse(id).success) notFound();
+
   const campaign = await getCampaignById(id);
 
   if (!campaign) {

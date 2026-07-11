@@ -126,3 +126,25 @@ export function evaluateResumeScoringOutcome(
     rationale: `${scoreLine} — below threshold`,
   };
 }
+
+/**
+ * States where a resume re-score is not allowed: the application is closed.
+ * Re-scoring exists to refresh evidence for live candidates (e.g. after the
+ * rubric changed); rewriting the current score on a decided application would
+ * only muddy its record.
+ */
+const RESCORE_BLOCKED_STATES: ApplicationState[] = ["hired", "rejected", "archived"];
+
+/**
+ * Guard for the recruiter-triggered resume re-score. Throws when the
+ * application has reached a terminal state. Anywhere else in the pipeline is
+ * fine — a re-score only produces fresh evidence (the audit log keeps every
+ * run) and never transitions, so it can't disturb an in-flight application.
+ */
+export function assertResumeRescoreAllowed(status: ApplicationState): void {
+  if (RESCORE_BLOCKED_STATES.includes(status)) {
+    throw new Error(
+      `This application is closed ("${status}") — re-scoring only applies to candidates still in the pipeline.`,
+    );
+  }
+}

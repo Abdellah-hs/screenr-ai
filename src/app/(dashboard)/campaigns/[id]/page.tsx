@@ -10,6 +10,7 @@ import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
 import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
 import { CampaignApplyLink } from "@/components/campaigns/campaign-apply-link";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
+import { uuidSchema } from "@/lib/validations";
 
 export default async function CampaignDetailPage({
   params,
@@ -17,6 +18,10 @@ export default async function CampaignDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (e.g. /campaigns/undefined) is a 404 — bail before any of
+  // the parallel fetches below run a query against a garbage uuid.
+  if (!uuidSchema.safeParse(id).success) notFound();
+
   const [campaign, candidates, screeningQuestions] = await Promise.all([
     getCampaignById(id),
     getCandidatesByCampaignId(id),
@@ -70,6 +75,38 @@ export default async function CampaignDetailPage({
           </Link>
         </div>
       </div>
+
+      {/* Screening questions are a hard prerequisite: approving a candidate
+          into screening is blocked until the campaign has them. Surface that
+          up top instead of letting recruiters discover it on a candidate. */}
+      {screeningQuestions.length === 0 && (
+        <div className="mb-6 flex items-start gap-3 bg-[#FFFBEB] border border-[#FDE68A] rounded-xl p-4">
+          <svg
+            className="w-4 h-4 text-[#B45309] shrink-0 mt-0.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z"
+            />
+          </svg>
+          <p className="text-sm text-[#92400E]">
+            This campaign has no screening questions yet — candidates can&apos;t
+            be approved into screening until it does.{" "}
+            <a
+              href="#screening-questions"
+              className="font-medium underline hover:text-[#78350F]"
+            >
+              Set up screening questions
+            </a>
+          </p>
+        </div>
+      )}
 
       {/* Campaign Details */}
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6 mb-6">
@@ -144,8 +181,9 @@ export default async function CampaignDetailPage({
         </div>
       )}
 
-      {/* Screening Questions */}
-      <div className="mb-6">
+      {/* Screening Questions — the anchor is the target of the empty-set
+          banner above and of the pointer on the edit page. */}
+      <div id="screening-questions" className="mb-6 scroll-mt-6">
         <ScreeningQuestionsEditor
           campaignId={id}
           initialQuestions={screeningQuestions.map((q) => ({

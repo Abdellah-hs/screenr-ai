@@ -35,6 +35,9 @@ export async function getCampaigns(): Promise<Campaign[]> {
 
 export async function getCampaignById(id: string): Promise<Campaign | null> {
   const userId = await requireUserId();
+  // A malformed id (e.g. a literal "undefined" in the URL) is a plain
+  // not-found — don't send garbage uuids to the database.
+  if (!uuidSchema.safeParse(id).success) return null;
   return fetchCampaignById(id, userId);
 }
 
@@ -110,7 +113,10 @@ export async function updateCampaignStatus(
 
   await updateCampaignStatusTx(campaignId, fromStatus, toStatus, userId);
 
-  revalidatePath(`/campaigns/${campaignId}`);
+  // Status drives the freeze rule on every candidate detail page under this
+  // campaign (approve / send / re-score buttons), so revalidate the subtree,
+  // not just the campaign page.
+  revalidatePath(`/campaigns/${campaignId}`, "layout");
   revalidatePath("/campaigns");
 }
 
@@ -165,6 +171,11 @@ export async function updateCampaignsStatus(
     plan.map((p) => updateCampaignStatusTx(p.id, p.fromStatus, toStatus, userId))
   );
 
+  // Same subtree rule as the single-campaign status change: candidate pages
+  // under each campaign render freeze-gated controls off this status.
+  for (const p of plan) {
+    revalidatePath(`/campaigns/${p.id}`, "layout");
+  }
   revalidatePath("/campaigns");
 }
 
@@ -217,6 +228,11 @@ export async function updateCampaign(id: string, formData: FormData) {
   } catch (err) {
     console.error("Post-save candidate scoring failed (non-blocking):", err);
   }
+
+  // The redirect refreshes the campaign page, but rubric/threshold/status
+  // changes also surface on the candidate detail pages beneath it (stale-
+  // rubric badge, freeze-gated controls) — revalidate the whole subtree.
+  revalidatePath(`/campaigns/${id}`, "layout");
 
   redirect(`/campaigns/${id}`);
 }

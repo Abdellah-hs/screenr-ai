@@ -95,7 +95,11 @@ export async function saveScreeningQuestions(
     validated.map((q) => ({ prompt: q.prompt, is_required: q.is_required }))
   );
 
-  revalidatePath(`/campaigns/${campaignId}`);
+  // The question set surfaces on every candidate detail page under this
+  // campaign (screening thread, HITL approve gate), not just the campaign
+  // page — revalidate the whole subtree so those pages don't keep serving
+  // a cached "no questions configured" render.
+  revalidatePath(`/campaigns/${campaignId}`, "layout");
 }
 
 // ─── Email Delivery ─────────────────────────────────────────────────────────

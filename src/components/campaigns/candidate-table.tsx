@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { pipelineDisplayScore } from "@/lib/constants";
+import { pipelineDisplayScore, TIER_LABELS } from "@/lib/constants";
 import type {
   Candidate,
   CandidateScore,
@@ -28,6 +28,7 @@ const tierColors: Record<string, string> = {
   strong: "text-[#059669] bg-[#ECFDF5]",
   moderate: "text-[#D97706] bg-[#FEF3C7]",
   weak: "text-[#DC2626] bg-[#FEF2F2]",
+  no_match: "text-[#B91C1C] bg-[#FEE2E2]",
 };
 
 const stageLabels: Record<CandidateStage, string> = {
@@ -348,11 +349,11 @@ export default function CandidateTable({
                               </span>
                               {stageScore.tier && (
                                 <span
-                                  className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full capitalize ${
+                                  className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
                                     tierColors[stageScore.tier]
                                   }`}
                                 >
-                                  {stageScore.tier}
+                                  {TIER_LABELS[stageScore.tier]}
                                 </span>
                               )}
                             </div>

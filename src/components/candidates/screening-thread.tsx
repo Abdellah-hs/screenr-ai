@@ -80,22 +80,13 @@ export default function ScreeningThread({
     });
   }
 
-  // Fast-path empty states
-  if (questions.length === 0) {
-    return (
-      <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-        <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-2">
-          Screening Questions
-        </h2>
-        <p className="text-sm text-[#6B7280]">
-          No screening questions configured for this campaign. Set them up on
-          the campaign page to enable this workflow.
-        </p>
-      </div>
-    );
-  }
-
   const status = response?.status ?? "not_sent";
+
+  // This card exists to review a candidate's screening thread. Until an email
+  // has actually gone out there is nothing candidate-specific to show —
+  // sending is automatic on approval — so the pre-send states ("no questions
+  // configured", "ready to send", mid-send "pending") render nothing.
+  if (status === "not_sent" || status === "pending") return null;
   const answersById = new Map<string, ScoredAnswerRow>();
   for (const a of response?.answers ?? []) {
     answersById.set(a.question_id, a);
@@ -125,17 +116,6 @@ export default function ScreeningThread({
           </h2>
           <StatusLine response={response} />
         </div>
-        {status === "not_sent" && (
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={sending || !canSend}
-            title={canSend ? undefined : sendDisabledReason}
-            className="px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-          >
-            {sending ? "Sending…" : "Send questions"}
-          </button>
-        )}
         {(status === "sent" || status === "expired") && (
           <button
             type="button"
@@ -213,81 +193,66 @@ export default function ScreeningThread({
         <TranscriptReview transcript={transcript} audioUrl={response?.audio_url ?? null} />
       )}
 
-      {status === "not_sent" ? (
-        canSend ? (
-          <p className="text-sm text-[#6B7280]">
-            {questions.length} question{questions.length === 1 ? "" : "s"}{" "}
-            ready to send. Click <strong>Send questions</strong> to email the
-            candidate a personal response link.
-          </p>
-        ) : (
-          <p className="text-sm text-[#6B7280]">
-            {questions.length} question{questions.length === 1 ? "" : "s"}{" "}
-            configured. {sendDisabledReason}
-          </p>
-        )
-      ) : (
-        <ol className="space-y-4">
-          {questions.map((q, idx) => {
-            const answer = answersById.get(q.id);
-            return (
-              <li
-                key={q.id}
-                className="pl-7 relative"
-              >
-                <span className="absolute left-0 top-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#0369A1] text-white text-xs font-semibold">
-                  {idx + 1}
-                </span>
-                <p className="text-sm font-medium text-[#111827] mb-1">
-                  {q.prompt}
-                  {q.is_required && (
-                    <span className="ml-2 text-[10px] font-medium text-red-600 uppercase">
-                      Required
-                    </span>
-                  )}
-                </p>
-
-                {answer?.answer_text || (isVoice && answer?.score != null) ? (
-                  <div className="mt-2 p-3 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]">
-                    {answer?.answer_text ? (
-                      <p className="text-sm text-[#374151] whitespace-pre-wrap leading-relaxed">
-                        {answer.answer_text}
-                      </p>
-                    ) : (
-                      <p className="text-xs text-[#9CA3AF] italic">
-                        Answered in the voice interview — see the transcript above.
-                      </p>
-                    )}
-                    {answer?.score != null && (
-                      <div className="mt-3 pt-3 border-t border-[#E5E7EB]">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-medium text-[#6B7280]">
-                            AI Score
-                          </span>
-                          <span className={`text-sm font-semibold ${scoreColor(answer.score)}`}>
-                            {answer.score} / 100
-                          </span>
-                        </div>
-                        {answer.rationale && (
-                          <p className="text-xs text-[#6B7280] italic leading-relaxed">
-                            {answer.rationale}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="mt-2 text-xs text-[#9CA3AF] italic">
-                    {status === "sent"
-                      ? "Awaiting candidate response…"
-                      : "No answer provided"}
-                  </p>
+      <ol className="space-y-4">
+        {questions.map((q, idx) => {
+          const answer = answersById.get(q.id);
+          return (
+            <li
+              key={q.id}
+              className="pl-7 relative"
+            >
+              <span className="absolute left-0 top-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#0369A1] text-white text-xs font-semibold">
+                {idx + 1}
+              </span>
+              <p className="text-sm font-medium text-[#111827] mb-1">
+                {q.prompt}
+                {q.is_required && (
+                  <span className="ml-2 text-[10px] font-medium text-red-600 uppercase">
+                    Required
+                  </span>
                 )}
-              </li>
-            );
-          })}
-        </ol>
-      )}
+              </p>
+
+              {answer?.answer_text || (isVoice && answer?.score != null) ? (
+                <div className="mt-2 p-3 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]">
+                  {answer?.answer_text ? (
+                    <p className="text-sm text-[#374151] whitespace-pre-wrap leading-relaxed">
+                      {answer.answer_text}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-[#9CA3AF] italic">
+                      Answered in the voice interview — see the transcript above.
+                    </p>
+                  )}
+                  {answer?.score != null && (
+                    <div className="mt-3 pt-3 border-t border-[#E5E7EB]">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-medium text-[#6B7280]">
+                          AI Score
+                        </span>
+                        <span className={`text-sm font-semibold ${scoreColor(answer.score)}`}>
+                          {answer.score} / 100
+                        </span>
+                      </div>
+                      {answer.rationale && (
+                        <p className="text-xs text-[#6B7280] italic leading-relaxed">
+                          {answer.rationale}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-[#9CA3AF] italic">
+                  {status === "sent"
+                    ? "Awaiting candidate response…"
+                    : "No answer provided"}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
