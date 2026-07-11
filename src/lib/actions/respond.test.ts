@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Captures `after()` callbacks WITHOUT running them, so tests control when
+// deferred work (the post-response auto-scoring) executes.
+const { afterQueue } = vi.hoisted(() => ({
+  afterQueue: [] as Array<() => unknown>,
+}));
+
+vi.mock("next/server", () => ({
+  after: (fn: () => unknown) => {
+    afterQueue.push(fn);
+  },
+}));
+
+async function flushAfter(): Promise<void> {
+  for (const fn of afterQueue.splice(0)) await fn();
+}
+
 vi.mock("next/headers", () => ({
   headers: vi.fn(() => Promise.resolve({ get: () => null })),
 }));
@@ -110,6 +126,7 @@ const transcript: VoiceTranscriptTurn[] = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  afterQueue.length = 0;
   mockVerifyToken.mockReturnValue({ application_id: APP_ID, expires_at: new Date("2099-01-01") });
   mockFetchApp.mockResolvedValue(appRow());
   mockFetchResponse.mockResolvedValue(responseRow());
@@ -257,8 +274,13 @@ describe("submitVoiceScreening", () => {
     expect(mockSaveTranscript).toHaveBeenCalled();
   });
 
-  it("auto-scores the call with the campaign's resolved config (no recruiter click)", async () => {
+  it("auto-scores the call after the response with the campaign's resolved config (no recruiter click)", async () => {
     await submitVoiceScreening({ token: TOKEN, transcript });
+
+    // Scoring is deferred — the candidate's "done" screen never waits on it.
+    expect(mockRunScoring).not.toHaveBeenCalled();
+
+    await flushAfter();
 
     expect(mockRunScoring).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -276,6 +298,7 @@ describe("submitVoiceScreening", () => {
     mockRunScoring.mockRejectedValue(new Error("OpenAI down"));
 
     await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    await expect(flushAfter()).resolves.toBeUndefined();
     expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript);
   });
 
@@ -283,6 +306,7 @@ describe("submitVoiceScreening", () => {
     mockFetchScoringContext.mockResolvedValue({ ...SCORING_CONTEXT, description: null });
 
     await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    await flushAfter();
     expect(mockRunScoring).not.toHaveBeenCalled();
   });
 

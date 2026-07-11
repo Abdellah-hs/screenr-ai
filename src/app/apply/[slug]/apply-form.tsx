@@ -126,9 +126,10 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                 </div>
                 <h1 className="text-xl font-semibold text-[#111827] mb-2">Application received</h1>
                 <p className="text-sm text-[#6B7280]">
-                  Thanks for applying to <strong>{campaignTitle}</strong>. A confirmation email is
-                  on its way to <strong>{email.trim()}</strong>, and the hiring team will be in
-                  touch if there&apos;s a fit.
+                  Thanks for applying to <strong>{campaignTitle}</strong>. We&apos;re processing
+                  your CV now — you&apos;ll get an email at <strong>{email.trim()}</strong> shortly
+                  (including if anything needs fixing), and the hiring team will be in touch
+                  if there&apos;s a fit.
                 </p>
               </div>
             ) : (

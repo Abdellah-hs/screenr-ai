@@ -1,5 +1,6 @@
 "use server";
 
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { z } from "zod/v4";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -414,10 +415,11 @@ export async function submitVoiceScreening(input: {
     "Candidate completed the voice screening call",
   );
 
-  // Score the call immediately — no recruiter click required. Best-effort and
-  // awaited so the score lands before the candidate's "done" screen; failures
-  // are logged, never surfaced (the recruiter can still score manually).
-  await autoScoreScreening(application_id);
+  // Score the call automatically — no recruiter click required — but AFTER
+  // the response: AI scoring takes seconds and the candidate's "done" screen
+  // must not wait on it. Best-effort; failures are logged, never surfaced
+  // (the transcript is durable and a recruiter can still score manually).
+  after(() => autoScoreScreening(application_id));
 
   return { ok: true };
 }

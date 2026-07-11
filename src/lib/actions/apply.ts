@@ -1,9 +1,11 @@
 "use server";
 
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getRequestOrigin } from "@/lib/http/origin";
 import { fetchCampaignBySlug } from "@/lib/data/campaigns";
 import { fetchGmailConnection } from "@/lib/data/integrations";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
@@ -17,6 +19,8 @@ import { applyApplicantSchema } from "@/lib/validations";
 import { createGmailClient } from "@/lib/services/gmail";
 import { sendEmail } from "@/lib/services/email";
 import { buildApplicationReceivedEmail } from "@/lib/services/email-templates/application-received";
+import { buildApplicationProblemEmail } from "@/lib/services/email-templates/application-problem";
+import type { BuiltEmail } from "@/lib/services/email-templates/shared";
 
 // Candidate-facing brand on the apply flow (confirmation email signature and
 // From display name). The ATS is internal to MatiousCorp, so this is fixed.
@@ -98,14 +102,15 @@ export async function loadApplyContext(slug: string): Promise<ApplyContext> {
 /**
  * Public CV submission from the apply page. Candidates have no account, so this
  * runs on the service-role client after validating the upload and re-checking
- * the campaign is Active (the freeze rule applies candidate-side too). Delegates
- * to the shared `ingestResumeDocument` pipeline — the same extract → classify →
- * upload → score → advance core the Gmail sweep uses.
+ * the campaign is Active (the freeze rule applies candidate-side too).
  *
- * Cheap checks (presence, type, size, rate limit) run before the campaign
- * lookup and the expensive Marker/OpenAI pipeline, so bad input fails fast. A
- * rejection (not a CV, no email, unreadable) surfaces as an actionable message
- * the candidate can fix and re-upload against.
+ * Only the cheap checks (presence, type, size, rate limit, campaign active)
+ * run inside the request — the response is instant. The expensive pipeline
+ * (`ingestResumeDocument`: Marker extraction → OpenAI classify → upload →
+ * score → advance) runs in `after()`, once the candidate already has their
+ * confirmation. A rejection (not a CV, no email, unreadable) therefore can't
+ * be shown inline anymore: the applicant gets an actionable "apply again"
+ * email instead (product decision 2026-07-10).
  */
 export async function submitApplication(formData: FormData): Promise<{ ok: true }> {
   const slug = String(formData.get("slug") ?? "").trim();
@@ -156,66 +161,122 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
 
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  const result = await ingestResumeDocument({
-    db,
-    campaignId: campaign.campaign_id,
-    ownerUserId: campaign.user_id,
-    filename: safeFilename(file.name),
-    mimeType: file.type,
-    buffer,
-    applicant,
-    source: "apply_form",
-  });
+  // Absolute "apply again" link for the problem email — resolved now, not
+  // inside the deferred work.
+  const applyUrl = `${await getRequestOrigin()}/apply/${encodeURIComponent(slug)}`;
 
-  if (result.outcome === "rejected") {
-    throw new Error(rejectionMessage(result.reason));
-  }
+  // The candidate's part is done. Everything slow — Marker extraction, OpenAI
+  // classification + scoring, the storage upload, and the emails — runs after
+  // the response, so submitting feels instant.
+  after(async () => {
+    try {
+      const result = await ingestResumeDocument({
+        db,
+        campaignId: campaign.campaign_id,
+        ownerUserId: campaign.user_id,
+        filename: safeFilename(file.name),
+        mimeType: file.type,
+        buffer,
+        applicant,
+        source: "apply_form",
+      });
 
-  await sendConfirmationEmail({
-    db,
-    ownerUserId: campaign.user_id,
-    applicant,
-    campaignTitle: campaign.title,
+      if (result.outcome === "rejected") {
+        await sendApplicantEmail({
+          db,
+          ownerUserId: campaign.user_id,
+          applicantEmail: applicant.email,
+          email: buildApplicationProblemEmail({
+            candidateName: `${applicant.first_name} ${applicant.last_name}`,
+            campaignTitle: campaign.title,
+            reasonMessage: rejectionMessage(result.reason),
+            applyUrl,
+            companyName: COMPANY_NAME,
+          }),
+        });
+        return;
+      }
+
+      await sendConfirmationEmail({
+        db,
+        ownerUserId: campaign.user_id,
+        applicant,
+        campaignTitle: campaign.title,
+      });
+    } catch (err) {
+      // Infra failure mid-pipeline: the candidate already got a success
+      // screen, so tell them to retry rather than leaving them ghosted.
+      console.error(
+        `submitApplication: background ingest failed for ${applicant.email}:`,
+        err instanceof Error ? err.message : err,
+      );
+      await sendApplicantEmail({
+        db,
+        ownerUserId: campaign.user_id,
+        applicantEmail: applicant.email,
+        email: buildApplicationProblemEmail({
+          candidateName: `${applicant.first_name} ${applicant.last_name}`,
+          campaignTitle: campaign.title,
+          reasonMessage:
+            "Something went wrong on our side while processing your CV. Please try applying again.",
+          applyUrl,
+          companyName: COMPANY_NAME,
+        }),
+      });
+    }
   });
 
   return { ok: true };
 }
 
 /**
- * Best-effort application-received confirmation, sent from the campaign
- * owner's connected Gmail (fetched on the admin client — there is no session
- * here). A missing connection or a send failure must never undo a successful
- * ingest, so every failure path logs and returns instead of throwing.
+ * Best-effort candidate email from the campaign owner's connected Gmail
+ * (admin client — there is no session here). Failures log and return; they
+ * must never crash the deferred pipeline.
  */
+async function sendApplicantEmail(args: {
+  db: SupabaseDb;
+  ownerUserId: string;
+  applicantEmail: string;
+  email: BuiltEmail;
+}): Promise<void> {
+  try {
+    const connection = await fetchGmailConnection(args.ownerUserId, args.db);
+    if (!connection) {
+      console.warn(
+        "submitApplication: campaign owner has no Gmail connected; skipping applicant email",
+      );
+      return;
+    }
+
+    const gmail = createGmailClient(connection.refresh_token);
+    await sendEmail(gmail, {
+      to: args.applicantEmail,
+      subject: args.email.subject,
+      html: args.email.html,
+      text: args.email.text,
+      fromName: `${COMPANY_NAME} Recruiting`,
+    });
+  } catch (err) {
+    console.error("submitApplication: applicant email failed (non-blocking):", err);
+  }
+}
+
+/** Application-received confirmation after a successful ingest (best-effort). */
 async function sendConfirmationEmail(args: {
   db: SupabaseDb;
   ownerUserId: string;
   applicant: ApplicantIdentity;
   campaignTitle: string;
 }): Promise<void> {
-  try {
-    const connection = await fetchGmailConnection(args.ownerUserId, args.db);
-    if (!connection) {
-      console.warn(
-        "submitApplication: campaign owner has no Gmail connected; skipping confirmation email",
-      );
-      return;
-    }
-
-    const gmail = createGmailClient(connection.refresh_token);
-    const { subject, html, text } = buildApplicationReceivedEmail({
+  await sendApplicantEmail({
+    db: args.db,
+    ownerUserId: args.ownerUserId,
+    applicantEmail: args.applicant.email,
+    email: buildApplicationReceivedEmail({
       candidateName: `${args.applicant.first_name} ${args.applicant.last_name}`,
       campaignTitle: args.campaignTitle,
       companyName: COMPANY_NAME,
-    });
-    await sendEmail(gmail, {
-      to: args.applicant.email,
-      subject,
-      html,
-      text,
-      fromName: `${COMPANY_NAME} Recruiting`,
-    });
-  } catch (err) {
-    console.error("submitApplication: confirmation email failed (non-blocking):", err);
-  }
+    }),
+  });
 }

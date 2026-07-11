@@ -1,7 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Captures `after()` callbacks WITHOUT running them, so tests control when
+// the deferred pipeline executes — mirroring production, where the response
+// returns first.
+const { afterQueue } = vi.hoisted(() => ({
+  afterQueue: [] as Array<() => unknown>,
+}));
+
+vi.mock("next/server", () => ({
+  after: (fn: () => unknown) => {
+    afterQueue.push(fn);
+  },
+}));
+
+async function flushAfter(): Promise<void> {
+  for (const fn of afterQueue.splice(0)) await fn();
+}
+
 vi.mock("next/headers", () => ({
   headers: vi.fn(() => Promise.resolve({ get: () => null })),
+}));
+vi.mock("@/lib/http/origin", () => ({
+  getRequestOrigin: () => Promise.resolve("https://hire.example.com"),
 }));
 vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn(() => ({})) }));
@@ -62,6 +82,7 @@ function form(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  afterQueue.length = 0;
   // clearAllMocks wipes call history but not implementations — re-establish the
   // happy-path default so a throwing override (the rate-limit test) can't leak.
   mockRateLimit.mockReturnValue(undefined);
@@ -105,10 +126,14 @@ describe("loadApplyContext", () => {
 });
 
 describe("submitApplication", () => {
-  it("ingests a valid CV and returns ok", async () => {
+  it("returns ok immediately — the ingest pipeline runs only after the response", async () => {
     const result = await submitApplication(form());
 
     expect(result).toEqual({ ok: true });
+    expect(mockIngest).not.toHaveBeenCalled();
+
+    await flushAfter();
+
     expect(mockIngest).toHaveBeenCalledWith(
       expect.objectContaining({
         campaignId: "camp-1",
@@ -123,6 +148,7 @@ describe("submitApplication", () => {
     await submitApplication(
       form({ first_name: " Alice ", last_name: "Smith", email: "Alice@Example.COM" }),
     );
+    await flushAfter();
 
     expect(mockIngest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -143,6 +169,7 @@ describe("submitApplication", () => {
     data.set("website", "alice.dev");
 
     await submitApplication(data);
+    await flushAfter();
 
     expect(mockIngest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -175,6 +202,7 @@ describe("submitApplication", () => {
 
   it("sends a confirmation email to the applicant after a successful ingest", async () => {
     await submitApplication(form());
+    await flushAfter();
 
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.anything(),
@@ -185,28 +213,50 @@ describe("submitApplication", () => {
     );
   });
 
-  it("still returns ok when the confirmation email fails (best-effort)", async () => {
+  it("still completes the deferred pipeline when the confirmation email fails (best-effort)", async () => {
     mockSendEmail.mockRejectedValue(new Error("gmail down"));
 
     const result = await submitApplication(form());
 
     expect(result).toEqual({ ok: true });
+    await expect(flushAfter()).resolves.toBeUndefined();
   });
 
   it("skips the confirmation email when the owner has no Gmail connected", async () => {
     mockFetchConnection.mockResolvedValue(null);
 
     const result = await submitApplication(form());
+    await flushAfter();
 
     expect(result).toEqual({ ok: true });
     expect(mockSendEmail).not.toHaveBeenCalled();
   });
 
-  it("does not send a confirmation email when the ingest is rejected", async () => {
+  it("emails an actionable problem notice instead of a confirmation when the ingest is rejected", async () => {
     mockIngest.mockResolvedValue({ outcome: "rejected", reason: "not_a_cv" });
 
-    await expect(submitApplication(form())).rejects.toThrow();
-    expect(mockSendEmail).not.toHaveBeenCalled();
+    const result = await submitApplication(form());
+    await flushAfter();
+
+    expect(result).toEqual({ ok: true });
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const sent = mockSendEmail.mock.calls[0][1];
+    expect(sent.to).toBe("alice@example.com");
+    expect(sent.subject.toLowerCase()).toContain("action needed");
+    expect(sent.text).toContain("doesn't look like a CV");
+    expect(sent.text).toContain("https://hire.example.com/apply/backend-engineer");
+  });
+
+  it("emails a retry notice when the pipeline itself blows up mid-flight", async () => {
+    mockIngest.mockRejectedValue(new Error("marker down"));
+
+    const result = await submitApplication(form());
+    await flushAfter();
+
+    expect(result).toEqual({ ok: true });
+    const sent = mockSendEmail.mock.calls[0][1];
+    expect(sent.subject.toLowerCase()).toContain("action needed");
+    expect(sent.text).toContain("try applying again");
   });
 
   it("rate-limits before touching the database", async () => {
@@ -255,15 +305,13 @@ describe("submitApplication", () => {
     expect(mockIngest).not.toHaveBeenCalled();
   });
 
-  it("surfaces an ingest rejection as actionable copy (no email on the CV)", async () => {
+  it("carries the specific rejection reason in the problem email (no email on the CV)", async () => {
     mockIngest.mockResolvedValue({ outcome: "rejected", reason: "no_email" });
 
-    await expect(submitApplication(form())).rejects.toThrow(/couldn't find an email address/i);
-  });
+    await submitApplication(form());
+    await flushAfter();
 
-  it("surfaces a not-a-CV rejection", async () => {
-    mockIngest.mockResolvedValue({ outcome: "rejected", reason: "not_a_cv" });
-
-    await expect(submitApplication(form())).rejects.toThrow(/doesn't look like a CV/i);
+    const sent = mockSendEmail.mock.calls[0][1];
+    expect(sent.text).toContain("couldn't find an email address");
   });
 });
