@@ -34,6 +34,7 @@ vi.mock("@/lib/supabase/admin", () => ({
 import {
   saveAnswerScores,
   saveVoiceTranscript,
+  saveVoiceTranscriptDraft,
   markScreeningResponseExpired,
   markScreeningResponseExpiredAsSystem,
   fetchExpiredSentScreeningAppIds,
@@ -251,6 +252,51 @@ describe("saveVoiceTranscript", () => {
 
     await expect(saveVoiceTranscript("app-1", transcript)).rejects.toThrow(
       /Failed to save voice transcript: RLS denied/,
+    );
+  });
+});
+
+describe("saveVoiceTranscriptDraft", () => {
+  const transcript: VoiceTranscriptTurn[] = [
+    { role: "agent", text: "Tell me about a scaling problem you solved.", at: "2026-06-03T10:00:00.000Z" },
+    { role: "candidate", text: "We sharded the orders table by tenant.", at: "2026-06-03T10:00:09.000Z" },
+  ];
+
+  // The draft writer takes an explicit db (the agent route passes the admin
+  // client) — a purpose-built chain keeps the assertions self-contained.
+  function draftDb() {
+    const statusEq = vi.fn().mockResolvedValue({ error: null });
+    const appEq = vi.fn().mockReturnValue({ eq: statusEq });
+    const update = vi.fn().mockReturnValue({ eq: appEq });
+    const from = vi.fn().mockReturnValue({ update });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { db: { from } as any, from, update, appEq, statusEq };
+  }
+
+  it("writes the transcript WITHOUT touching status or responded_at (draft semantics)", async () => {
+    const { db, from, update, appEq } = draftDb();
+
+    await saveVoiceTranscriptDraft("app-1", transcript, db);
+
+    expect(from).toHaveBeenCalledWith("screening_question_responses");
+    expect(update).toHaveBeenCalledWith({ transcript });
+    expect(appEq).toHaveBeenCalledWith("application_id", "app-1");
+  });
+
+  it("only writes while the response is still sent, so a late report can't rewrite a finalized one", async () => {
+    const { db, statusEq } = draftDb();
+
+    await saveVoiceTranscriptDraft("app-1", transcript, db);
+
+    expect(statusEq).toHaveBeenCalledWith("status", "sent");
+  });
+
+  it("throws when the update fails", async () => {
+    const { db, statusEq } = draftDb();
+    statusEq.mockResolvedValueOnce({ error: { message: "RLS denied" } });
+
+    await expect(saveVoiceTranscriptDraft("app-1", transcript, db)).rejects.toThrow(
+      /Failed to save voice transcript draft: RLS denied/,
     );
   });
 });

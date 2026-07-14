@@ -5,10 +5,7 @@ import { headers } from "next/headers";
 import { z } from "zod/v4";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import {
-  screeningAnswerSubmissionSchema,
-  voiceScreeningSubmissionSchema,
-} from "@/lib/validations";
+import { screeningAnswerSubmissionSchema } from "@/lib/validations";
 import { fetchApplicationForResponse } from "@/lib/data/candidates";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import type { CampaignStatus } from "@/lib/constants";
@@ -30,11 +27,11 @@ import {
   validateRequiredAnswersPresent,
   ScreeningResponseError,
 } from "@/lib/rules/screening-response";
+import { buildScreeningInstructions } from "@/lib/services/realtime";
 import {
-  createRealtimeSession,
-  buildScreeningInstructions,
-  type RealtimeSession,
-} from "@/lib/services/realtime";
+  createScreeningRoomGrant,
+  type ScreeningRoomGrant,
+} from "@/lib/services/livekit";
 import { transitionApplication } from "@/lib/data/transitions";
 
 const VOICE_RATE_LIMIT = {
@@ -292,16 +289,19 @@ async function autoScoreScreening(applicationId: string): Promise<void> {
 }
 
 /**
- * Mint an ephemeral OpenAI Realtime session for a candidate to take their
- * voice screening on `/respond/[token]` (#83). Gated on a verified screening
- * token (candidates have no account) and IP-rate-limited.
+ * Open a LiveKit room for a candidate to take their voice screening on
+ * `/respond/[token]`. Gated on a verified screening token (candidates have no
+ * account) and IP-rate-limited. The returned grant only lets the browser join
+ * that one room — the interview itself is run by the server-side agent worker,
+ * which reads the instructions off the room metadata and reports the
+ * transcript back through the agent API route.
  *
  * Lazy expiry: if the deadline has passed, the response is expired and the
- * application transitioned to `screening_expired` rather than minting a call.
+ * application transitioned to `screening_expired` rather than opening a call.
  */
 export async function startCandidateVoiceScreening(
   token: string,
-): Promise<RealtimeSession> {
+): Promise<ScreeningRoomGrant> {
   const { application_id } = verifyResponseToken(token);
 
   const ip = await getClientIp();
@@ -350,7 +350,7 @@ export async function startCandidateVoiceScreening(
     questions: questions.map((q) => ({ prompt: q.prompt, is_required: q.is_required })),
   });
 
-  return createRealtimeSession({ instructions });
+  return createScreeningRoomGrant({ applicationId: application_id, instructions });
 }
 
 /** Expire the response row and best-effort transition the application. */
@@ -364,31 +364,22 @@ async function expireScreeningResponse(applicationId: string): Promise<void> {
 }
 
 /**
- * Persist a completed voice screening call (#83): store the captured
- * transcript and advance `screening_sent → screening_completed`. The
- * recruiter's scoring action (#84) reads the transcript from here.
+ * Finalize a completed voice screening call: promote the agent-reported
+ * transcript draft to `responded` and advance `screening_sent →
+ * screening_completed`. The recruiter's scoring action (#84) reads the
+ * transcript from here.
  *
- * Token-gated + IP-rate-limited, mirroring `submitScreeningAnswers`. The schema
- * rejects a transcript that is empty OR has no candidate speech (interviewer
- * questions only) — a call the candidate never answered has nothing to score
- * and must be re-recorded; a hard capture failure goes through
- * `reportVoiceScreeningFailure` instead.
+ * The browser sends only the token — the transcript itself was captured
+ * SERVER-side by the agent worker and posted to the agent API route during
+ * the call, so the candidate's machine never supplies evidence. A draft with
+ * no candidate speech (interviewer questions only) is rejected: there is
+ * nothing to score, and the candidate must re-record; a hard capture failure
+ * goes through `reportVoiceScreeningFailure` instead.
  */
 export async function submitVoiceScreening(input: {
   token: string;
-  transcript: VoiceTranscriptTurn[];
 }): Promise<{ ok: true }> {
-  let parsed;
-  try {
-    parsed = voiceScreeningSubmissionSchema.parse(input);
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      throw new Error(err.issues[0]?.message ?? "Invalid submission");
-    }
-    throw err;
-  }
-
-  const { application_id } = verifyResponseToken(parsed.token);
+  const { application_id } = verifyResponseToken(input.token);
 
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "voice-screening-submit", ...VOICE_RATE_LIMIT });
@@ -402,12 +393,23 @@ export async function submitVoiceScreening(input: {
 
   assertResponseNotResubmitted(existing.status);
 
+  // The agent reports turns incrementally during the call; by review time the
+  // draft is normally complete. An empty/agent-only draft means the call never
+  // captured an answer (or the last report is still in flight — retrying in a
+  // moment resolves that).
+  const transcript: VoiceTranscriptTurn[] = existing.transcript ?? [];
+  if (!transcript.some((t) => t.role === "candidate")) {
+    throw new ScreeningResponseError(
+      "The call didn't capture any spoken answers — please wait a moment and try again, or re-record.",
+    );
+  }
+
   // Freeze the submission (and the auto-score that follows) unless the campaign
   // is Active.
   const app = await fetchApplicationForResponse(application_id);
   if (app) assertCampaignAcceptingResponses(app.campaign_status);
 
-  await saveVoiceTranscript(application_id, parsed.transcript);
+  await saveVoiceTranscript(application_id, transcript);
 
   await tryTransition(
     application_id,
