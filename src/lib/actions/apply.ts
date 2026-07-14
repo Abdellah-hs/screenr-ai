@@ -7,7 +7,6 @@ import type { SupabaseDb } from "@/lib/supabase/types";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestOrigin } from "@/lib/http/origin";
 import { fetchCampaignBySlug } from "@/lib/data/campaigns";
-import { fetchGmailConnection } from "@/lib/data/integrations";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import { isSupportedResumeMimeType } from "@/lib/resume-ingest/mime";
 import {
@@ -16,7 +15,7 @@ import {
   type IngestRejectionReason,
 } from "@/lib/resume-ingest/ingest-resume";
 import { applyApplicantSchema } from "@/lib/validations";
-import { createGmailClient } from "@/lib/services/gmail";
+import { getRecruiterGmailClient } from "./gmail-sender";
 import { sendEmail } from "@/lib/services/email";
 import { buildApplicationReceivedEmail } from "@/lib/services/email-templates/application-received";
 import { buildApplicationProblemEmail } from "@/lib/services/email-templates/application-problem";
@@ -197,11 +196,15 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
         return;
       }
 
-      await sendConfirmationEmail({
+      await sendApplicantEmail({
         db,
         ownerUserId: campaign.user_id,
-        applicant,
-        campaignTitle: campaign.title,
+        applicantEmail: applicant.email,
+        email: buildApplicationReceivedEmail({
+          candidateName: `${applicant.first_name} ${applicant.last_name}`,
+          campaignTitle: campaign.title,
+          companyName: COMPANY_NAME,
+        }),
       });
     } catch (err) {
       // Infra failure mid-pipeline: the candidate already got a success
@@ -241,15 +244,9 @@ async function sendApplicantEmail(args: {
   email: BuiltEmail;
 }): Promise<void> {
   try {
-    const connection = await fetchGmailConnection(args.ownerUserId, args.db);
-    if (!connection) {
-      console.warn(
-        "submitApplication: campaign owner has no Gmail connected; skipping applicant email",
-      );
-      return;
-    }
-
-    const gmail = createGmailClient(connection.refresh_token);
+    // Throws when the owner has no inbox connected; caught below so a missing
+    // connection just skips the email rather than crashing the pipeline.
+    const gmail = await getRecruiterGmailClient(args.ownerUserId, args.db);
     await sendEmail(gmail, {
       to: args.applicantEmail,
       subject: args.email.subject,
@@ -260,23 +257,4 @@ async function sendApplicantEmail(args: {
   } catch (err) {
     console.error("submitApplication: applicant email failed (non-blocking):", err);
   }
-}
-
-/** Application-received confirmation after a successful ingest (best-effort). */
-async function sendConfirmationEmail(args: {
-  db: SupabaseDb;
-  ownerUserId: string;
-  applicant: ApplicantIdentity;
-  campaignTitle: string;
-}): Promise<void> {
-  await sendApplicantEmail({
-    db: args.db,
-    ownerUserId: args.ownerUserId,
-    applicantEmail: args.applicant.email,
-    email: buildApplicationReceivedEmail({
-      candidateName: `${args.applicant.first_name} ${args.applicant.last_name}`,
-      campaignTitle: args.campaignTitle,
-      companyName: COMPANY_NAME,
-    }),
-  });
 }

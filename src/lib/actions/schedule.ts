@@ -10,21 +10,16 @@ import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { bookInterviewSlotSchema, uuidSchema } from "@/lib/validations";
 import {
   fetchSchedulingContext,
-  fetchBookedSlotIsos,
   fetchBookingForApplication,
   fetchBookingForRecruiter,
   insertBooking,
   type InterviewBooking,
 } from "@/lib/data/scheduling";
 import {
-  filterSlotsByBusy,
-  generateSlotsFromWindows,
-  padBusyBlocks,
   pickRecommendedSlots,
-  INTERVIEW_BUFFER_MINUTES,
   type GeneratedSlot,
 } from "@/lib/scheduling/slots";
-import { fetchOwnerSchedule } from "@/lib/scheduling/owner-schedule";
+import { resolveAvailableSlots } from "@/lib/scheduling/available-slots";
 import { createBookingCalendarEvent } from "@/lib/scheduling/booking-event";
 import { transitionApplicationAsSystem } from "@/lib/data/transitions";
 import { getRecruiterGmailClient } from "./gmail-sender";
@@ -110,13 +105,10 @@ export async function loadSchedulingContext(
   }
 
   // Strict calendar gate: no consultable calendar → no slots at all.
-  const schedule = await fetchOwnerSchedule({
-    ownerUserId: ctx.owner_user_id,
-    horizonDays: ctx.booking_horizon_days,
-  });
-  if (!schedule.available) {
+  const resolved = await resolveAvailableSlots(ctx);
+  if (resolved.status === "calendar_unavailable") {
     console.warn(
-      `loadSchedulingContext: calendar unavailable (${schedule.reason}) for application ${application_id}`,
+      `loadSchedulingContext: calendar unavailable (${resolved.reason}) for application ${application_id}`,
     );
     return {
       campaign_title: ctx.campaign_title,
@@ -129,41 +121,25 @@ export async function loadSchedulingContext(
     };
   }
 
-  // Slots are labeled in the calendar's own timezone; the campaign field is
-  // only a fallback for the rare calendar that reports none.
-  const timezone = schedule.timeZone ?? ctx.timezone ?? "UTC";
-
   // Calendar read fine, but the interviewer hasn't published hours blocks.
-  if (schedule.windows.length === 0) {
+  if (resolved.status === "no_hours") {
     return {
       campaign_title: ctx.campaign_title,
       booking: null,
       slots: [],
       recommended_iso: [],
-      timezone,
+      timezone: resolved.timezone,
       calendar_unavailable: false,
       no_hours: true,
     };
   }
 
-  const bookedIso = await fetchBookedSlotIsos(ctx.campaign_id);
-  const slots = filterSlotsByBusy(
-    generateSlotsFromWindows({
-      windows: schedule.windows,
-      slotMinutes: ctx.slot_minutes,
-      timezone,
-      bookedIso,
-    }),
-    ctx.slot_minutes,
-    padBusyBlocks(schedule.conflicts, INTERVIEW_BUFFER_MINUTES),
-  );
-
   return {
     campaign_title: ctx.campaign_title,
     booking: null,
-    slots,
-    recommended_iso: pickRecommendedSlots(slots),
-    timezone,
+    slots: resolved.slots,
+    recommended_iso: pickRecommendedSlots(resolved.slots),
+    timezone: resolved.timezone,
     calendar_unavailable: false,
     no_hours: false,
   };
@@ -219,44 +195,30 @@ export async function bookInterviewSlot(input: {
       "This interview is already scheduled or no longer open for booking.",
     );
   }
-  // Strict calendar gate, re-checked at booking time: if the interviewer's
-  // calendar can't be consulted right now, refuse rather than risk a conflict.
-  const schedule = await fetchOwnerSchedule({
-    ownerUserId: ctx.owner_user_id,
-    horizonDays: ctx.booking_horizon_days,
-  });
-  if (!schedule.available) {
+  // Strict calendar gate + slot re-validation, re-checked at booking time: refuse
+  // if the interviewer's calendar can't be consulted right now rather than risk a
+  // conflict. Regenerates the exact list the page offered (shared helper), so a
+  // slot that was free at page load but is taken now can no longer be booked.
+  const resolved = await resolveAvailableSlots(ctx);
+  if (resolved.status === "calendar_unavailable") {
     console.warn(
-      `bookInterviewSlot: calendar unavailable (${schedule.reason}) for application ${application_id}`,
+      `bookInterviewSlot: calendar unavailable (${resolved.reason}) for application ${application_id}`,
     );
     throw new Error(
       "Booking is temporarily unavailable. Please try again shortly, or contact the hiring team.",
     );
   }
-  if (schedule.windows.length === 0) {
+  if (resolved.status === "no_hours") {
     throw new Error(
       "Interview times aren't open for this role yet. Please contact the hiring team.",
     );
   }
 
-  const timezone = schedule.timeZone ?? ctx.timezone ?? "UTC";
-
-  // Re-validate the chosen slot server-side against the live calendar —
-  // published hours minus buffered conflicts — so a slot that was free when
-  // the page loaded but is taken now can no longer be booked.
-  const bookedIso = await fetchBookedSlotIsos(ctx.campaign_id);
-  const slots = filterSlotsByBusy(
-    generateSlotsFromWindows({
-      windows: schedule.windows,
-      slotMinutes: ctx.slot_minutes,
-      timezone,
-      bookedIso,
-    }),
-    ctx.slot_minutes,
-    padBusyBlocks(schedule.conflicts, INTERVIEW_BUFFER_MINUTES),
-  );
+  const timezone = resolved.timezone;
   const chosenMs = new Date(parsed.start_iso).getTime();
-  const match = slots.find((s) => new Date(s.startIso).getTime() === chosenMs);
+  const match = resolved.slots.find(
+    (s) => new Date(s.startIso).getTime() === chosenMs,
+  );
   if (!match) {
     throw new Error("That time isn't available. Please pick another slot.");
   }

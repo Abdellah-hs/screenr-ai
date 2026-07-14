@@ -2,15 +2,10 @@
 
 import { useRef, useState, useTransition } from "react";
 import { submitApplication } from "@/lib/actions/apply";
+import { isSupportedResumeMimeType } from "@/lib/resume-ingest/mime";
 import MatiousLogo from "@/components/matious-logo";
 import BrandPanel from "./brand-panel";
 
-// Mirror of the server's accepted types — for instant client-side feedback only;
-// the server (`isSupportedResumeMimeType`) remains authoritative.
-const ACCEPTED_MIME = new Set([
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
 const ACCEPT_ATTR = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const MAX_BYTES = 10 * 1024 * 1024;
 
@@ -56,7 +51,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
       setFile(null);
       return;
     }
-    if (!ACCEPTED_MIME.has(next.type)) {
+    if (!isSupportedResumeMimeType(next.type)) {
       setError("Please upload your CV as a PDF or Word (.docx) document.");
       return;
     }
