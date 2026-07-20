@@ -1,95 +1,71 @@
 import { describe, it, expect } from "vitest";
 import {
   filterSlotsByBusy,
-  generateSlots,
+  generateBusinessHourWindows,
   generateSlotsFromWindows,
   padBusyBlocks,
   pickRecommendedSlots,
   zonedWallTimeToUtc,
   type GeneratedSlot,
 } from "./slots";
-import type { InterviewAvailabilityRule } from "@/lib/constants";
 
-// Monday 09:00–11:00 (minutes from midnight). Jun 22 2026 is a Monday.
-const mondayRule: InterviewAvailabilityRule = {
-  weekday: 1,
-  start_minute: 9 * 60,
-  end_minute: 11 * 60,
-};
+describe("generateBusinessHourWindows", () => {
+  const SUNDAY = new Date("2026-06-21T00:00:00.000Z"); // Jun 22 2026 is a Monday.
 
-describe("generateSlots", () => {
-  it("expands a weekly rule into slot-length chunks in UTC", () => {
-    const slots = generateSlots({
-      rules: [mondayRule],
-      slotMinutes: 60,
+  it("emits one 9am-6pm window for each weekday in the horizon, skipping weekends", () => {
+    const windows = generateBusinessHourWindows({
+      horizonDays: 6, // Sun 21 .. Sat 27 inclusive
       timezone: "UTC",
-      horizonDays: 7,
-      now: new Date("2026-06-21T00:00:00.000Z"), // Sunday
+      now: SUNDAY,
     });
 
-    expect(slots.map((s) => s.startIso)).toEqual([
-      "2026-06-22T09:00:00.000Z",
-      "2026-06-22T10:00:00.000Z",
+    expect(windows).toEqual([
+      { startIso: "2026-06-22T09:00:00.000Z", endIso: "2026-06-22T18:00:00.000Z" },
+      { startIso: "2026-06-23T09:00:00.000Z", endIso: "2026-06-23T18:00:00.000Z" },
+      { startIso: "2026-06-24T09:00:00.000Z", endIso: "2026-06-24T18:00:00.000Z" },
+      { startIso: "2026-06-25T09:00:00.000Z", endIso: "2026-06-25T18:00:00.000Z" },
+      { startIso: "2026-06-26T09:00:00.000Z", endIso: "2026-06-26T18:00:00.000Z" },
     ]);
   });
 
-  it("only emits slots that fully fit before the rule's end", () => {
-    const slots = generateSlots({
-      rules: [{ weekday: 1, start_minute: 9 * 60, end_minute: 10 * 60 + 30 }], // 90 min window
-      slotMinutes: 60,
+  it("returns nothing when the horizon only spans a weekend", () => {
+    const windows = generateBusinessHourWindows({
+      horizonDays: 1, // Saturday + Sunday only
       timezone: "UTC",
-      horizonDays: 7,
-      now: new Date("2026-06-21T00:00:00.000Z"),
+      now: new Date("2026-06-27T00:00:00.000Z"), // Saturday
     });
 
-    // 9:00 fits (ends 10:00); 10:00 would end 11:00 > 10:30, so excluded.
-    expect(slots.map((s) => s.startIso)).toEqual(["2026-06-22T09:00:00.000Z"]);
+    expect(windows).toEqual([]);
   });
 
-  it("excludes past slots and those inside the lead time", () => {
-    const slots = generateSlots({
-      rules: [mondayRule],
-      slotMinutes: 60,
+  it("respects a custom start/end minute window", () => {
+    const windows = generateBusinessHourWindows({
+      horizonDays: 0,
       timezone: "UTC",
-      horizonDays: 3, // next Monday is out of range
-      now: new Date("2026-06-22T09:30:00.000Z"), // Monday mid-window
-      leadMinutes: 60, // earliest bookable = 10:30
+      now: new Date("2026-06-22T00:00:00.000Z"), // Monday
+      startMinute: 8 * 60,
+      endMinute: 16 * 60,
     });
 
-    expect(slots).toEqual([]);
-  });
-
-  it("excludes already-booked slots", () => {
-    const slots = generateSlots({
-      rules: [mondayRule],
-      slotMinutes: 60,
-      timezone: "UTC",
-      horizonDays: 7,
-      now: new Date("2026-06-21T00:00:00.000Z"),
-      bookedIso: ["2026-06-22T09:00:00.000Z"],
-    });
-
-    expect(slots.map((s) => s.startIso)).toEqual(["2026-06-22T10:00:00.000Z"]);
+    expect(windows).toEqual([
+      { startIso: "2026-06-22T08:00:00.000Z", endIso: "2026-06-22T16:00:00.000Z" },
+    ]);
   });
 
   it("resolves wall-clock times correctly across a DST boundary", () => {
-    // America/New_York springs forward on Sun Mar 8 2026; 09:00 local is EDT
-    // (UTC-4) → 13:00 UTC, not 14:00 (EST).
-    const slots = generateSlots({
-      rules: [{ weekday: 0, start_minute: 9 * 60, end_minute: 10 * 60 }], // Sunday 09:00
-      slotMinutes: 60,
+    // America/New_York springs forward on Sun Mar 8 2026; Monday Mar 9 09:00
+    // local is EDT (UTC-4) → 13:00 UTC, not 14:00 (EST). `now` is deliberately
+    // mid-morning UTC on Mar 9, not midnight — at UTC midnight, New York local
+    // time is still ~8pm Mar 8 (Sunday), which would misclassify the day.
+    const windows = generateBusinessHourWindows({
+      horizonDays: 0,
       timezone: "America/New_York",
-      horizonDays: 2,
-      now: new Date("2026-03-07T00:00:00.000Z"),
+      now: new Date("2026-03-09T12:00:00.000Z"), // 8am EDT, safely Monday locally
     });
 
-    expect(slots.map((s) => s.startIso)).toEqual(["2026-03-08T13:00:00.000Z"]);
-  });
-
-  it("returns nothing when there are no rules", () => {
-    expect(
-      generateSlots({ rules: [], slotMinutes: 60, timezone: "UTC", horizonDays: 7 }),
-    ).toEqual([]);
+    expect(windows).toEqual([
+      { startIso: "2026-03-09T13:00:00.000Z", endIso: "2026-03-09T22:00:00.000Z" },
+    ]);
   });
 });
 

@@ -14,13 +14,14 @@ export type OwnerSchedule =
     };
 
 /**
- * The campaign owner's published "Interview hours" windows and conflicting
- * events over the booking window, for the candidate scheduling flow. STRICT
- * by product decision (2026-07-08): when the owner's calendar cannot be
- * consulted — no Google connection, calendar scopes not granted yet, or the
- * lookup failed — the caller must offer NO slots and reject bookings, rather
- * than fall back to anything configured in-app. A candidate must never book
- * a time the interviewer might not be free.
+ * The campaign owner's conflicting calendar events over the booking window,
+ * for the candidate scheduling flow (the bookable window itself is synthesized
+ * elsewhere — see `resolveAvailableSlots`). STRICT by product decision
+ * (2026-07-08): when the owner's calendar cannot be consulted — no Google
+ * connection, calendar scopes not granted yet, or the lookup failed — the
+ * caller must offer NO slots and reject bookings, rather than fall back to
+ * anything configured in-app. A candidate must never book a time the
+ * interviewer might not be free.
  *
  * Runs on the admin client: the callers are candidate-facing (token-gated,
  * no recruiter session).

@@ -76,13 +76,12 @@ describe("fetchOwnerSchedule", () => {
     expect(mockFetchCalendarSchedule).not.toHaveBeenCalled();
   });
 
-  it("returns windows, conflicts and timezone over a window padded past the booking horizon", async () => {
+  it("returns conflicts and timezone over a window padded past the booking horizon", async () => {
     mockFetchGmailConnection.mockResolvedValue({
       refresh_token: "rt-1",
       scope: FULL_SCOPE,
     });
     const schedule = {
-      windows: [{ startIso: "2026-07-10T09:00:00.000Z", endIso: "2026-07-10T12:00:00.000Z" }],
       conflicts: [{ startIso: "2026-07-10T10:00:00.000Z", endIso: "2026-07-10T10:30:00.000Z" }],
       timeZone: "Africa/Casablanca",
     };

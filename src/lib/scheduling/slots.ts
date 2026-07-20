@@ -1,5 +1,3 @@
-import type { InterviewAvailabilityRule } from "@/lib/constants";
-
 /** A single bookable AI-interview slot. */
 export interface GeneratedSlot {
   /** UTC instant of the slot start, ISO string — the canonical identifier. */
@@ -8,21 +6,6 @@ export interface GeneratedSlot {
   dayKey: string;
   /** Human label in the campaign timezone, e.g. "Mon, Jun 22, 9:00 AM". */
   label: string;
-}
-
-export interface GenerateSlotsParams {
-  rules: InterviewAvailabilityRule[];
-  slotMinutes: number;
-  /** IANA timezone the rules' wall-clock times are expressed in. */
-  timezone: string;
-  /** How many days ahead candidates may book. */
-  horizonDays: number;
-  /** "Now" — injectable for tests. Defaults to the current time. */
-  now?: Date;
-  /** Already-booked slot start instants (ISO) to exclude. */
-  bookedIso?: string[];
-  /** Minimum notice before a slot can be booked. Defaults to 60 minutes. */
-  leadMinutes?: number;
 }
 
 /** The tz offset (ms) at `date`, such that localWallClock = utc + offset. */
@@ -87,44 +70,50 @@ function localYmd(date: Date, timeZone: string): { y: number; m: number; d: numb
   return { y: Number(map.year), m: Number(map.month), d: Number(map.day) };
 }
 
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
+/** A busy block (UTC instants) to subtract from the bookable slots. */
+export interface BusyBlock {
+  startIso: string;
+  endIso: string;
+}
+
+/** 9:00 AM, in minutes from midnight — the default business-hours start. */
+export const BUSINESS_HOURS_START_MINUTE = 9 * 60;
+/** 6:00 PM, in minutes from midnight — the default business-hours end. */
+export const BUSINESS_HOURS_END_MINUTE = 18 * 60;
+
+export interface GenerateBusinessHourWindowsParams {
+  /** How many days ahead candidates may book. */
+  horizonDays: number;
+  /** IANA timezone the business-hours window is expressed in. */
+  timezone: string;
+  /** "Now" — injectable for tests. Defaults to the current time. */
+  now?: Date;
+  /** Minutes-from-midnight the window opens. Defaults to 9am. */
+  startMinute?: number;
+  /** Minutes-from-midnight the window closes. Defaults to 6pm. */
+  endMinute?: number;
 }
 
 /**
- * Generate the bookable interview slots from a campaign's weekly availability
- * rules over the booking horizon, in the campaign timezone, excluding past /
- * within-lead-time and already-booked slots. Pure — `now` and `bookedIso` are
- * injected. The candidate booking flow regenerates this server-side to validate
- * a chosen slot, so it is the single source of truth for "what's offered".
+ * Synthesize one Mon-Fri business-hours window (9am-6pm by default) per
+ * weekday across the booking horizon, in the given timezone — the automatic
+ * replacement for the old calendar-marked "Interview hours" blocks; weekends
+ * are skipped entirely. Feeds straight into `generateSlotsFromWindows`
+ * exactly like a calendar-derived window would. Pure; `now` is injected.
  */
-export function generateSlots(params: GenerateSlotsParams): GeneratedSlot[] {
+export function generateBusinessHourWindows(
+  params: GenerateBusinessHourWindowsParams,
+): BusyBlock[] {
   const {
-    rules,
-    slotMinutes,
-    timezone,
     horizonDays,
+    timezone,
     now = new Date(),
-    bookedIso = [],
-    leadMinutes = 60,
+    startMinute = BUSINESS_HOURS_START_MINUTE,
+    endMinute = BUSINESS_HOURS_END_MINUTE,
   } = params;
 
-  if (rules.length === 0 || slotMinutes <= 0) return [];
-
-  const earliestMs = now.getTime() + leadMinutes * 60_000;
-  const bookedMs = new Set(bookedIso.map((iso) => new Date(iso).getTime()));
-  const labelFmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-
   const base = localYmd(now, timezone);
-  const slots: GeneratedSlot[] = [];
-  const seenMs = new Set<number>();
+  const windows: BusyBlock[] = [];
 
   for (let i = 0; i <= horizonDays; i++) {
     // Walk calendar dates via UTC arithmetic on the local Y/M/D triple.
@@ -132,36 +121,17 @@ export function generateSlots(params: GenerateSlotsParams): GeneratedSlot[] {
     const y = dayDate.getUTCFullYear();
     const m = dayDate.getUTCMonth() + 1;
     const d = dayDate.getUTCDate();
-    const weekday = dayDate.getUTCDay(); // 0=Sunday, matches rule.weekday
+    const weekday = dayDate.getUTCDay(); // 0=Sunday..6=Saturday
 
-    for (const rule of rules) {
-      if (rule.weekday !== weekday) continue;
-      for (
-        let s = rule.start_minute;
-        s + slotMinutes <= rule.end_minute;
-        s += slotMinutes
-      ) {
-        const start = zonedWallTimeToUtc(y, m, d, s, timezone);
-        const ms = start.getTime();
-        if (ms < earliestMs || bookedMs.has(ms) || seenMs.has(ms)) continue;
-        seenMs.add(ms);
-        slots.push({
-          startIso: start.toISOString(),
-          dayKey: `${y}-${pad(m)}-${pad(d)}`,
-          label: labelFmt.format(start),
-        });
-      }
-    }
+    if (weekday === 0 || weekday === 6) continue; // weekends closed
+
+    windows.push({
+      startIso: zonedWallTimeToUtc(y, m, d, startMinute, timezone).toISOString(),
+      endIso: zonedWallTimeToUtc(y, m, d, endMinute, timezone).toISOString(),
+    });
   }
 
-  slots.sort((a, b) => a.startIso.localeCompare(b.startIso));
-  return slots;
-}
-
-/** A busy block (UTC instants) to subtract from the bookable slots. */
-export interface BusyBlock {
-  startIso: string;
-  endIso: string;
+  return windows;
 }
 
 /**
@@ -201,13 +171,11 @@ export interface GenerateSlotsFromWindowsParams {
 }
 
 /**
- * Chop the manager's published calendar windows into bookable slots — the
- * calendar-blocks counterpart of `generateSlots` (which expands weekly rules).
- * Overlapping/duplicate windows are merged first so a doubled-up recurring
- * block can't produce misaligned or duplicate slots. Slots start at the
- * (merged) window start and step by `slotMinutes`; a trailing remainder
- * shorter than a slot is dropped. Same exclusions as `generateSlots`: past /
- * within-lead-time and already-booked starts.
+ * Chop bookable windows (from `generateBusinessHourWindows`) into slots.
+ * Overlapping/duplicate windows are merged first so a doubled-up window can't
+ * produce misaligned or duplicate slots. Slots start at the (merged) window
+ * start and step by `slotMinutes`; a trailing remainder shorter than a slot is
+ * dropped. Exclusions: past / within-lead-time and already-booked starts.
  */
 export function generateSlotsFromWindows(
   params: GenerateSlotsFromWindowsParams,
@@ -308,7 +276,7 @@ export function pickRecommendedSlots(
  * [start, end) — back-to-back is fine, so a meeting ending exactly when a slot
  * starts (or starting exactly when it ends) does NOT knock the slot out.
  * Unparseable or inverted blocks are ignored; a block we can't interpret must
- * not erase real availability. Pure — same contract as `generateSlots`.
+ * not erase real availability. Pure.
  */
 export function filterSlotsByBusy(
   slots: GeneratedSlot[],

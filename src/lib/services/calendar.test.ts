@@ -88,7 +88,21 @@ describe("fetchCalendarSchedule", () => {
     });
   });
 
-  it("classifies a titled hours block as a window, matching the phrase case-insensitively", async () => {
+  it("classifies an ordinary meeting as a conflict", async () => {
+    mockEventsList.mockResolvedValue(
+      eventsResponse([
+        timed("2026-07-09T10:00:00Z", "2026-07-09T10:30:00Z", { summary: "1:1 sync" }),
+      ]),
+    );
+
+    const schedule = await fetchCalendarSchedule(WINDOW);
+
+    expect(schedule.conflicts).toEqual([
+      { startIso: "2026-07-09T10:00:00.000Z", endIso: "2026-07-09T10:30:00.000Z" },
+    ]);
+  });
+
+  it("classifies a legacy 'Interview hours'-titled event as an ordinary conflict — titles no longer carry meaning", async () => {
     mockEventsList.mockResolvedValue(
       eventsResponse([
         timed("2026-07-09T09:00:00+02:00", "2026-07-09T12:00:00+02:00", {
@@ -99,24 +113,8 @@ describe("fetchCalendarSchedule", () => {
 
     const schedule = await fetchCalendarSchedule(WINDOW);
 
-    expect(schedule.windows).toEqual([
-      { startIso: "2026-07-09T07:00:00.000Z", endIso: "2026-07-09T10:00:00.000Z" },
-    ]);
-    expect(schedule.conflicts).toEqual([]);
-  });
-
-  it("classifies an ordinary meeting as a conflict", async () => {
-    mockEventsList.mockResolvedValue(
-      eventsResponse([
-        timed("2026-07-09T10:00:00Z", "2026-07-09T10:30:00Z", { summary: "1:1 sync" }),
-      ]),
-    );
-
-    const schedule = await fetchCalendarSchedule(WINDOW);
-
-    expect(schedule.windows).toEqual([]);
     expect(schedule.conflicts).toEqual([
-      { startIso: "2026-07-09T10:00:00.000Z", endIso: "2026-07-09T10:30:00.000Z" },
+      { startIso: "2026-07-09T07:00:00.000Z", endIso: "2026-07-09T10:00:00.000Z" },
     ]);
   });
 
@@ -140,7 +138,6 @@ describe("fetchCalendarSchedule", () => {
 
     const schedule = await fetchCalendarSchedule(WINDOW);
 
-    expect(schedule.windows).toEqual([]);
     expect(schedule.conflicts).toEqual([]);
   });
 
@@ -191,23 +188,6 @@ describe("fetchCalendarSchedule", () => {
     expect(schedule.conflicts).toEqual([
       { startIso: "2026-07-10T00:00:00.000Z", endIso: "2026-07-11T00:00:00.000Z" },
     ]);
-  });
-
-  it("ignores an all-day hours block entirely — neither a window nor a conflict", async () => {
-    mockEventsList.mockResolvedValue(
-      eventsResponse([
-        {
-          summary: "Interview hours",
-          start: { date: "2026-07-10" },
-          end: { date: "2026-07-11" },
-        },
-      ]),
-    );
-
-    const schedule = await fetchCalendarSchedule(WINDOW);
-
-    expect(schedule.windows).toEqual([]);
-    expect(schedule.conflicts).toEqual([]);
   });
 
   it("passes the calendar timezone through, and null when Google omits it", async () => {

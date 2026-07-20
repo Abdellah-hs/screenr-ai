@@ -13,13 +13,11 @@ const inputClass =
 
 /**
  * Recruiter-facing settings for final-interview slot booking. Availability
- * itself is NOT configured here anymore — it comes straight from the campaign
- * owner's Google Calendar: events titled "Interview hours" are the bookable
- * windows, minus real conflicts, with a 15-minute buffer (see
- * `fetchCalendarSchedule` / `fetchOwnerSchedule`). This form only keeps the
+ * itself is NOT configured here — it's fully automatic: every weekday 9am-6pm
+ * is offered, minus the owner's real Google Calendar conflicts, with a
+ * 15-minute buffer (see `generateBusinessHourWindows` / `fetchOwnerSchedule`).
+ * The recruiter marks nothing on their calendar. This form only keeps the
  * scalar knobs: slot length, booking horizon, and a fallback timezone.
- * (The old weekly-rules editor was retired with the calendar-blocks decision;
- * saving a campaign now clears any legacy rules.)
  */
 export default function InterviewAvailabilityEditor({
   initialSlotMinutes = null,
@@ -51,13 +49,13 @@ export default function InterviewAvailabilityEditor({
           <path d="M16 2v4M8 2v4M3 10h18" />
         </svg>
         <div className="text-sm text-[#0C4A6E]">
-          <p className="font-medium">Availability comes from your Google Calendar.</p>
+          <p className="font-medium">Availability is automatic — nothing to set up.</p>
           <p className="mt-1 text-[#075985]">
-            Create events titled <strong>&quot;Interview hours&quot;</strong> (recurring works)
-            in your calendar — candidates can only book inside those blocks, minus your
-            existing meetings, with a 15-minute buffer on each side. Move or delete a block
-            and the bookable times follow. Requires your Google connection with calendar
-            access (Settings → Integrations).
+            Candidates can book any <strong>weekday between 9am and 6pm</strong> that&apos;s
+            free on your Google Calendar, minus your existing meetings with a 15-minute
+            buffer on each side. Just keep your calendar up to date — the bookable times
+            follow it. Requires your Google connection with calendar access
+            (Settings → Integrations).
           </p>
         </div>
       </div>

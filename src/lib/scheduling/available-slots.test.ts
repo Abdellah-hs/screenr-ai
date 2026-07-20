@@ -25,16 +25,11 @@ const CTX = {
   timezone: "UTC" as string | null,
 };
 
-// A 09:00–10:30 UTC window yields three 30-min slots: 09:00, 09:30, 10:00.
-const WINDOW = {
-  startIso: "2026-07-10T09:00:00.000Z",
-  endIso: "2026-07-10T10:30:00.000Z",
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
-  // Fix "now" before the window so slot lead-time exclusion is deterministic
-  // (resolveAvailableSlots doesn't forward `now`, so the generators read the clock).
+  // Fix "now" before the business-hours window so slot lead-time exclusion is
+  // deterministic (resolveAvailableSlots doesn't forward `now`, so the
+  // generators read the clock). 2026-07-10 is a Friday.
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-10T06:00:00.000Z"));
   mockFetchBookedSlotIsos.mockResolvedValue([]);
@@ -54,15 +49,16 @@ describe("resolveAvailableSlots", () => {
     expect(mockFetchBookedSlotIsos).not.toHaveBeenCalled();
   });
 
-  it("reports no_hours (and skips the booked read) when the calendar has no windows", async () => {
+  it("reports no_hours (and skips the booked read) when the horizon has no weekday business hours", async () => {
+    vi.setSystemTime(new Date("2026-07-11T06:00:00.000Z")); // Saturday
     mockFetchOwnerSchedule.mockResolvedValue({
       available: true,
-      windows: [],
       conflicts: [],
       timeZone: "Africa/Casablanca",
     });
 
-    const result = await resolveAvailableSlots(CTX);
+    // Horizon of 1 day from a Saturday only spans Sat + Sun — no business hours.
+    const result = await resolveAvailableSlots({ ...CTX, booking_horizon_days: 1 });
 
     expect(result).toEqual({ status: "no_hours", timezone: "Africa/Casablanca" });
     expect(mockFetchBookedSlotIsos).not.toHaveBeenCalled();
@@ -71,7 +67,6 @@ describe("resolveAvailableSlots", () => {
   it("falls back to the campaign timezone, then UTC, when the calendar reports none", async () => {
     mockFetchOwnerSchedule.mockResolvedValue({
       available: true,
-      windows: [],
       conflicts: [],
       timeZone: null,
     });
@@ -83,62 +78,57 @@ describe("resolveAvailableSlots", () => {
     expect(withNothing).toMatchObject({ timezone: "UTC" });
   });
 
-  it("returns the slots chopped from the published window", async () => {
+  it("generates the business-hour window automatically and chops it into slots", async () => {
     mockFetchOwnerSchedule.mockResolvedValue({
       available: true,
-      windows: [WINDOW],
       conflicts: [],
       timeZone: "UTC",
     });
 
-    const result = await resolveAvailableSlots(CTX);
+    // Horizon 0 → just today (Friday), so the auto-generated window is exactly
+    // 09:00-18:00 UTC: 18 clean 30-min slots, none excluded (lead time is only
+    // to 07:00, well before the window opens).
+    const result = await resolveAvailableSlots({ ...CTX, booking_horizon_days: 0 });
 
-    expect(result).toEqual({
-      status: "ok",
-      timezone: "UTC",
-      slots: [
-        expect.objectContaining({ startIso: "2026-07-10T09:00:00.000Z" }),
-        expect.objectContaining({ startIso: "2026-07-10T09:30:00.000Z" }),
-        expect.objectContaining({ startIso: "2026-07-10T10:00:00.000Z" }),
-      ],
-    });
+    const starts = result.status === "ok" ? result.slots.map((s) => s.startIso) : [];
+    expect(starts).toHaveLength(18);
+    expect(starts[0]).toBe("2026-07-10T09:00:00.000Z");
+    expect(starts[starts.length - 1]).toBe("2026-07-10T17:30:00.000Z");
   });
 
   it("excludes slot starts that are already booked", async () => {
     mockFetchOwnerSchedule.mockResolvedValue({
       available: true,
-      windows: [WINDOW],
       conflicts: [],
       timeZone: "UTC",
     });
     mockFetchBookedSlotIsos.mockResolvedValue(["2026-07-10T09:30:00.000Z"]);
 
-    const result = await resolveAvailableSlots(CTX);
+    const result = await resolveAvailableSlots({ ...CTX, booking_horizon_days: 0 });
 
-    const starts =
-      result.status === "ok" ? result.slots.map((s) => s.startIso) : [];
-    expect(starts).toEqual([
-      "2026-07-10T09:00:00.000Z",
-      "2026-07-10T10:00:00.000Z",
-    ]);
+    const starts = result.status === "ok" ? result.slots.map((s) => s.startIso) : [];
+    expect(starts).toHaveLength(17);
+    expect(starts).not.toContain("2026-07-10T09:30:00.000Z");
+    expect(starts).toContain("2026-07-10T09:00:00.000Z");
   });
 
   it("clears slots around a conflict by the interview buffer, not just the raw meeting", async () => {
     // A 15-min meeting, once padded by the 15-min buffer, spans 09:15–10:00 and
-    // so knocks out the 09:00 and 09:30 slots, leaving only 10:00.
+    // so knocks out the 09:00 and 09:30 slots (2 of the 18), leaving 16.
     mockFetchOwnerSchedule.mockResolvedValue({
       available: true,
-      windows: [WINDOW],
       conflicts: [
         { startIso: "2026-07-10T09:30:00.000Z", endIso: "2026-07-10T09:45:00.000Z" },
       ],
       timeZone: "UTC",
     });
 
-    const result = await resolveAvailableSlots(CTX);
+    const result = await resolveAvailableSlots({ ...CTX, booking_horizon_days: 0 });
 
-    const starts =
-      result.status === "ok" ? result.slots.map((s) => s.startIso) : [];
-    expect(starts).toEqual(["2026-07-10T10:00:00.000Z"]);
+    const starts = result.status === "ok" ? result.slots.map((s) => s.startIso) : [];
+    expect(starts).toHaveLength(16);
+    expect(starts).not.toContain("2026-07-10T09:00:00.000Z");
+    expect(starts).not.toContain("2026-07-10T09:30:00.000Z");
+    expect(starts).toContain("2026-07-10T10:00:00.000Z");
   });
 });

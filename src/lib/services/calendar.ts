@@ -8,25 +8,11 @@ export interface BusyInterval {
   endIso: string;
 }
 
-/**
- * Case-insensitive phrase an event title must contain to count as a bookable
- * "Interview hours" window. The manager's calendar is the availability
- * settings page: recurring events with this phrase in the title define when
- * candidates may book.
- */
-export const INTERVIEW_HOURS_KEYWORD = "interview hours";
-
 export interface CalendarSchedule {
-  /** "Interview hours" blocks — the only windows candidates may book inside. */
-  windows: BusyInterval[];
-  /** Everything else that occupies the manager: meetings, OOO, focus time. */
+  /** Everything that occupies the manager: meetings, OOO, focus time. */
   conflicts: BusyInterval[];
   /** The calendar's IANA timezone (used to label slots), if Google reports one. */
   timeZone: string | null;
-}
-
-function isInterviewHoursTitle(summary: string | null | undefined): boolean {
-  return (summary ?? "").toLowerCase().includes(INTERVIEW_HOURS_KEYWORD);
 }
 
 /** The owner declined this meeting, so it doesn't occupy them. */
@@ -55,22 +41,22 @@ function allDaySpan(
 }
 
 /**
- * Read the manager's primary calendar once and split it into the two things
- * candidate scheduling needs: the "Interview hours" windows they published,
- * and the conflicts that occupy them. One events.list call — deliberately NOT
- * the free/busy endpoint, because free/busy merges an hours block marked
- * "Busy" with the real meetings inside it into one opaque range.
+ * Read the manager's primary calendar once and return every conflict that
+ * occupies them — bookable time is no longer calendar-marked (see
+ * `generateBusinessHourWindows` in `@/lib/scheduling/slots`, which supplies a
+ * fixed 9am-6pm weekday window instead); this is purely "what's busy". One
+ * events.list call — deliberately NOT the free/busy endpoint, since free/busy
+ * merges distinct events into opaque ranges and loses the per-event detail
+ * (transparency, declined status, event type) the classification below needs.
  *
  * Classification per event (recurring events arrive pre-expanded):
- *   - title contains "interview hours" (any case) + concrete times → WINDOW
  *   - out-of-office → CONFLICT, even when all-day
  *   - marked Free (transparent), working-location/birthday markers, or
  *     declined by the manager → ignored
  *   - anything else with concrete times → CONFLICT; all-day only when Busy
  *
- * Server-side only: event titles are inspected to spot windows but never
- * persisted or shown to candidates. Errors propagate — the caller owns the
- * strict "can't read calendar → offer nothing" decision.
+ * Errors propagate — the caller owns the strict "can't read calendar → offer
+ * nothing" decision.
  */
 export async function fetchCalendarSchedule(params: {
   refreshToken: string;
@@ -93,7 +79,6 @@ export async function fetchCalendarSchedule(params: {
   });
 
   const timeZone = data.timeZone ?? null;
-  const windows: BusyInterval[] = [];
   const conflicts: BusyInterval[] = [];
 
   for (const event of data.items ?? []) {
@@ -118,15 +103,7 @@ export async function fetchCalendarSchedule(params: {
       continue;
     }
 
-    // A bookable window needs concrete times — an all-day "interview hours"
-    // event is ambiguous, so it neither opens a window nor blocks the day.
-    if (isInterviewHoursTitle(event.summary)) {
-      if (timedSpan) windows.push(timedSpan);
-      continue;
-    }
-
-    // Events marked Free don't occupy the manager, so they're skipped (and
-    // it's why hours blocks are best marked Free — see the docstring).
+    // Events marked Free don't occupy the manager, so they're skipped.
     if (event.transparency === "transparent") continue;
 
     if (timedSpan) {
@@ -138,7 +115,7 @@ export async function fetchCalendarSchedule(params: {
     }
   }
 
-  return { windows, conflicts, timeZone };
+  return { conflicts, timeZone };
 }
 
 function createCalendarClient(refreshToken: string): calendar_v3.Calendar {
@@ -146,9 +123,9 @@ function createCalendarClient(refreshToken: string): calendar_v3.Calendar {
 }
 
 // NOTE: the earlier free/busy query (`fetchBusyIntervals`) was removed in
-// favor of `fetchCalendarSchedule` above — free/busy merges an "Interview
-// hours" block marked Busy with the meetings inside it, which made it unusable
-// once availability itself moved into the calendar.
+// favor of `fetchCalendarSchedule` above — free/busy merges distinct events
+// into one opaque busy range, which loses the per-event detail (transparency,
+// declined status, event type) needed to classify conflicts correctly.
 
 export interface CreatedInterviewEvent {
   eventId: string | null;
