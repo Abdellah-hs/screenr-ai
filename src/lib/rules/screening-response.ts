@@ -165,12 +165,13 @@ export interface ScreeningScoringConfig {
  *
  * Always passes through `screening_scored` first so the audit log records
  * the AI scoring event before any downstream advancement. In auto mode it
- * then chains a second transition to either `interview_scheduling` (pass)
- * or `rejected` (fail). HITL mode rests at `screening_scored` for the
- * recruiter to advance manually.
+ * then chains a second transition to either `interview_invited` (pass — the
+ * on-demand AI interview, no slot booking; scheduling belongs to the final
+ * human interview after manager review) or `rejected` (fail). HITL mode
+ * rests at `screening_scored` for the recruiter to advance manually.
  *
  *   - human_in_loop:           [screening_scored]
- *   - fully_auto + score ≥ thr: [screening_scored, interview_scheduling]
+ *   - fully_auto + score ≥ thr: [screening_scored, interview_invited]
  *   - fully_auto + score < thr: [screening_scored, rejected]
  */
 export function evaluateScreeningScoringOutcome(
@@ -192,8 +193,8 @@ export function evaluateScreeningScoringOutcome(
     return [
       recordScored,
       {
-        toState: "interview_scheduling",
-        rationale: `${scoreLine} — passed, advancing to interview scheduling`,
+        toState: "interview_invited",
+        rationale: `${scoreLine} — passed, advancing to AI interview`,
       },
     ];
   }

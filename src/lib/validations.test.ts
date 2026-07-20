@@ -7,6 +7,7 @@ import {
   parseCampaignFormData,
   applicationStateSchema,
   stageChangeRationaleSchema,
+  applyApplicantSchema,
 } from './validations';
 
 describe('uuidSchema', () => {
@@ -292,5 +293,89 @@ describe('stageChangeRationaleSchema', () => {
 
   it('rejects a whitespace-only string', () => {
     expect(stageChangeRationaleSchema.safeParse('   ').success).toBe(false);
+  });
+});
+
+describe('applyApplicantSchema', () => {
+  const valid = {
+    first_name: 'Alice',
+    last_name: 'Smith',
+    email: 'alice@example.com',
+  };
+
+  it('accepts a complete applicant identity', () => {
+    const result = applyApplicantSchema.safeParse(valid);
+    expect(result.success).toBe(true);
+  });
+
+  it('trims names and lowercases the email', () => {
+    const result = applyApplicantSchema.safeParse({
+      first_name: '  Alice ',
+      last_name: ' Smith ',
+      email: ' Alice@Example.COM ',
+    });
+
+    expect(result.success && result.data).toEqual({ ...valid, linkedin: null, website: null });
+  });
+
+  it('rejects an empty first name', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, first_name: '  ' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty last name', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, last_name: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a malformed email address', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, email: 'not-an-email' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an over-long name', () => {
+    const result = applyApplicantSchema.safeParse({ ...valid, first_name: 'a'.repeat(101) });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('applyApplicantSchema profile links', () => {
+  const base = { first_name: 'Alice', last_name: 'Smith', email: 'alice@example.com' };
+
+  it('normalizes a bare LinkedIn handle to a full profile URL', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, linkedin: 'in/alice-smith' });
+    expect(result.success && result.data.linkedin).toBe('https://www.linkedin.com/in/alice-smith');
+  });
+
+  it('accepts a pasted full LinkedIn URL without doubling the host', () => {
+    const result = applyApplicantSchema.safeParse({
+      ...base,
+      linkedin: 'https://www.linkedin.com/in/alice-smith',
+    });
+    expect(result.success && result.data.linkedin).toBe('https://www.linkedin.com/in/alice-smith');
+  });
+
+  it('normalizes a personal site to https', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, website: 'alice.dev' });
+    expect(result.success && result.data.website).toBe('https://alice.dev');
+  });
+
+  it('keeps an already-https personal site intact', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, website: 'https://alice.dev' });
+    expect(result.success && result.data.website).toBe('https://alice.dev');
+  });
+
+  it('turns blank or omitted links into null', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, linkedin: '  ' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.linkedin).toBeNull();
+      expect(result.data.website).toBeNull();
+    }
+  });
+
+  it('rejects a website that is not a plausible address', () => {
+    const result = applyApplicantSchema.safeParse({ ...base, website: 'not a website' });
+    expect(result.success).toBe(false);
   });
 });

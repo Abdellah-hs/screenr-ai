@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Captures `after()` callbacks WITHOUT running them, so tests control when
+// deferred work (the post-response auto-scoring) executes.
+const { afterQueue } = vi.hoisted(() => ({
+  afterQueue: [] as Array<() => unknown>,
+}));
+
+vi.mock("next/server", () => ({
+  after: (fn: () => unknown) => {
+    afterQueue.push(fn);
+  },
+}));
+
+async function flushAfter(): Promise<void> {
+  for (const fn of afterQueue.splice(0)) await fn();
+}
+
 vi.mock("next/headers", () => ({
   headers: vi.fn(() => Promise.resolve({ get: () => null })),
 }));
@@ -22,11 +38,9 @@ vi.mock("@/lib/data/transitions", () => ({ transitionApplication: vi.fn() }));
 // the voice submit path triggers it. (Also avoids the OpenAI client this module
 // instantiates at import.)
 vi.mock("./score-screening-response", () => ({ runScreeningScoring: vi.fn() }));
-// Partial mock: keep the real buildScreeningInstructions, stub the network call.
-vi.mock("@/lib/services/realtime", async (importActual) => ({
-  ...(await importActual<typeof import("@/lib/services/realtime")>()),
-  createRealtimeSession: vi.fn(),
-}));
+// buildScreeningInstructions stays real (pure); only the LiveKit room/token
+// service is stubbed — the network lives there.
+vi.mock("@/lib/services/livekit", () => ({ createScreeningRoomGrant: vi.fn() }));
 
 import {
   loadResponseContext,
@@ -47,7 +61,7 @@ import {
   type VoiceTranscriptTurn,
 } from "@/lib/data/screening-questions";
 import { transitionApplication } from "@/lib/data/transitions";
-import { createRealtimeSession } from "@/lib/services/realtime";
+import { createScreeningRoomGrant } from "@/lib/services/livekit";
 import { runScreeningScoring } from "./score-screening-response";
 
 const mockCheckRateLimit = vi.mocked(checkRateLimit);
@@ -58,7 +72,7 @@ const mockFetchResponse = vi.mocked(fetchScreeningResponseByApplicationId);
 const mockSaveTranscript = vi.mocked(saveVoiceTranscript);
 const mockMarkExpired = vi.mocked(markScreeningResponseExpired);
 const mockTransition = vi.mocked(transitionApplication);
-const mockCreateSession = vi.mocked(createRealtimeSession);
+const mockCreateGrant = vi.mocked(createScreeningRoomGrant);
 const mockFetchScoringContext = vi.mocked(fetchScoringContextByApplicationId);
 const mockRunScoring = vi.mocked(runScreeningScoring);
 
@@ -73,7 +87,11 @@ const SCORING_CONTEXT = {
 
 const APP_ID = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "tok_abcdefghij";
-const SESSION = { clientSecret: "ek_x", expiresAt: 1, model: "gpt-realtime" };
+const GRANT = {
+  serverUrl: "wss://demo.livekit.cloud",
+  roomName: `screening-${APP_ID}-ab12cd34`,
+  participantToken: "jwt-x",
+};
 
 function appRow(over: Partial<ApplicationForResponse> = {}): ApplicationForResponse {
   return {
@@ -110,12 +128,13 @@ const transcript: VoiceTranscriptTurn[] = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  afterQueue.length = 0;
   mockVerifyToken.mockReturnValue({ application_id: APP_ID, expires_at: new Date("2099-01-01") });
   mockFetchApp.mockResolvedValue(appRow());
   mockFetchResponse.mockResolvedValue(responseRow());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockFetchQuestions.mockResolvedValue([{ id: "q1", prompt: "Describe a scaling problem you solved.", is_required: true } as any]);
-  mockCreateSession.mockResolvedValue(SESSION);
+  mockCreateGrant.mockResolvedValue(GRANT);
   mockTransition.mockResolvedValue(undefined);
   mockFetchScoringContext.mockResolvedValue(SCORING_CONTEXT);
   mockRunScoring.mockResolvedValue({ overall_score: 72 });
@@ -170,15 +189,16 @@ describe("loadResponseContext", () => {
 });
 
 describe("startCandidateVoiceScreening", () => {
-  it("mints a session whose instructions are built from the campaign's questions", async () => {
-    await expect(startCandidateVoiceScreening(TOKEN)).resolves.toEqual(SESSION);
+  it("opens a room whose instructions are built from the campaign's questions", async () => {
+    await expect(startCandidateVoiceScreening(TOKEN)).resolves.toEqual(GRANT);
 
-    const instructions = mockCreateSession.mock.calls[0][0]?.instructions ?? "";
-    expect(instructions).toContain("Describe a scaling problem you solved.");
-    expect(instructions).toContain("Senior Backend Engineer");
+    const args = mockCreateGrant.mock.calls[0][0];
+    expect(args.applicationId).toBe(APP_ID);
+    expect(args.instructions).toContain("Describe a scaling problem you solved.");
+    expect(args.instructions).toContain("Senior Backend Engineer");
   });
 
-  it("expires the response and refuses to mint when the deadline has passed", async () => {
+  it("expires the response and refuses to open a room when the deadline has passed", async () => {
     mockFetchResponse.mockResolvedValue(responseRow({ expires_at: "2020-01-01T00:00:00.000Z" }));
 
     await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow(/expired/i);
@@ -186,36 +206,42 @@ describe("startCandidateVoiceScreening", () => {
     expect(mockTransition).toHaveBeenCalledWith(
       expect.objectContaining({ toState: "screening_expired", actor: "system" }),
     );
-    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockCreateGrant).not.toHaveBeenCalled();
   });
 
-  it("refuses to mint when the campaign has no screening questions", async () => {
+  it("refuses to open a room when the campaign has no screening questions", async () => {
     mockFetchQuestions.mockResolvedValue([]);
 
     await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow(/no screening questions/i);
-    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockCreateGrant).not.toHaveBeenCalled();
   });
 
-  it("rate-limits before minting a session", async () => {
+  it("rate-limits before opening a room", async () => {
     mockCheckRateLimit.mockImplementationOnce(() => {
       throw new Error("Rate limit exceeded");
     });
 
     await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow("Rate limit exceeded");
-    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockCreateGrant).not.toHaveBeenCalled();
   });
 
-  it("refuses to mint a session when the campaign isn't Active (frozen)", async () => {
+  it("refuses to open a room when the campaign isn't Active (frozen)", async () => {
     mockFetchApp.mockResolvedValue(appRow({ campaign_status: "closed" }));
 
     await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow(/on hold/i);
-    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockCreateGrant).not.toHaveBeenCalled();
   });
 });
 
 describe("submitVoiceScreening", () => {
-  it("persists the transcript and advances to screening_completed", async () => {
-    await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+  // The browser sends only the token; the transcript is whatever the agent
+  // worker reported server-side — tests stage it on the fetched response row.
+  beforeEach(() => {
+    mockFetchResponse.mockResolvedValue(responseRow({ transcript }));
+  });
+
+  it("promotes the agent-reported draft and advances to screening_completed", async () => {
+    await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
 
     expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript);
     expect(mockTransition).toHaveBeenCalledWith(
@@ -223,28 +249,27 @@ describe("submitVoiceScreening", () => {
     );
   });
 
-  it("rejects an empty transcript without persisting", async () => {
-    await expect(submitVoiceScreening({ token: TOKEN, transcript: [] })).rejects.toThrow(
-      /No transcript was captured/i,
-    );
+  it("rejects when no draft transcript was reported, without persisting", async () => {
+    mockFetchResponse.mockResolvedValue(responseRow({ transcript: [] }));
+
+    await expect(submitVoiceScreening({ token: TOKEN })).rejects.toThrow(/spoken answers/i);
     expect(mockSaveTranscript).not.toHaveBeenCalled();
   });
 
-  it("rejects a call with no candidate speech (interviewer-only transcript)", async () => {
+  it("rejects a draft with no candidate speech (interviewer-only transcript)", async () => {
     const interviewerOnly: VoiceTranscriptTurn[] = [
       { role: "agent", text: "Tell me about a scaling problem you solved.", at: "2026-06-03T10:00:00.000Z" },
     ];
+    mockFetchResponse.mockResolvedValue(responseRow({ transcript: interviewerOnly }));
 
-    await expect(
-      submitVoiceScreening({ token: TOKEN, transcript: interviewerOnly }),
-    ).rejects.toThrow(/spoken answers/i);
+    await expect(submitVoiceScreening({ token: TOKEN })).rejects.toThrow(/spoken answers/i);
     expect(mockSaveTranscript).not.toHaveBeenCalled();
   });
 
   it("refuses to overwrite an already-scored response", async () => {
-    mockFetchResponse.mockResolvedValue(responseRow({ status: "scored" }));
+    mockFetchResponse.mockResolvedValue(responseRow({ status: "scored", transcript }));
 
-    await expect(submitVoiceScreening({ token: TOKEN, transcript })).rejects.toThrow(
+    await expect(submitVoiceScreening({ token: TOKEN })).rejects.toThrow(
       /already been submitted/i,
     );
     expect(mockSaveTranscript).not.toHaveBeenCalled();
@@ -253,12 +278,17 @@ describe("submitVoiceScreening", () => {
   it("still succeeds for the candidate when the state transition fails", async () => {
     mockTransition.mockRejectedValue(new Error("Illegal transition"));
 
-    await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
     expect(mockSaveTranscript).toHaveBeenCalled();
   });
 
-  it("auto-scores the call with the campaign's resolved config (no recruiter click)", async () => {
-    await submitVoiceScreening({ token: TOKEN, transcript });
+  it("auto-scores the call after the response with the campaign's resolved config (no recruiter click)", async () => {
+    await submitVoiceScreening({ token: TOKEN });
+
+    // Scoring is deferred — the candidate's "done" screen never waits on it.
+    expect(mockRunScoring).not.toHaveBeenCalled();
+
+    await flushAfter();
 
     expect(mockRunScoring).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -275,21 +305,23 @@ describe("submitVoiceScreening", () => {
   it("still succeeds for the candidate when auto-scoring throws", async () => {
     mockRunScoring.mockRejectedValue(new Error("OpenAI down"));
 
-    await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
+    await expect(flushAfter()).resolves.toBeUndefined();
     expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript);
   });
 
   it("skips auto-scoring when the campaign has no job description", async () => {
     mockFetchScoringContext.mockResolvedValue({ ...SCORING_CONTEXT, description: null });
 
-    await expect(submitVoiceScreening({ token: TOKEN, transcript })).resolves.toEqual({ ok: true });
+    await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
+    await flushAfter();
     expect(mockRunScoring).not.toHaveBeenCalled();
   });
 
   it("freezes the submission (no save, no score) when the campaign isn't Active", async () => {
     mockFetchApp.mockResolvedValue(appRow({ campaign_status: "paused" }));
 
-    await expect(submitVoiceScreening({ token: TOKEN, transcript })).rejects.toThrow(/on hold/i);
+    await expect(submitVoiceScreening({ token: TOKEN })).rejects.toThrow(/on hold/i);
     expect(mockSaveTranscript).not.toHaveBeenCalled();
     expect(mockRunScoring).not.toHaveBeenCalled();
   });

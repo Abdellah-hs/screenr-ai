@@ -13,6 +13,7 @@ const {
   mockSendScreeningQuestions,
   mockFetchCampaignStatus,
   mockAssertCampaignActiveById,
+  mockFetchScreeningQuestions,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockCheckRateLimit: vi.fn(),
@@ -22,6 +23,7 @@ const {
   mockSendScreeningQuestions: vi.fn(),
   mockFetchCampaignStatus: vi.fn(),
   mockAssertCampaignActiveById: vi.fn(),
+  mockFetchScreeningQuestions: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -54,6 +56,12 @@ vi.mock("@/lib/actions/screening-questions", () => ({
   sendScreeningQuestionsToCandidate: mockSendScreeningQuestions,
 }));
 
+// decideHitlReview preflights the campaign's question set before approving —
+// approval promises an immediate send, so a questionless campaign blocks it.
+vi.mock("@/lib/data/screening-questions", () => ({
+  fetchScreeningQuestionsByCampaignId: mockFetchScreeningQuestions,
+}));
+
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
   fetchCampaignStatus: mockFetchCampaignStatus,
@@ -76,6 +84,9 @@ vi.mock("next/cache", () => ({
 
 import {
   decideHitlReview,
+  getCandidateById,
+  getCandidatesByCampaignId,
+  rescoreCandidateResume,
   scoreUnscoredCampaignCandidates,
   updateCandidateStage,
 } from "./candidates";
@@ -101,6 +112,7 @@ beforeEach(() => {
   mockSendScreeningQuestions.mockReset();
   mockFetchCampaignStatus.mockReset();
   mockAssertCampaignActiveById.mockReset();
+  mockFetchScreeningQuestions.mockReset();
 
   // Default happy-path setup — individual tests override what they need.
   mockRequireUserId.mockResolvedValue("user-1");
@@ -108,6 +120,9 @@ beforeEach(() => {
   // freeze tests override these.
   mockFetchCampaignStatus.mockResolvedValue("active");
   mockAssertCampaignActiveById.mockResolvedValue(undefined);
+  // Campaigns have a question set by default so the approve preflight is
+  // transparent; the no-questions tests override this.
+  mockFetchScreeningQuestions.mockResolvedValue([{ id: "q-1" }]);
   mockFetchCandidateById.mockResolvedValue({
     id: VALID_APP_ID,
     campaign_id: VALID_CAMPAIGN_ID,
@@ -251,8 +266,10 @@ describe("decideHitlReview", () => {
     expect(mockSendScreeningQuestions).toHaveBeenCalledWith(VALID_APP_ID);
   });
 
-  it("on approve: still approves and returns a warning when the auto-send fails", async () => {
-    const sendError = "This campaign has no screening questions configured. Set them up first.";
+  it("on approve: still approves and returns a warning when the auto-send fails transiently", async () => {
+    // A transient delivery failure (e.g. Gmail disconnected) must not undo the
+    // recorded human decision — unlike missing questions, which block up front.
+    const sendError = "No Gmail inbox is connected. Connect one under Settings → Integrations.";
     mockSendScreeningQuestions.mockRejectedValueOnce(new Error(sendError));
 
     const result = await decideHitlReview({
@@ -271,6 +288,37 @@ describe("decideHitlReview", () => {
       screeningEmailSent: false,
       screeningWarning: sendError,
     });
+  });
+
+  it("on approve: blocks before the transition when the campaign has no screening questions", async () => {
+    mockFetchScreeningQuestions.mockResolvedValueOnce([]);
+
+    await expect(
+      decideHitlReview({
+        applicationId: VALID_APP_ID,
+        decision: "approve",
+        rationale: VALID_RATIONALE,
+      }),
+    ).rejects.toThrow(/no screening questions/i);
+
+    // The whole point of the preflight: no state change, no send attempt.
+    expect(mockTransitionApplication).not.toHaveBeenCalled();
+    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
+  });
+
+  it("on reject: is not blocked by missing screening questions", async () => {
+    // Rejecting sends nothing, so the questions preflight must not apply.
+    mockFetchScreeningQuestions.mockResolvedValue([]);
+
+    await decideHitlReview({
+      applicationId: VALID_APP_ID,
+      decision: "reject",
+      rationale: VALID_RATIONALE,
+    });
+
+    expect(mockTransitionApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ toState: "rejected", actor: "recruiter" }),
+    );
   });
 
   it("on reject: transitions to rejected as recruiter with the rationale", async () => {
@@ -524,5 +572,156 @@ describe("scoreUnscoredCampaignCandidates", () => {
     await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
     expect(vi.mocked(scoreResumeAgainstCriteria)).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Recruiter-triggered re-score (the button next to the rubric-mismatch badge).
+// Contract under test: it refreshes evidence and NEVER touches pipeline state.
+describe("rescoreCandidateResume", () => {
+  beforeEach(() => {
+    // A live, already-scored application with parsed resume data on file.
+    mockFetchCandidateById.mockResolvedValue({
+      id: VALID_APP_ID,
+      campaign_id: VALID_CAMPAIGN_ID,
+      status: "screening_review_pending",
+      parsed_data: { first_name: "Alice" },
+      candidates: { id: "cand-1" },
+    });
+    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
+      description: "Senior engineer role",
+      automation_mode: "human_in_loop",
+      screening_threshold: 70,
+      screening_criteria: [
+        { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
+      ],
+    } as never);
+    vi.mocked(fetchActiveRubricVersion).mockResolvedValue(2);
+    vi.mocked(saveResumeScore).mockResolvedValue(undefined as never);
+    vi.mocked(scoreResumeAgainstCriteria).mockResolvedValue({
+      result: { overall_score: 85, tier: "strong", rationale: "ok", factors: [] },
+      model: "gpt-test",
+      promptVersion: "v1",
+      rawOutput: "{}",
+    } as never);
+  });
+
+  it("rejects unauthenticated callers before doing any work", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow("Unauthorized");
+
+    expect(mockFetchCandidateById).not.toHaveBeenCalled();
+    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid applicationId via Zod (uuid format)", async () => {
+    await expect(rescoreCandidateResume("not-a-uuid")).rejects.toThrow();
+
+    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+  });
+
+  it("throws when the application cannot be found (ownership / does-not-exist)", async () => {
+    mockFetchCandidateById.mockResolvedValueOnce(null);
+
+    await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(
+      "Application not found",
+    );
+  });
+
+  it("blocks re-scoring a closed application (e.g. rejected)", async () => {
+    mockFetchCandidateById.mockResolvedValueOnce({
+      id: VALID_APP_ID,
+      campaign_id: VALID_CAMPAIGN_ID,
+      status: "rejected",
+      parsed_data: { first_name: "Alice" },
+      candidates: { id: "cand-1" },
+    });
+
+    await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(/closed/);
+
+    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+    expect(vi.mocked(saveResumeScore)).not.toHaveBeenCalled();
+  });
+
+  it("freezes when the campaign isn't Active", async () => {
+    mockAssertCampaignActiveById.mockRejectedValueOnce(new Error("This campaign is paused."));
+
+    await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(/paused/);
+
+    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+  });
+
+  it("throws when the application has no parsed resume data", async () => {
+    mockFetchCandidateById.mockResolvedValueOnce({
+      id: VALID_APP_ID,
+      campaign_id: VALID_CAMPAIGN_ID,
+      status: "screening_review_pending",
+      parsed_data: null,
+      candidates: { id: "cand-1" },
+    });
+
+    await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(
+      /no parsed resume/,
+    );
+  });
+
+  it("throws when the campaign has no resume criteria configured", async () => {
+    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
+
+    await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(
+      /no resume criteria/,
+    );
+  });
+
+  it("persists a fresh score for the application", async () => {
+    const result = await rescoreCandidateResume(VALID_APP_ID);
+
+    expect(vi.mocked(saveResumeScore)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(saveResumeScore)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: VALID_APP_ID,
+        campaignId: VALID_CAMPAIGN_ID,
+        candidateId: "cand-1",
+        score: 85,
+        rubricVersion: 2,
+      }),
+    );
+    expect(result).toEqual({ rescored: true });
+  });
+
+  it("never transitions pipeline state — evidence refresh only", async () => {
+    await rescoreCandidateResume(VALID_APP_ID);
+
+    expect(mockTransitionApplication).not.toHaveBeenCalled();
+    expect(vi.mocked(advanceApplicationStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateApplicationStage)).not.toHaveBeenCalled();
+    expect(mockSendScreeningQuestions).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the campaign and candidate detail paths on success", async () => {
+    await rescoreCandidateResume(VALID_APP_ID);
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith(`/campaigns/${VALID_CAMPAIGN_ID}`);
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/campaigns/${VALID_CAMPAIGN_ID}/candidates/${VALID_APP_ID}`,
+    );
+  });
+});
+
+// Malformed-id guards — a URL like /campaigns/undefined must never turn into
+// database queries against a garbage uuid (it used to spray console errors).
+describe("getCandidatesByCampaignId — id guard", () => {
+  it("rejects a malformed campaign id before any fetch", async () => {
+    await expect(getCandidatesByCampaignId("undefined")).rejects.toThrow();
+
+    expect(vi.mocked(fetchCandidatesByCampaignId)).not.toHaveBeenCalled();
+  });
+});
+
+describe("getCandidateById — id guard", () => {
+  it("resolves null for a malformed application id without querying", async () => {
+    await expect(getCandidateById("undefined")).resolves.toBeNull();
+
+    expect(mockFetchCandidateById).not.toHaveBeenCalled();
   });
 });

@@ -158,6 +158,71 @@ describe("ingestResumeDocument", () => {
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
+  it("uses the self-declared applicant identity over the CV-extracted one", async () => {
+    const applicant = { first_name: "Alicia", last_name: "Smythe", email: "alicia@form.com" };
+
+    const result = await ingestResumeDocument(args({ applicant }));
+
+    expect(result).toEqual({ outcome: "ingested", applicationId: "app-1" });
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining(applicant),
+      DB,
+    );
+  });
+
+  it("keeps the raw extraction in the AI audit when an applicant identity is supplied", async () => {
+    const applicant = { first_name: "Alicia", last_name: "Smythe", email: "alicia@form.com" };
+
+    await ingestResumeDocument(args({ applicant }));
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        structuredData: expect.objectContaining({
+          first_name: "Alice",
+          last_name: "Smith",
+          email: "alice@example.com",
+        }),
+      }),
+      DB,
+    );
+  });
+
+  it("prefers applicant profile links but falls back to the CV's when left blank", async () => {
+    mockExtractData.mockResolvedValue(
+      parsedCv({ linkedin_url: "https://www.linkedin.com/in/cv-alice", portfolio_url: "https://cv-alice.dev" }),
+    );
+    const applicant = {
+      first_name: "Alicia",
+      last_name: "Smythe",
+      email: "alicia@form.com",
+      linkedin_url: "https://www.linkedin.com/in/form-alicia",
+      portfolio_url: null,
+    };
+
+    await ingestResumeDocument(args({ applicant }));
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkedin_url: "https://www.linkedin.com/in/form-alicia",
+        portfolio_url: "https://cv-alice.dev",
+      }),
+      DB,
+    );
+  });
+
+  it("ingests a CV with no extractable email when the applicant supplied one", async () => {
+    mockExtractData.mockResolvedValue(parsedCv({ email: null }));
+    const applicant = { first_name: "Alicia", last_name: "Smythe", email: "alicia@form.com" };
+
+    const result = await ingestResumeDocument(args({ applicant }));
+
+    expect(result).toEqual({ outcome: "ingested", applicationId: "app-1" });
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "alicia@form.com" }),
+      DB,
+    );
+  });
+
   it("ingests without scoring when the campaign has no criteria", async () => {
     mockFetchConfig.mockResolvedValue(null);
 

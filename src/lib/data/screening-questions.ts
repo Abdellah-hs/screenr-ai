@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import type { ApplicationState } from "@/lib/constants";
 import type { Json } from "@/types/database.types";
 
@@ -426,6 +427,35 @@ export async function saveVoiceTranscript(
   if (error) {
     throw new Error(
       `Failed to save voice transcript: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
+/**
+ * Persist the agent-reported transcript of an in-progress voice call as a
+ * DRAFT: the transcript column is updated but the response stays `sent`. The
+ * candidate finalizes (or re-records, overwriting this) from the review step —
+ * only their explicit submit flips the row to `responded` and advances the
+ * application. Guarded to `sent` so a late-arriving agent report can never
+ * rewrite the transcript of a response that was already finalized or expired.
+ *
+ * Called from the agent-facing API route, which has no user session — the
+ * caller passes the admin client.
+ */
+export async function saveVoiceTranscriptDraft(
+  applicationId: string,
+  transcript: VoiceTranscriptTurn[],
+  db: SupabaseDb
+): Promise<void> {
+  const { error } = await db
+    .from("screening_question_responses")
+    .update({ transcript: transcript as unknown as Json })
+    .eq("application_id", applicationId)
+    .eq("status", "sent");
+
+  if (error) {
+    throw new Error(
+      `Failed to save voice transcript draft: ${error.message ?? JSON.stringify(error)}`
     );
   }
 }

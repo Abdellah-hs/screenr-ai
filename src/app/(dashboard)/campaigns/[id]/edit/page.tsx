@@ -204,16 +204,33 @@ export default function EditCampaignPage({
           <RubricEditor initialRubrics={campaign.rubrics} campaignId={campaign.id} />
         </div>
 
+        {/* Screening questions are managed in place on the campaign page (the
+            AI generates them from the saved description), not in this form —
+            without this pointer recruiters hunt for them here and give up. */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
+            Screening Questions
+          </h2>
+          <p className="text-xs text-[#6B7280] mt-1">
+            Set up and edited on the campaign page, not here.{" "}
+            <Link
+              href={`/campaigns/${campaign.id}#screening-questions`}
+              className="font-medium text-[#2563EB] hover:underline"
+            >
+              Go to screening questions
+            </Link>
+          </p>
+        </div>
+
         {/* SLA Timers — initialTimers seeds the editor so an edit-save preserves
             existing timers (updateCampaignTx delete+re-inserts from this form). */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <SlaTimersEditor initialTimers={campaign.sla_timers} />
         </div>
 
-        {/* AI Interview Availability */}
+        {/* Final Interview Availability (calendar-driven) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <InterviewAvailabilityEditor
-            initialRules={campaign.interview_availability_rules}
             initialSlotMinutes={campaign.interview_slot_minutes}
             initialTimezone={campaign.interview_timezone}
             initialHorizonDays={campaign.interview_booking_horizon_days}

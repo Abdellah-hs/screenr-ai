@@ -54,6 +54,15 @@ function sign(data: string): string {
 }
 
 /**
+ * TTL for a `/schedule/<token>` link. It must outlive the booking horizon (the
+ * window of slots the candidate can pick from, default 14 days) with comfortable
+ * buffer, and the same link is reused if the recruiter later moves the time and
+ * the candidate has to re-pick — so it gets a longer life than the 7-day
+ * screening-response default.
+ */
+export const SCHEDULE_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
  * Sign a token for a screening response link.
  * @param applicationId the application the candidate is responding to
  * @param ttlMs how long the link should be valid (default 7 days)

@@ -1,29 +1,13 @@
 /**
- * OpenAI Realtime (speech-to-speech) session service.
+ * Voice-screening interview instructions.
  *
- * Mints a short-lived *ephemeral* client secret server-side using the secret
- * `OPENAI_API_KEY`. The browser uses that ephemeral key to open a WebRTC
- * connection directly to OpenAI — the secret key never reaches the client, and
- * the SDP exchange does not pass through our server. See docs/voice-screening.md.
+ * Since the LiveKit migration, the Realtime conversation itself runs in the
+ * server-side agent worker (`agents/screening/`) — this module only composes
+ * the interviewer instructions, which travel to the worker via LiveKit room
+ * metadata (set server-side in `createScreeningRoomGrant`; the candidate can't
+ * touch them). The old direct-to-OpenAI ephemeral-session minting was removed
+ * with the migration.
  */
-
-/** Realtime speech-to-speech model. Bound to the ephemeral session server-side.
- *  Override with OPENAI_REALTIME_MODEL if OpenAI bumps the id (e.g. gpt-realtime-2). */
-export const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
-
-/** Default agent voice. "marin"/"cedar" are the natural GA voices; "alloy" et al.
- *  sound robotic. Override with OPENAI_REALTIME_VOICE. */
-export const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || "marin";
-
-/** Spike (#81) instructions — a short but genuinely conversational mic check. */
-const SPIKE_INSTRUCTIONS =
-  "You are Screenr AI's friendly voice assistant. Speak naturally and warmly, " +
-  "like a real person, with normal human pacing — never robotic or rushed. " +
-  "Greet the candidate, tell them this is a quick voice check, then have a short " +
-  "natural back-and-forth: ask how their day is going and one light follow-up " +
-  "about what they say. Listen carefully; if you do not clearly understand them, " +
-  "politely ask them to repeat instead of guessing. Then thank them and say the " +
-  "check is complete.";
 
 export interface ScreeningQuestionForVoice {
   prompt: string;
@@ -79,79 +63,3 @@ export function buildScreeningInstructions(ctx: ScreeningInstructionContext): st
   ].join("\n");
 }
 
-export interface RealtimeSession {
-  /** Ephemeral client secret the browser uses to authenticate the WebRTC call. */
-  clientSecret: string;
-  /** Unix seconds at which the ephemeral secret expires. */
-  expiresAt: number;
-  /** Model the browser must name in its SDP request. */
-  model: string;
-}
-
-interface CreateSessionOptions {
-  instructions?: string;
-}
-
-/**
- * Create an ephemeral Realtime session. Throws on missing key or a non-OK
- * response (explicit failure — never returns a half-built session).
- */
-export async function createRealtimeSession(
-  opts: CreateSessionOptions = {},
-): Promise<RealtimeSession> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
-
-  const res = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      session: {
-        type: "realtime",
-        model: REALTIME_MODEL,
-        instructions: opts.instructions ?? SPIKE_INSTRUCTIONS,
-        audio: {
-          input: {
-            // Transcribe the candidate's speech (also the transcript we'll
-            // persist + score in #83/#84).
-            transcription: { model: "whisper-1" },
-            // Clean up laptop/phone mic noise so words aren't misheard.
-            noise_reduction: { type: "near_field" },
-            // Server VAD with a longer silence window so the agent waits for
-            // the candidate to actually finish before responding (fixes the
-            // "doesn't understand / talks over me" feel).
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 900,
-              create_response: true,
-              interrupt_response: true,
-            },
-          },
-          output: { voice: REALTIME_VOICE },
-        },
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(
-      `OpenAI Realtime session create failed (${res.status})${detail ? `: ${detail}` : ""}`,
-    );
-  }
-
-  // GA client_secrets response: { value, expires_at, session: {...} }.
-  const data = (await res.json()) as { value?: string; expires_at?: number };
-
-  const value = data.value;
-  if (!value) {
-    throw new Error("OpenAI Realtime session response missing client secret value");
-  }
-
-  return { clientSecret: value, expiresAt: data.expires_at ?? 0, model: REALTIME_MODEL };
-}

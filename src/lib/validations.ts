@@ -240,26 +240,13 @@ export const screeningAnswerSubmissionSchema = z.object({
 
 // ─── Voice Screening (#83) ──────────────────────────────────────────────────
 
+// Shape of one agent-reported transcript turn (the agent worker posts these to
+// the agent API route — since the LiveKit migration the candidate's browser
+// never submits transcript content).
 export const voiceTranscriptTurnSchema = z.object({
   role: z.enum(["agent", "candidate"]),
   text: z.string().min(1, "Empty transcript turn").max(10000, "Transcript turn is too long"),
   at: z.string().min(1, "Missing turn timestamp"),
-});
-
-export const voiceScreeningSubmissionSchema = z.object({
-  token: z.string().min(10).max(2000),
-  // A finished call always has at least one turn; an empty transcript is a
-  // capture failure and is reported via the failure action, not submitted here.
-  // A transcript of only the interviewer's questions (no candidate speech) is
-  // also rejected: there is nothing to score, and scoring absence makes the AI
-  // fabricate answers — the candidate must re-record instead.
-  transcript: z
-    .array(voiceTranscriptTurnSchema)
-    .min(1, "No transcript was captured for this call.")
-    .max(500, "Transcript is too long")
-    .refine((turns) => turns.some((t) => t.role === "candidate"), {
-      message: "The call didn't capture any spoken answers — please re-record.",
-    }),
 });
 
 // ─── Interview Scheduling (booking) ─────────────────────────────────────────
@@ -272,6 +259,60 @@ export const bookInterviewSlotSchema = z.object({
   start_iso: z
     .string()
     .refine((v) => !Number.isNaN(Date.parse(v)), "Invalid slot time"),
+});
+
+// ─── Public Apply Form ──────────────────────────────────────────────────────
+
+/** Drop a leading protocol/www so prefix-style inputs normalize predictably. */
+function stripProtocol(value: string): string {
+  return value.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+}
+
+// Identity the candidate types on the public apply page. Names are trimmed;
+// the email is normalized to lowercase before the format check so candidate
+// dedup (which matches on email) stays case-insensitive. The profile links are
+// optional prefix inputs (the UI shows "linkedin.com/" / "https://"), so users
+// paste anything from a bare handle to a full URL — both normalize to a full
+// https URL, and blank normalizes to null.
+export const applyApplicantSchema = z.object({
+  first_name: z
+    .string()
+    .trim()
+    .min(1, "Please enter your first name")
+    .max(100, "First name is too long"),
+  last_name: z
+    .string()
+    .trim()
+    .min(1, "Please enter your last name")
+    .max(100, "Last name is too long"),
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254, "Email address is too long")
+    .pipe(z.email("Please enter a valid email address")),
+  linkedin: z
+    .string()
+    .trim()
+    .max(200, "LinkedIn profile is too long")
+    .default("")
+    .transform((v): string | null => {
+      const path = stripProtocol(v).replace(/^linkedin\.com\//i, "").replace(/^\/+/, "");
+      return path ? `https://www.linkedin.com/${path}` : null;
+    }),
+  website: z
+    .string()
+    .trim()
+    .max(200, "Website address is too long")
+    .default("")
+    .refine(
+      (v) => v === "" || /^\S+\.\S+$/.test(stripProtocol(v)),
+      "Please enter a valid website address",
+    )
+    .transform((v): string | null => {
+      const rest = stripProtocol(v);
+      return rest ? `https://${rest}` : null;
+    }),
 });
 
 // ─── HITL Screening Review ──────────────────────────────────────────────────

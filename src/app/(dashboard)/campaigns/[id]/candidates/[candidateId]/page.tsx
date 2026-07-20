@@ -7,7 +7,10 @@ import { getInterviewBooking } from "@/lib/actions/schedule";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
+import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
 import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
+import { TIER_LABELS } from "@/lib/constants";
+import { uuidSchema } from "@/lib/validations";
 import type { CandidateScore, ApplicationState } from "@/lib/constants";
 import type { InterviewBooking } from "@/lib/data/scheduling";
 import type { ParsedResumeData } from "@/lib/services/openai";
@@ -16,6 +19,7 @@ const tierColors: Record<string, string> = {
   strong: "text-[#059669] bg-[#ECFDF5]",
   moderate: "text-[#D97706] bg-[#FEF3C7]",
   weak: "text-[#DC2626] bg-[#FEF2F2]",
+  no_match: "text-[#B91C1C] bg-[#FEE2E2]",
 };
 
 const scoreStageLabels: Record<string, string> = {
@@ -24,7 +28,24 @@ const scoreStageLabels: Record<string, string> = {
   interview: "Interview",
 };
 
-function ScoreCard({ score }: { score: CandidateScore }) {
+function ScoreCard({
+  score,
+  applicationId,
+  campaignActive,
+}: {
+  score: CandidateScore;
+  applicationId: string;
+  campaignActive: boolean;
+}) {
+  // Same visibility rule as the mismatch badge: both versions known and
+  // different. The re-score button is the badge's call to action, so they
+  // appear and disappear together (resume only — screening/interview scores
+  // are produced from the candidate's response, not re-runnable on demand).
+  const rubricIsStale =
+    score.rubric_version != null &&
+    score.current_rubric_version != null &&
+    score.rubric_version !== score.current_rubric_version;
+
   return (
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
       <div className="flex items-center justify-between mb-4">
@@ -36,6 +57,12 @@ function ScoreCard({ score }: { score: CandidateScore }) {
             scoredAt={score.rubric_version}
             currentVersion={score.current_rubric_version}
           />
+          {score.stage === "resume" && rubricIsStale && (
+            <RescoreResumeButton
+              applicationId={applicationId}
+              campaignActive={campaignActive}
+            />
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-2xl font-bold text-[#0C4A6E]">
@@ -43,9 +70,9 @@ function ScoreCard({ score }: { score: CandidateScore }) {
           </span>
           {score.tier && (
             <span
-              className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full capitalize ${tierColors[score.tier]}`}
+              className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${tierColors[score.tier]}`}
             >
-              {score.tier}
+              {TIER_LABELS[score.tier]}
             </span>
           )}
         </div>
@@ -184,10 +211,11 @@ function EducationEntry({ edu }: { edu: ParsedResumeData["education"][number] })
 }
 
 /**
- * Surfaces whether the candidate has actually booked their interview, so the
- * recruiter can tell `interview_scheduling` (invited, awaiting booking) apart
- * from `interview_scheduled` (slot picked) at a glance — the two labels are
- * otherwise one word apart. Renders nothing outside those two states.
+ * Surfaces whether the candidate has actually booked their interview slot.
+ * Covers the mainline `final_interview_scheduling` state (booking the final
+ * human interview) plus the deprecated AI-interview pair
+ * (`interview_scheduling` / `interview_scheduled`) still carried by in-flight
+ * applications. Renders nothing outside those states.
  */
 function InterviewBookingBanner({
   status,
@@ -196,9 +224,15 @@ function InterviewBookingBanner({
   status: ApplicationState;
   booking: InterviewBooking | null;
 }) {
-  if (status !== "interview_scheduling" && status !== "interview_scheduled") {
+  if (
+    status !== "final_interview_scheduling" &&
+    status !== "interview_scheduling" &&
+    status !== "interview_scheduled"
+  ) {
     return null;
   }
+
+  const isFinal = status === "final_interview_scheduling";
 
   // Booked — the candidate picked a slot. Green, with the confirmed time.
   if (booking && booking.status === "booked") {
@@ -220,7 +254,9 @@ function InterviewBookingBanner({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008z" />
         </svg>
         <div>
-          <p className="text-sm font-semibold text-[#065F46]">Interview booked</p>
+          <p className="text-sm font-semibold text-[#065F46]">
+            {isFinal ? "Final interview booked" : "Interview booked"}
+          </p>
           <p className="text-sm text-[#047857] mt-0.5">
             {when} ({booking.timezone})
           </p>
@@ -229,8 +265,29 @@ function InterviewBookingBanner({
     );
   }
 
+  // A time change is in flight: the recruiter moved the calendar event, so the
+  // candidate was sent back to re-pick. Orange — waiting on the candidate again.
+  if (booking && booking.status === "pending_reschedule") {
+    return (
+      <div
+        role="status"
+        className="flex items-start gap-3 rounded-xl border border-[#FED7AA] bg-[#FFF7ED] p-4"
+      >
+        <svg className="w-5 h-5 text-[#EA580C] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+        </svg>
+        <div>
+          <p className="text-sm font-semibold text-[#9A3412]">Awaiting candidate re-confirmation</p>
+          <p className="text-sm text-[#C2410C] mt-0.5">
+            You moved the interview on your calendar. The candidate was emailed to pick a new time.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // Invited but not yet booked. Amber — action sits with the candidate.
-  if (status === "interview_scheduling") {
+  if (isFinal || status === "interview_scheduling") {
     return (
       <div
         role="status"
@@ -275,6 +332,12 @@ export default async function CandidateDetailPage({
   params: Promise<{ id: string; candidateId: string }>;
 }) {
   const { id, candidateId } = await params;
+  // Malformed ids in the URL → 404 before the parallel fetches run queries
+  // (and log errors) against garbage uuids.
+  if (!uuidSchema.safeParse(id).success || !uuidSchema.safeParse(candidateId).success) {
+    notFound();
+  }
+
   const [campaign, candidate, screeningState, resumeCriteriaCount, booking] = await Promise.all([
     getCampaignById(id),
     getCandidateById(candidateId),
@@ -653,7 +716,12 @@ export default async function CandidateDetailPage({
           <InterviewBookingBanner status={candidate.status} booking={booking} />
 
           {candidate.awaiting_human_review && (
-            <HitlReviewPanel applicationId={candidateId} campaignActive={isActive} />
+            <HitlReviewPanel
+              applicationId={candidateId}
+              campaignId={id}
+              campaignActive={isActive}
+              hasScreeningQuestions={screeningState.questions.length > 0}
+            />
           )}
 
           {parsed && parsed.experience.length > 0 && (
@@ -744,7 +812,12 @@ export default async function CandidateDetailPage({
             </div>
           ) : (
             candidate.scores.map((score: CandidateScore, i: number) => (
-              <ScoreCard key={i} score={score} />
+              <ScoreCard
+                key={i}
+                score={score}
+                applicationId={candidateId}
+                campaignActive={isActive}
+              />
             ))
           )}
         </div>

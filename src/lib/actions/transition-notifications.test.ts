@@ -10,6 +10,11 @@ vi.mock("@/lib/data/candidates", () => ({
   fetchApplicationEmailContext: mockFetchContext,
 }));
 
+// Session-less transition sources (candidate flows) read via the admin client.
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({ __brand: "admin-client" }),
+}));
+
 vi.mock("@/lib/services/email", () => ({
   sendEmail: mockSendEmail,
 }));
@@ -24,6 +29,7 @@ vi.mock("@/lib/http/origin", () => ({
 
 vi.mock("@/lib/auth/screening-token", () => ({
   signResponseToken: () => "signed-token",
+  SCHEDULE_TOKEN_TTL_MS: 30 * 24 * 60 * 60 * 1000,
 }));
 
 import { sendTransitionNotification } from "./transition-notifications";
@@ -51,8 +57,8 @@ afterEach(() => {
 });
 
 describe("sendTransitionNotification", () => {
-  it("emails the candidate a self-scheduling invite with the booking link on transition to interview_scheduling", async () => {
-    await sendTransitionNotification("app-1", "interview_scheduling", USER_ID);
+  it("emails the candidate a self-scheduling invite with the booking link on transition to final_interview_scheduling", async () => {
+    await sendTransitionNotification("app-1", "final_interview_scheduling", USER_ID);
 
     expect(mockSendEmail).toHaveBeenCalledTimes(1);
     const sent = mockSendEmail.mock.calls[0][1];
@@ -62,10 +68,29 @@ describe("sendTransitionNotification", () => {
     expect(sent.html).toContain("https://hire.example.com/schedule/signed-token");
   });
 
-  it("sends from the acting recruiter's connected Gmail client", async () => {
+  it("emails the candidate a link-free advance notice on transition to interview_invited", async () => {
+    await sendTransitionNotification("app-1", "interview_invited", USER_ID);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const sent = mockSendEmail.mock.calls[0][1];
+    expect(sent.to).toBe("jane@example.com");
+    expect(sent.subject).toContain("Senior Engineer");
+    expect(sent.text).not.toContain("https://hire.example.com/schedule/");
+  });
+
+  it("sends nothing for the retired interview_scheduling trigger (booking moved to the final interview)", async () => {
+    await sendTransitionNotification("app-1", "interview_scheduling", USER_ID);
+
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends from the acting recruiter's connected Gmail client, read via the admin db", async () => {
     await sendTransitionNotification("app-1", "rejected", USER_ID);
 
-    expect(mockGetGmailClient).toHaveBeenCalledWith(USER_ID);
+    expect(mockGetGmailClient).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ __brand: "admin-client" }),
+    );
     expect(mockSendEmail.mock.calls[0][0]).toBe(FAKE_GMAIL);
   });
 

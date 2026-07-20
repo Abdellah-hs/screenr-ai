@@ -1,6 +1,11 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { InterviewAvailabilityRule } from "@/lib/constants";
+import type { SupabaseDb } from "@/lib/supabase/types";
+
+/** Booking status literals (the column is plain text, so these are by convention). */
+export const BOOKING_STATUS_BOOKED = "booked";
+export const BOOKING_STATUS_PENDING_RESCHEDULE = "pending_reschedule";
 
 /**
  * Scheduling data layer. The candidate-facing reads/writes use the service-role
@@ -153,4 +158,118 @@ export async function fetchBookingForRecruiter(
     .eq("application_id", applicationId)
     .maybeSingle();
   return data ?? null;
+}
+
+/**
+ * Persist the Google Calendar event id on a booking, once the event has been
+ * created (or moved) — the link reconciliation needs to map a changed calendar
+ * event back to its booking. Runs after the booking row already exists.
+ */
+export async function setBookingCalendarEventId(
+  applicationId: string,
+  eventId: string,
+  db?: SupabaseDb,
+): Promise<void> {
+  const supabase = db ?? createAdminClient();
+  const { error } = await supabase
+    .from("interview_bookings")
+    .update({ google_event_id: eventId })
+    .eq("application_id", applicationId);
+  if (error) throw new Error(`Failed to store calendar event id: ${error.message}`);
+}
+
+/** The stored Google Calendar event id for an application's booking, if any. */
+export async function fetchBookingCalendarEventId(
+  applicationId: string,
+  db?: SupabaseDb,
+): Promise<string | null> {
+  const supabase = db ?? createAdminClient();
+  const { data } = await supabase
+    .from("interview_bookings")
+    .select("google_event_id")
+    .eq("application_id", applicationId)
+    .maybeSingle();
+  return data?.google_event_id ?? null;
+}
+
+/** A booking matched by its Google Calendar event id (reconciliation lookup). */
+export interface BookingByEvent {
+  application_id: string;
+  scheduled_at: string;
+  status: string;
+}
+
+/**
+ * Find the booking a changed Google Calendar event maps to. Returns null when
+ * the event isn't one of ours (the recruiter edited some unrelated meeting).
+ */
+export async function fetchBookingByGoogleEventId(
+  eventId: string,
+  db?: SupabaseDb,
+): Promise<BookingByEvent | null> {
+  const supabase = db ?? createAdminClient();
+  const { data } = await supabase
+    .from("interview_bookings")
+    .select("application_id, scheduled_at, status")
+    .eq("google_event_id", eventId)
+    .maybeSingle();
+  return data ?? null;
+}
+
+/**
+ * Flip a booking `booked` → `pending_reschedule`, conditionally: the update
+ * only matches a row still in `booked`, so overlapping/duplicate webhook
+ * deliveries can cause at most ONE transition. Returns true when THIS call
+ * caused the flip (a row matched) — the caller uses that to fire exactly one
+ * "please re-pick" email and skip it on the duplicates.
+ */
+export async function markBookingPendingReschedule(
+  applicationId: string,
+  db?: SupabaseDb,
+): Promise<boolean> {
+  const supabase = db ?? createAdminClient();
+  const { data, error } = await supabase
+    .from("interview_bookings")
+    .update({ status: BOOKING_STATUS_PENDING_RESCHEDULE })
+    .eq("application_id", applicationId)
+    .eq("status", BOOKING_STATUS_BOOKED)
+    .select("id");
+  if (error) throw new Error(`Failed to mark booking pending: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Re-confirm a reschedule: write the candidate's newly chosen time and flip the
+ * booking back to `booked`, conditionally on it still being
+ * `pending_reschedule`. Returns true when a row matched — false means the
+ * booking already moved on (a concurrent confirm, or a fresh recruiter edit
+ * landed first), which the caller must surface rather than apply a stale write.
+ * The `UNIQUE(campaign_id, scheduled_at)` constraint still guards against two
+ * candidates landing on the same slot (surfaced as `SlotTakenError`).
+ */
+export async function updateBooking(params: {
+  applicationId: string;
+  scheduledAtIso: string;
+  slotMinutes: number;
+  timezone: string;
+  db?: SupabaseDb;
+}): Promise<boolean> {
+  const supabase = params.db ?? createAdminClient();
+  const { data, error } = await supabase
+    .from("interview_bookings")
+    .update({
+      scheduled_at: params.scheduledAtIso,
+      slot_minutes: params.slotMinutes,
+      timezone: params.timezone,
+      status: BOOKING_STATUS_BOOKED,
+    })
+    .eq("application_id", params.applicationId)
+    .eq("status", BOOKING_STATUS_PENDING_RESCHEDULE)
+    .select("id");
+
+  if (error) {
+    if (error.code === "23505") throw new SlotTakenError();
+    throw new Error(`Failed to update booking: ${error.message}`);
+  }
+  return (data?.length ?? 0) > 0;
 }

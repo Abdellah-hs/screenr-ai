@@ -7,7 +7,11 @@ import {
   deleteGmailConnection,
   type GmailConnectionStatus,
 } from "@/lib/data/integrations";
-import { revokeRefreshToken, verifyRefreshToken } from "@/lib/services/gmail";
+import {
+  hasCalendarScopes,
+  revokeRefreshToken,
+  verifyRefreshToken,
+} from "@/lib/services/gmail";
 
 /**
  * Read the current recruiter's Gmail connection status for the Settings page.
@@ -20,7 +24,13 @@ export async function getGmailConnectionStatus(): Promise<GmailConnectionStatus>
 
   const connection = await fetchGmailConnection(userId);
   if (!connection) {
-    return { connected: false, needsReconnect: false, email: null, connectedAt: null };
+    return {
+      connected: false,
+      needsReconnect: false,
+      calendarEnabled: false,
+      email: null,
+      connectedAt: null,
+    };
   }
 
   let connected = true;
@@ -35,6 +45,7 @@ export async function getGmailConnectionStatus(): Promise<GmailConnectionStatus>
   return {
     connected,
     needsReconnect: !connected,
+    calendarEnabled: connected && hasCalendarScopes(connection.scope),
     email: connection.email,
     connectedAt: connection.connected_at,
   };

@@ -1,15 +1,29 @@
 "use server";
 
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getRequestOrigin } from "@/lib/http/origin";
 import { fetchCampaignBySlug } from "@/lib/data/campaigns";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import { isSupportedResumeMimeType } from "@/lib/resume-ingest/mime";
 import {
   ingestResumeDocument,
+  type ApplicantIdentity,
   type IngestRejectionReason,
 } from "@/lib/resume-ingest/ingest-resume";
+import { applyApplicantSchema } from "@/lib/validations";
+import { getRecruiterGmailClient } from "./gmail-sender";
+import { sendEmail } from "@/lib/services/email";
+import { buildApplicationReceivedEmail } from "@/lib/services/email-templates/application-received";
+import { buildApplicationProblemEmail } from "@/lib/services/email-templates/application-problem";
+import type { BuiltEmail } from "@/lib/services/email-templates/shared";
+
+// Candidate-facing brand on the apply flow (confirmation email signature and
+// From display name). The ATS is internal to MatiousCorp, so this is fixed.
+const COMPANY_NAME = "Matious";
 
 // Resumes are small; 10 MB is generous and keeps an abusive upload from buffering
 // a huge file into memory before we even look at it.
@@ -87,14 +101,15 @@ export async function loadApplyContext(slug: string): Promise<ApplyContext> {
 /**
  * Public CV submission from the apply page. Candidates have no account, so this
  * runs on the service-role client after validating the upload and re-checking
- * the campaign is Active (the freeze rule applies candidate-side too). Delegates
- * to the shared `ingestResumeDocument` pipeline — the same extract → classify →
- * upload → score → advance core the Gmail sweep uses.
+ * the campaign is Active (the freeze rule applies candidate-side too).
  *
- * Cheap checks (presence, type, size, rate limit) run before the campaign
- * lookup and the expensive Marker/OpenAI pipeline, so bad input fails fast. A
- * rejection (not a CV, no email, unreadable) surfaces as an actionable message
- * the candidate can fix and re-upload against.
+ * Only the cheap checks (presence, type, size, rate limit, campaign active)
+ * run inside the request — the response is instant. The expensive pipeline
+ * (`ingestResumeDocument`: Marker extraction → OpenAI classify → upload →
+ * score → advance) runs in `after()`, once the candidate already has their
+ * confirmation. A rejection (not a CV, no email, unreadable) therefore can't
+ * be shown inline anymore: the applicant gets an actionable "apply again"
+ * email instead (product decision 2026-07-10).
  */
 export async function submitApplication(formData: FormData): Promise<{ ok: true }> {
   const slug = String(formData.get("slug") ?? "").trim();
@@ -104,6 +119,27 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
   if (!(file instanceof File) || file.size === 0) {
     throw new Error("Please attach your CV before submitting.");
   }
+
+  // Self-declared identity — validated here, authoritative over CV extraction.
+  const parsedApplicant = applyApplicantSchema.safeParse({
+    first_name: String(formData.get("first_name") ?? ""),
+    last_name: String(formData.get("last_name") ?? ""),
+    email: String(formData.get("email") ?? ""),
+    linkedin: String(formData.get("linkedin") ?? ""),
+    website: String(formData.get("website") ?? ""),
+  });
+  if (!parsedApplicant.success) {
+    throw new Error(
+      parsedApplicant.error.issues[0]?.message ?? "Please check your details and try again.",
+    );
+  }
+  const applicant: ApplicantIdentity = {
+    first_name: parsedApplicant.data.first_name,
+    last_name: parsedApplicant.data.last_name,
+    email: parsedApplicant.data.email,
+    linkedin_url: parsedApplicant.data.linkedin,
+    portfolio_url: parsedApplicant.data.website,
+  };
 
   // Rate-limit by IP before reading the file body or touching the database.
   const ip = await getClientIp();
@@ -124,19 +160,101 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
 
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  const result = await ingestResumeDocument({
-    db,
-    campaignId: campaign.campaign_id,
-    ownerUserId: campaign.user_id,
-    filename: safeFilename(file.name),
-    mimeType: file.type,
-    buffer,
-    source: "apply_form",
+  // Absolute "apply again" link for the problem email — resolved now, not
+  // inside the deferred work.
+  const applyUrl = `${await getRequestOrigin()}/apply/${encodeURIComponent(slug)}`;
+
+  // The candidate's part is done. Everything slow — Marker extraction, OpenAI
+  // classification + scoring, the storage upload, and the emails — runs after
+  // the response, so submitting feels instant.
+  after(async () => {
+    try {
+      const result = await ingestResumeDocument({
+        db,
+        campaignId: campaign.campaign_id,
+        ownerUserId: campaign.user_id,
+        filename: safeFilename(file.name),
+        mimeType: file.type,
+        buffer,
+        applicant,
+        source: "apply_form",
+      });
+
+      if (result.outcome === "rejected") {
+        await sendApplicantEmail({
+          db,
+          ownerUserId: campaign.user_id,
+          applicantEmail: applicant.email,
+          email: buildApplicationProblemEmail({
+            candidateName: `${applicant.first_name} ${applicant.last_name}`,
+            campaignTitle: campaign.title,
+            reasonMessage: rejectionMessage(result.reason),
+            applyUrl,
+            companyName: COMPANY_NAME,
+          }),
+        });
+        return;
+      }
+
+      await sendApplicantEmail({
+        db,
+        ownerUserId: campaign.user_id,
+        applicantEmail: applicant.email,
+        email: buildApplicationReceivedEmail({
+          candidateName: `${applicant.first_name} ${applicant.last_name}`,
+          campaignTitle: campaign.title,
+          companyName: COMPANY_NAME,
+        }),
+      });
+    } catch (err) {
+      // Infra failure mid-pipeline: the candidate already got a success
+      // screen, so tell them to retry rather than leaving them ghosted.
+      console.error(
+        `submitApplication: background ingest failed for ${applicant.email}:`,
+        err instanceof Error ? err.message : err,
+      );
+      await sendApplicantEmail({
+        db,
+        ownerUserId: campaign.user_id,
+        applicantEmail: applicant.email,
+        email: buildApplicationProblemEmail({
+          candidateName: `${applicant.first_name} ${applicant.last_name}`,
+          campaignTitle: campaign.title,
+          reasonMessage:
+            "Something went wrong on our side while processing your CV. Please try applying again.",
+          applyUrl,
+          companyName: COMPANY_NAME,
+        }),
+      });
+    }
   });
 
-  if (result.outcome === "rejected") {
-    throw new Error(rejectionMessage(result.reason));
-  }
-
   return { ok: true };
+}
+
+/**
+ * Best-effort candidate email from the campaign owner's connected Gmail
+ * (admin client — there is no session here). Failures log and return; they
+ * must never crash the deferred pipeline.
+ */
+async function sendApplicantEmail(args: {
+  db: SupabaseDb;
+  ownerUserId: string;
+  applicantEmail: string;
+  email: BuiltEmail;
+}): Promise<void> {
+  try {
+    // Throws when the owner has no inbox connected; caught below so a missing
+    // connection just skips the email rather than crashing the pipeline.
+    const gmail = await getRecruiterGmailClient(args.ownerUserId, args.db);
+    await sendEmail(gmail, {
+      to: args.applicantEmail,
+      subject: args.email.subject,
+      html: args.email.html,
+      text: args.email.text,
+      fromName: `${COMPANY_NAME} Recruiting`,
+    });
+  } catch (err) {
+    console.error("submitApplication: applicant email failed (non-blocking):", err);
+  }
 }

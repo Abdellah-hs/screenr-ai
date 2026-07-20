@@ -36,6 +36,21 @@ export type IngestResult =
   | { outcome: "ingested"; applicationId: string }
   | { outcome: "rejected"; reason: IngestRejectionReason };
 
+/**
+ * Identity the applicant asserted themselves (e.g. typed into the apply form).
+ * When present it is authoritative over whatever the AI extracts from the CV —
+ * self-declared contact data beats inferred contact data — and it satisfies
+ * the `no_email` requirement even when the CV itself carries no address.
+ */
+export interface ApplicantIdentity {
+  first_name: string;
+  last_name: string;
+  email: string;
+  /** Normalized profile links; null/absent means the candidate left them blank. */
+  linkedin_url?: string | null;
+  portfolio_url?: string | null;
+}
+
 export interface IngestResumeArgs {
   /** Supabase client to use — admin (service-role) for session-less callers. */
   db: SupabaseDb;
@@ -47,6 +62,8 @@ export interface IngestResumeArgs {
   buffer: Buffer;
   /** Tag persisted on the scoring audit row (e.g. "apply_form", "gmail_sync"). */
   source: string;
+  /** Self-declared identity; overrides the CV-extracted name/email when set. */
+  applicant?: ApplicantIdentity;
 }
 
 /**
@@ -64,7 +81,7 @@ export interface IngestResumeArgs {
  * caller still sees `ingested` and a recruiter can re-score manually.
  */
 export async function ingestResumeDocument(args: IngestResumeArgs): Promise<IngestResult> {
-  const { db, campaignId, ownerUserId, filename, mimeType, buffer, source } = args;
+  const { db, campaignId, ownerUserId, filename, mimeType, buffer, source, applicant } = args;
 
   let markdown: string;
   try {
@@ -74,17 +91,34 @@ export async function ingestResumeDocument(args: IngestResumeArgs): Promise<Inge
     return { outcome: "rejected", reason: "unreadable" };
   }
 
-  const structured = await extractResumeData(markdown);
-  if (structured.document_type !== "cv") {
+  const extracted = await extractResumeData(markdown);
+  if (extracted.document_type !== "cv") {
     return { outcome: "rejected", reason: "not_a_cv" };
   }
-  if (structured.email == null) {
+  const email = applicant?.email ?? extracted.email;
+  if (email == null) {
     return { outcome: "rejected", reason: "no_email" };
   }
 
+  // Candidate/application rows carry the merged identity (self-declared wins,
+  // but a blank optional link falls back to whatever the CV carries); the AI
+  // audit below keeps the raw extraction so the evidence stays untouched.
+  const structured: ParsedResumeData & { email: string } = {
+    ...extracted,
+    ...(applicant
+      ? {
+          first_name: applicant.first_name,
+          last_name: applicant.last_name,
+          linkedin_url: applicant.linkedin_url ?? extracted.linkedin_url,
+          portfolio_url: applicant.portfolio_url ?? extracted.portfolio_url,
+        }
+      : {}),
+    email,
+  };
+
   const resumeUrl = await uploadResumeToStorage(campaignId, filename, buffer, db);
 
-  const candidateId = await upsertCandidate({ ...structured, email: structured.email }, db);
+  const candidateId = await upsertCandidate(structured, db);
   const applicationId = await createApplicationIfNotExists(
     candidateId,
     campaignId,
@@ -93,7 +127,7 @@ export async function ingestResumeDocument(args: IngestResumeArgs): Promise<Inge
     db,
   );
   await logAiAudit(
-    { campaignId, candidateId, textContent: markdown, filename, structuredData: structured },
+    { campaignId, candidateId, textContent: markdown, filename, structuredData: extracted },
     db,
   );
 

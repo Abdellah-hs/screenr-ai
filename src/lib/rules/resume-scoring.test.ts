@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   evaluateResumeScoringOutcome,
+  assertResumeRescoreAllowed,
   type CampaignScoringConfig,
   type ResumeScoreResult,
 } from "./resume-scoring";
@@ -235,5 +236,25 @@ describe("evaluateResumeScoringOutcome", () => {
       expect(decision.rationale).toContain("Resume score 63");
       expect(decision.rationale).toContain("threshold 75");
     });
+  });
+});
+
+describe("assertResumeRescoreAllowed", () => {
+  it.each(["hired", "rejected", "archived"] as const)(
+    "throws for the closed state %s",
+    (status) => {
+      expect(() => assertResumeRescoreAllowed(status)).toThrow(/closed/);
+    },
+  );
+
+  it.each([
+    "new",
+    "screening_review_pending",
+    "screening_approved",
+    "screening_sent",
+    "interview_invited",
+    "manager_review",
+  ] as const)("allows the in-pipeline state %s", (status) => {
+    expect(() => assertResumeRescoreAllowed(status)).not.toThrow();
   });
 });

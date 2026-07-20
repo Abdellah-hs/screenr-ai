@@ -54,7 +54,10 @@ import {
   buildGmailConsentUrl,
   exchangeCodeForTokens,
   getConnectedEmail,
+  hasCalendarScopes,
   verifyRefreshToken,
+  CALENDAR_EVENTS_SCOPE,
+  CALENDAR_FREEBUSY_SCOPE,
 } from "./gmail";
 
 const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
@@ -71,7 +74,7 @@ afterEach(() => {
 });
 
 describe("buildGmailConsentUrl", () => {
-  it("requests offline access with forced consent, gmail.modify scope, and the CSRF state", () => {
+  it("requests offline access with forced consent, gmail + calendar scopes, and the CSRF state", () => {
     mockGenerateAuthUrl.mockReturnValue("https://accounts.google.com/o/oauth2/auth?x=1");
 
     const url = buildGmailConsentUrl("https://app.test/cb", "state-123");
@@ -87,7 +90,7 @@ describe("buildGmailConsentUrl", () => {
         access_type: "offline",
         prompt: "consent",
         state: "state-123",
-        scope: [GMAIL_MODIFY_SCOPE],
+        scope: [GMAIL_MODIFY_SCOPE, CALENDAR_FREEBUSY_SCOPE, CALENDAR_EVENTS_SCOPE],
       }),
     );
   });
@@ -98,6 +101,32 @@ describe("buildGmailConsentUrl", () => {
     expect(() => buildGmailConsentUrl("https://app.test/cb", "s")).toThrow(
       /GOOGLE_CLIENT_ID/,
     );
+  });
+});
+
+describe("hasCalendarScopes", () => {
+  it("returns true when the grant includes both calendar scopes", () => {
+    const scope = `${GMAIL_MODIFY_SCOPE} ${CALENDAR_FREEBUSY_SCOPE} ${CALENDAR_EVENTS_SCOPE}`;
+    expect(hasCalendarScopes(scope)).toBe(true);
+  });
+
+  it("returns false for a pre-calendar grant (gmail only)", () => {
+    expect(hasCalendarScopes(GMAIL_MODIFY_SCOPE)).toBe(false);
+  });
+
+  it("returns false when only one of the two calendar scopes was granted", () => {
+    expect(hasCalendarScopes(`${GMAIL_MODIFY_SCOPE} ${CALENDAR_FREEBUSY_SCOPE}`)).toBe(false);
+    expect(hasCalendarScopes(`${GMAIL_MODIFY_SCOPE} ${CALENDAR_EVENTS_SCOPE}`)).toBe(false);
+  });
+
+  it("returns false for a null or empty stored scope", () => {
+    expect(hasCalendarScopes(null)).toBe(false);
+    expect(hasCalendarScopes("")).toBe(false);
+  });
+
+  it("does not accept a readonly variant as a substring match", () => {
+    const scope = `${CALENDAR_FREEBUSY_SCOPE} ${CALENDAR_EVENTS_SCOPE}.readonly`;
+    expect(hasCalendarScopes(scope)).toBe(false);
   });
 });
 

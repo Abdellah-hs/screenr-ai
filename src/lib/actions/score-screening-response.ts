@@ -39,7 +39,7 @@ export interface RunScreeningScoringInput {
  * Control > AI > Data: AI produces the score (evidence); the rule layer
  * (`evaluateScreeningScoringOutcome`) decides the transitions from that evidence
  * + campaign config. HITL rests at `screening_scored`; fully_auto chains through
- * to `interview_scheduling` (pass) or `rejected` (fail).
+ * to `interview_invited` (pass) or `rejected` (fail).
  *
  * Throws if the response is missing or not in the `responded` state — callers
  * that can't surface an error to a user (the candidate path) run this

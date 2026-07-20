@@ -92,6 +92,7 @@ describe("assertEligibleForScreeningSend", () => {
     "screening_review_pending",
     "screening_completed",
     "screening_scored",
+    "interview_invited",
     "interview_scheduling",
     "interview_scheduled",
     "interview_completed",
@@ -233,15 +234,26 @@ describe("evaluateScreeningScoringOutcome", () => {
   });
 
   describe("fully_auto mode", () => {
-    it("chains screening_scored → interview_scheduling when score ≥ threshold", () => {
+    it("chains screening_scored → interview_invited when score ≥ threshold", () => {
       const decisions = evaluateScreeningScoringOutcome(
         { overall_score: 85 },
         makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
       );
 
       expect(decisions).toHaveLength(2);
-      expect(decisions[1].toState).toBe("interview_scheduling");
+      expect(decisions[1].toState).toBe("interview_invited");
       expect(decisions[1].rationale).toContain("passed");
+    });
+
+    it("never routes a pass to the retired slot-booking state (scheduling now follows the AI interview)", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 85 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      for (const d of decisions) {
+        expect(d.toState).not.toBe("interview_scheduling");
+      }
     });
 
     it("treats score equal to threshold as a pass (boundary)", () => {
@@ -250,7 +262,7 @@ describe("evaluateScreeningScoringOutcome", () => {
         makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
       );
 
-      expect(decisions[1].toState).toBe("interview_scheduling");
+      expect(decisions[1].toState).toBe("interview_invited");
     });
 
     it("chains screening_scored → rejected when score < threshold", () => {

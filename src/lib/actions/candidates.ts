@@ -36,11 +36,13 @@ import {
   fetchActiveRubricVersion,
   fetchCampaignStatus,
 } from "@/lib/data/campaigns";
+import { fetchScreeningQuestionsByCampaignId } from "@/lib/data/screening-questions";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 
 // Rules
 import {
   evaluateResumeScoringOutcome,
+  assertResumeRescoreAllowed,
   type CampaignScoringConfig,
   type ResumeScoreResult,
 } from "@/lib/rules/resume-scoring";
@@ -155,6 +157,7 @@ async function autoSendScreeningIfApproved(
 // ─── Regular Fetch Functions ──────────────────────────────────────────────
 
 export async function getCandidatesByCampaignId(campaignId: string): Promise<Candidate[]> {
+  uuidSchema.parse(campaignId);
   const userId = await requireUserId();
   const [data, currentResumeRubricVersion, currentScreeningRubricVersion] = await Promise.all([
     fetchCandidatesByCampaignId(campaignId, userId),
@@ -195,6 +198,8 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
 
 export async function getCandidateById(applicationId: string) {
   const userId = await requireUserId();
+  // Malformed ids resolve to a plain not-found, same contract as a missing row.
+  if (!uuidSchema.safeParse(applicationId).success) return null;
   const data = (await fetchCandidateById(applicationId, userId)) as ApplicationWithCandidate | null;
   if (!data) return null;
 
@@ -373,6 +378,61 @@ export async function scoreUnscoredCampaignCandidates(
   }
 }
 
+/**
+ * Recruiter-triggered re-score of one application's resume — the action behind
+ * the "Re-score" button shown when a score was produced under a stale rubric.
+ *
+ * Evidence only, by design: it persists a fresh score (every run is appended
+ * to ai_audit_log, so nothing is lost) but NEVER transitions. The application
+ * may be anywhere in the pipeline, and advancement stays with the flows that
+ * own it — the HITL panel, the manual stage changer, or the scoring rule on
+ * first evaluation. Re-running the decision rule here could re-decide an
+ * in-flight application off a score the original transition never saw.
+ */
+export async function rescoreCandidateResume(
+  applicationId: string,
+): Promise<{ rescored: true }> {
+  uuidSchema.parse(applicationId);
+  const userId = await requireUserId();
+
+  checkRateLimit(userId, {
+    name: "resume-rescore",
+    maxRequests: 15,
+    windowMs: 5 * 60 * 1000,
+  });
+
+  const data = (await fetchCandidateById(applicationId, userId)) as ApplicationWithCandidate | null;
+  if (!data) throw new Error("Application not found");
+
+  assertResumeRescoreAllowed(data.status);
+
+  // Re-scoring is processing, so the campaign freeze rule applies.
+  await assertCampaignActiveById(data.campaign_id, userId);
+
+  const parsedResume = data.parsed_data as ParsedResumeData | null;
+  const candidateId = data.candidates?.id;
+  if (!parsedResume || !candidateId) {
+    throw new Error("This application has no parsed resume to score.");
+  }
+
+  const scored = await scoreApplicationResume(
+    applicationId,
+    data.campaign_id,
+    candidateId,
+    userId,
+    parsedResume,
+  );
+  if (!scored) {
+    throw new Error(
+      "This campaign has no resume criteria configured. Set them up on the campaign page first.",
+    );
+  }
+
+  revalidatePath(`/campaigns/${data.campaign_id}`);
+  revalidatePath(`/campaigns/${data.campaign_id}/candidates/${applicationId}`);
+  return { rescored: true };
+}
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 // When automation_mode = human_in_loop, the resume-scoring rule routes
 // applications to `screening_review_pending` instead of approving/rejecting
@@ -406,6 +466,20 @@ export async function decideHitlReview(input: {
   // and stays allowed so a recruiter can clear out a paused/closed campaign.
   if (parsed.decision === "approve") {
     await assertCampaignActiveById(data.campaign_id, userId);
+
+    // Approval promises an immediate screening email (the modal says so). A
+    // campaign with no questions configured can never fulfil that, and it's a
+    // setup gap the recruiter can fix right now — so block BEFORE the
+    // transition instead of approving into a parked state and warning after
+    // the fact. Transient send failures (Gmail disconnected, delivery error)
+    // are different: those still degrade gracefully below, because they
+    // shouldn't undo a recorded human decision.
+    const questions = await fetchScreeningQuestionsByCampaignId(data.campaign_id);
+    if (questions.length === 0) {
+      throw new Error(
+        "This campaign has no screening questions configured. Set them up on the campaign page, then approve.",
+      );
+    }
   }
 
   const toState: ApplicationState =
@@ -423,10 +497,11 @@ export async function decideHitlReview(input: {
   // On approval, email the candidate their screening questions immediately so
   // the recruiter doesn't have to remember a separate "send" step. The send
   // re-checks ownership + eligibility and advances screening_approved →
-  // screening_sent on success. Degrade gracefully: a campaign with no
-  // questions configured (or any send failure) must NOT undo the approval —
-  // the candidate stays approved and the recruiter can send manually. The
-  // returned warning explains why no email went out.
+  // screening_sent on success. Degrade gracefully: a transient send failure
+  // (Gmail disconnected, delivery error) must NOT undo the approval — the
+  // candidate stays approved and the recruiter can send manually. The returned
+  // warning explains why no email went out. (Missing screening questions are
+  // not a send failure — they're preflighted above, before the transition.)
   let screeningEmailSent = false;
   let screeningWarning: string | undefined;
   if (parsed.decision === "approve") {

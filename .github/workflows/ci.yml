@@ -50,3 +50,7 @@ jobs:
 
       - name: Build
         run: pnpm build
+        env:
+          # next build peaks past Node's default heap on the CI runner and OOMs
+          # (JavaScript heap out of memory). Raise the limit; runners have 16GB.
+          NODE_OPTIONS: --max-old-space-size=6144
