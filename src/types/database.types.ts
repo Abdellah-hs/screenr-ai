@@ -578,36 +578,81 @@ export type Database = {
           },
         ]
       }
+      calendar_watch_channels: {
+        Row: {
+          channel_id: string
+          channel_token: string
+          created_at: string
+          expiration: string | null
+          id: string
+          owner_user_id: string
+          reconciling_since: string | null
+          resource_id: string
+          sync_token: string | null
+          updated_at: string
+        }
+        Insert: {
+          channel_id: string
+          channel_token: string
+          created_at?: string
+          expiration?: string | null
+          id?: string
+          owner_user_id: string
+          reconciling_since?: string | null
+          resource_id: string
+          sync_token?: string | null
+          updated_at?: string
+        }
+        Update: {
+          channel_id?: string
+          channel_token?: string
+          created_at?: string
+          expiration?: string | null
+          id?: string
+          owner_user_id?: string
+          reconciling_since?: string | null
+          resource_id?: string
+          sync_token?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       interview_bookings: {
         Row: {
           application_id: string
           campaign_id: string
           created_at: string
+          google_event_id: string | null
           id: string
           scheduled_at: string
           slot_minutes: number
           status: string
           timezone: string
+          updated_at: string
         }
         Insert: {
           application_id: string
           campaign_id: string
           created_at?: string
+          google_event_id?: string | null
           id?: string
           scheduled_at: string
           slot_minutes: number
           status?: string
           timezone: string
+          updated_at?: string
         }
         Update: {
           application_id?: string
           campaign_id?: string
           created_at?: string
+          google_event_id?: string | null
           id?: string
           scheduled_at?: string
           slot_minutes?: number
           status?: string
           timezone?: string
+          updated_at?: string
         }
         Relationships: [
           {

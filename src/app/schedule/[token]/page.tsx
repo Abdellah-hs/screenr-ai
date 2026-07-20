@@ -67,7 +67,8 @@ export default async function SchedulePage({
             <strong className="font-medium text-[#374151]">{ctx.campaign_title}</strong>.
           </p>
           <p className="mt-3 text-xs text-[#9CA3AF]">
-            Times shown in {ctx.booking.timezone}. To reschedule, reply to the confirmation email.
+            Times shown in {ctx.booking.timezone}. If the time needs to change, the hiring team
+            will email you to pick again.
           </p>
         </div>
       </Shell>
@@ -83,10 +84,23 @@ export default async function SchedulePage({
               <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight text-[#111827]">Schedule your interview</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-[#111827]">
+            {ctx.needs_reschedule ? "Choose a new interview time" : "Schedule your interview"}
+          </h1>
           <p className="mt-1.5 text-sm leading-relaxed text-[#6B7280]">
-            Choose a time that works for your{" "}
-            <strong className="font-medium text-[#374151]">{ctx.campaign_title}</strong> interview.
+            {ctx.needs_reschedule ? (
+              <>
+                The time for your{" "}
+                <strong className="font-medium text-[#374151]">{ctx.campaign_title}</strong>{" "}
+                interview has changed — please pick a new one that works for you.
+              </>
+            ) : (
+              <>
+                Choose a time that works for your{" "}
+                <strong className="font-medium text-[#374151]">{ctx.campaign_title}</strong>{" "}
+                interview.
+              </>
+            )}
           </p>
         </div>
         {ctx.calendar_unavailable ? (
@@ -104,7 +118,7 @@ export default async function SchedulePage({
             </p>
           </div>
         ) : ctx.no_hours ? (
-          // The interviewer hasn't published "Interview hours" blocks yet.
+          // No bookable weekday business hours fall in the horizon yet.
           <div className="rounded-2xl border border-[#E5E7EB] bg-white p-8 text-center shadow-sm">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#F3F4F6]">
               <svg className="h-6 w-6 text-[#9CA3AF]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -123,6 +137,7 @@ export default async function SchedulePage({
             timezone={ctx.timezone ?? "UTC"}
             slots={ctx.slots}
             recommendedIso={ctx.recommended_iso}
+            mode={ctx.needs_reschedule ? "reschedule" : "book"}
           />
         )}
       </div>

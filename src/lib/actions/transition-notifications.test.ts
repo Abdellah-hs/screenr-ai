@@ -29,6 +29,7 @@ vi.mock("@/lib/http/origin", () => ({
 
 vi.mock("@/lib/auth/screening-token", () => ({
   signResponseToken: () => "signed-token",
+  SCHEDULE_TOKEN_TTL_MS: 30 * 24 * 60 * 60 * 1000,
 }));
 
 import { sendTransitionNotification } from "./transition-notifications";

@@ -265,6 +265,27 @@ function InterviewBookingBanner({
     );
   }
 
+  // A time change is in flight: the recruiter moved the calendar event, so the
+  // candidate was sent back to re-pick. Orange — waiting on the candidate again.
+  if (booking && booking.status === "pending_reschedule") {
+    return (
+      <div
+        role="status"
+        className="flex items-start gap-3 rounded-xl border border-[#FED7AA] bg-[#FFF7ED] p-4"
+      >
+        <svg className="w-5 h-5 text-[#EA580C] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+        </svg>
+        <div>
+          <p className="text-sm font-semibold text-[#9A3412]">Awaiting candidate re-confirmation</p>
+          <p className="text-sm text-[#C2410C] mt-0.5">
+            You moved the interview on your calendar. The candidate was emailed to pick a new time.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // Invited but not yet booked. Amber — action sits with the candidate.
   if (isFinal || status === "interview_scheduling") {
     return (

@@ -1,8 +1,11 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { bookInterviewSlot } from "@/lib/actions/schedule";
+import { bookInterviewSlot, confirmRescheduledSlot } from "@/lib/actions/schedule";
 import type { GeneratedSlot } from "@/lib/scheduling/slots";
+
+/** "book" = first-time pick; "reschedule" = re-pick after the recruiter moved it. */
+export type SchedulerMode = "book" | "reschedule";
 
 interface Props {
   token: string;
@@ -11,13 +14,16 @@ interface Props {
   slots: GeneratedSlot[];
   /** Slot starts (ISO) the server suggests first — rendered as quick picks. */
   recommendedIso?: string[];
+  mode?: SchedulerMode;
 }
 
 /**
- * Candidate-facing final-interview scheduler. Slots come from the interviewer's
- * published calendar hours minus their real conflicts, grouped by day and shown
- * in the interviewer's timezone; selecting one and confirming books it via the
- * token-gated server action. Mobile-friendly tap targets (PRD 3.9.3).
+ * Candidate-facing final-interview scheduler. Slots are the interviewer's
+ * automatic weekday business hours minus their real conflicts, grouped by day
+ * and shown in the interviewer's timezone; selecting one and confirming books
+ * it via the token-gated server action. In "reschedule" mode (the recruiter
+ * moved the time) the same grid re-confirms a new slot instead. Mobile-friendly
+ * tap targets (PRD 3.9.3).
  */
 export default function InterviewScheduler({
   token,
@@ -25,11 +31,14 @@ export default function InterviewScheduler({
   timezone,
   slots,
   recommendedIso = [],
+  mode = "book",
 }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startBooking] = useTransition();
+
+  const isReschedule = mode === "reschedule";
 
   const dayFmt = useMemo(
     () => new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long", month: "short", day: "numeric" }),
@@ -65,7 +74,11 @@ export default function InterviewScheduler({
     setError(null);
     startBooking(async () => {
       try {
-        await bookInterviewSlot({ token, start_iso: selected });
+        if (isReschedule) {
+          await confirmRescheduledSlot({ token, start_iso: selected });
+        } else {
+          await bookInterviewSlot({ token, start_iso: selected });
+        }
         setDone(selected);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Couldn't book that slot. Please try again.");
@@ -84,7 +97,7 @@ export default function InterviewScheduler({
         <h2 className="mb-2 text-xl font-semibold text-[#111827]">You&apos;re all set</h2>
         <p className="mx-auto max-w-sm text-sm leading-relaxed text-[#6B7280]">
           Your <strong className="font-medium text-[#374151]">{campaignTitle}</strong> interview is
-          booked for{" "}
+          {isReschedule ? " now" : " booked for"}{" "}
           <strong className="font-medium text-[#111827]">{dayFmt.format(new Date(done))}</strong> at{" "}
           <strong className="font-medium text-[#111827]">{timeFmt.format(new Date(done))}</strong>.
         </p>
@@ -118,9 +131,13 @@ export default function InterviewScheduler({
       {/* Header: context + timezone */}
       <div className="flex items-start justify-between gap-3 border-b border-[#F3F4F6] px-5 py-4 sm:px-6">
         <div>
-          <h2 className="text-base font-semibold text-[#111827]">Select a time</h2>
+          <h2 className="text-base font-semibold text-[#111827]">
+            {isReschedule ? "Pick a new time" : "Select a time"}
+          </h2>
           <p className="mt-0.5 text-sm text-[#6B7280]">
-            Pick a slot for your {campaignTitle} interview.
+            {isReschedule
+              ? `Choose a new slot for your ${campaignTitle} interview.`
+              : `Pick a slot for your ${campaignTitle} interview.`}
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#F3F4F6] px-2.5 py-1 text-xs font-medium text-[#374151]">
@@ -239,7 +256,13 @@ export default function InterviewScheduler({
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
             )}
-            {pending ? "Booking…" : "Confirm interview time"}
+            {pending
+              ? isReschedule
+                ? "Updating…"
+                : "Booking…"
+              : isReschedule
+                ? "Confirm new time"
+                : "Confirm interview time"}
           </button>
         </div>
       </div>

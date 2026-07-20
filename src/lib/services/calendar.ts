@@ -181,11 +181,193 @@ export async function createInterviewEvent(params: {
     },
   });
 
-  const meetUrl =
-    data.conferenceData?.entryPoints?.find((e) => e.entryPointType === "video")
-      ?.uri ??
-    data.hangoutLink ??
-    null;
+  return { eventId: data.id ?? null, meetUrl: extractMeetUrl(data) };
+}
 
-  return { eventId: data.id ?? null, meetUrl };
+/** Pull the "Join with Google Meet" URL off an event, if Google attached one. */
+function extractMeetUrl(event: calendar_v3.Schema$Event): string | null {
+  return (
+    event.conferenceData?.entryPoints?.find((e) => e.entryPointType === "video")
+      ?.uri ??
+    event.hangoutLink ??
+    null
+  );
+}
+
+/**
+ * Move an existing interview event to a new time, in place. Uses `patch` (a
+ * partial merge) deliberately: the body carries only `start`/`end`, so the
+ * candidate stays invited and the description and Google Meet room survive
+ * untouched — no need to resend them. `sendUpdates: "all"` makes Google notify
+ * both the organizer and the candidate of the change, exactly as it would for a
+ * manually edited meeting. Errors propagate — the caller decides the fallback.
+ */
+export async function updateInterviewEvent(params: {
+  refreshToken: string;
+  eventId: string;
+  startIso: string;
+  endIso: string;
+  /** IANA timezone the event is anchored to. */
+  timeZone: string;
+}): Promise<CreatedInterviewEvent> {
+  const calendar = createCalendarClient(params.refreshToken);
+
+  const { data } = await calendar.events.patch({
+    calendarId: "primary",
+    eventId: params.eventId,
+    sendUpdates: "all",
+    requestBody: {
+      start: { dateTime: params.startIso, timeZone: params.timeZone },
+      end: { dateTime: params.endIso, timeZone: params.timeZone },
+    },
+  });
+
+  return { eventId: data.id ?? null, meetUrl: extractMeetUrl(data) };
+}
+
+export interface CalendarWatchChannel {
+  /** Google's opaque id for the watched resource — needed to stop the channel. */
+  resourceId: string | null;
+  /** Channel expiry (ISO instant), when Google reports one. */
+  expirationIso: string | null;
+}
+
+/**
+ * Open a Google `events.watch` channel on the manager's primary calendar, so
+ * Google POSTs our webhook whenever an event changes. `channelId` and
+ * `channelToken` are ours (we generate them); Google echoes the token back in
+ * every notification's `X-Goog-Channel-Token` header, which the webhook
+ * verifies. The default channel TTL is ~7 days, so a renewal job must re-watch
+ * before `expiration`. Requires the `calendar.events` scope. Errors propagate.
+ */
+export async function watchCalendarEvents(params: {
+  refreshToken: string;
+  /** HTTPS webhook URL Google will POST change notifications to. */
+  address: string;
+  channelId: string;
+  channelToken: string;
+}): Promise<CalendarWatchChannel> {
+  const calendar = createCalendarClient(params.refreshToken);
+
+  const { data } = await calendar.events.watch({
+    calendarId: "primary",
+    requestBody: {
+      id: params.channelId,
+      type: "web_hook",
+      address: params.address,
+      token: params.channelToken,
+    },
+  });
+
+  return {
+    resourceId: data.resourceId ?? null,
+    // Google returns expiration as unix-ms in a string; normalize to an ISO instant.
+    expirationIso: data.expiration
+      ? new Date(Number(data.expiration)).toISOString()
+      : null,
+  };
+}
+
+/** Stop a previously opened watch channel (best-effort; errors propagate). */
+export async function stopCalendarWatch(params: {
+  refreshToken: string;
+  channelId: string;
+  resourceId: string;
+}): Promise<void> {
+  const calendar = createCalendarClient(params.refreshToken);
+  await calendar.channels.stop({
+    requestBody: { id: params.channelId, resourceId: params.resourceId },
+  });
+}
+
+/** A calendar event that changed since the last sync, in the shape we consume. */
+export interface ChangedCalendarEvent {
+  eventId: string | null;
+  /** UTC instant of the (new) start, or null for all-day / cancelled events. */
+  startIso: string | null;
+  /** Google's event status — "cancelled" means deleted. */
+  status: string | null;
+}
+
+export interface ChangedCalendarEvents {
+  events: ChangedCalendarEvent[];
+  /** Cursor to persist for the next incremental sync. */
+  nextSyncToken: string | null;
+}
+
+/**
+ * Thrown when Google rejects a stored `syncToken` as stale/invalid (HTTP 410).
+ * The caller must drop the token and re-run a bounded full sync — retrying the
+ * same token would just fail again.
+ */
+export class SyncTokenExpiredError extends Error {
+  constructor() {
+    super("Calendar sync token expired; a full resync is required");
+    this.name = "SyncTokenExpiredError";
+  }
+}
+
+/**
+ * List the events that changed on the manager's primary calendar since the
+ * given `syncToken` (incremental sync), or — when no token is passed — since
+ * `timeMinIso` (a bounded full sync, used to seed or recover the cursor).
+ *
+ * Paginates internally: Google returns `nextSyncToken` ONLY on the final page,
+ * so we accumulate items across every page and read the token off the last one.
+ * Persisting an intermediate page's (absent) token would silently corrupt the
+ * next sync. A 410 from an expired token is surfaced as `SyncTokenExpiredError`.
+ */
+export async function listChangedCalendarEvents(params: {
+  refreshToken: string;
+  syncToken?: string | null;
+  /** Lower bound for the full-sync fallback (ignored when syncToken is set). */
+  timeMinIso?: string;
+}): Promise<ChangedCalendarEvents> {
+  const calendar = createCalendarClient(params.refreshToken);
+
+  const events: ChangedCalendarEvent[] = [];
+  let pageToken: string | undefined = undefined;
+  let nextSyncToken: string | null = null;
+
+  try {
+    do {
+      const { data }: { data: calendar_v3.Schema$Events } =
+        await calendar.events.list({
+          calendarId: "primary",
+          singleEvents: true,
+          pageToken,
+          // syncToken and timeMin are mutually exclusive; prefer the cursor.
+          ...(params.syncToken
+            ? { syncToken: params.syncToken }
+            : { timeMin: params.timeMinIso }),
+        });
+
+      for (const event of data.items ?? []) {
+        events.push({
+          eventId: event.id ?? null,
+          startIso: event.start?.dateTime
+            ? new Date(event.start.dateTime).toISOString()
+            : null,
+          status: event.status ?? null,
+        });
+      }
+
+      pageToken = data.nextPageToken ?? undefined;
+      // Only the final page carries the sync token.
+      if (!pageToken) nextSyncToken = data.nextSyncToken ?? null;
+    } while (pageToken);
+  } catch (err) {
+    if (isGoneError(err)) throw new SyncTokenExpiredError();
+    throw err;
+  }
+
+  return { events, nextSyncToken };
+}
+
+/** Whether a googleapis error is an HTTP 410 Gone (stale sync token). */
+function isGoneError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const code = (err as { code?: unknown; status?: unknown }).code;
+  const status = (err as { status?: unknown }).status;
+  return code === 410 || status === 410;
 }

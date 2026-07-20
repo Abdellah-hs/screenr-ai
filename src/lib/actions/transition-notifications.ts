@@ -4,18 +4,11 @@ import { fetchApplicationEmailContext } from "@/lib/data/candidates";
 import { sendEmail } from "@/lib/services/email";
 import { getRecruiterGmailClient } from "./gmail-sender";
 import { getRequestOrigin } from "@/lib/http/origin";
-import { signResponseToken } from "@/lib/auth/screening-token";
+import { signResponseToken, SCHEDULE_TOKEN_TTL_MS } from "@/lib/auth/screening-token";
 import { buildInterviewAdvanceEmail } from "@/lib/services/email-templates/interview-advance";
 import { buildInterviewSchedulingEmail } from "@/lib/services/email-templates/interview-scheduling";
 import { buildRejectScreeningEmail } from "@/lib/services/email-templates/reject-screening";
 import type { BuiltEmail } from "@/lib/services/email-templates/shared";
-
-/**
- * The candidate's scheduling link must outlive the booking horizon (the window
- * of slots they can pick from, default 14 days) with comfortable buffer, so it
- * gets a longer TTL than the 7-day screening response link.
- */
-const SCHEDULE_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 interface TransitionEmailContext {
   candidateName: string;

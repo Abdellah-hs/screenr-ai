@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockCreateAdminClient, mockFetchGmailConnection, mockCreateInterviewEvent } =
-  vi.hoisted(() => ({
-    mockCreateAdminClient: vi.fn(),
-    mockFetchGmailConnection: vi.fn(),
-    mockCreateInterviewEvent: vi.fn(),
-  }));
+const {
+  mockCreateAdminClient,
+  mockFetchGmailConnection,
+  mockCreateInterviewEvent,
+  mockUpdateInterviewEvent,
+} = vi.hoisted(() => ({
+  mockCreateAdminClient: vi.fn(),
+  mockFetchGmailConnection: vi.fn(),
+  mockCreateInterviewEvent: vi.fn(),
+  mockUpdateInterviewEvent: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: mockCreateAdminClient,
@@ -17,11 +22,12 @@ vi.mock("@/lib/data/integrations", () => ({
 
 vi.mock("@/lib/services/calendar", () => ({
   createInterviewEvent: mockCreateInterviewEvent,
+  updateInterviewEvent: mockUpdateInterviewEvent,
 }));
 
 // `hasCalendarScopes` stays real (pure) so the scope gate is actually exercised.
 
-import { createBookingCalendarEvent } from "./booking-event";
+import { createBookingCalendarEvent, updateBookingCalendarEvent } from "./booking-event";
 import {
   CALENDAR_EVENTS_SCOPE,
   CALENDAR_FREEBUSY_SCOPE,
@@ -60,7 +66,10 @@ describe("createBookingCalendarEvent", () => {
 
     const result = await createBookingCalendarEvent(BOOKING);
 
-    expect(result).toEqual({ meetUrl: "https://meet.google.com/abc-defg-hij" });
+    expect(result).toEqual({
+      meetUrl: "https://meet.google.com/abc-defg-hij",
+      eventId: "evt-1",
+    });
     expect(mockCreateInterviewEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         refreshToken: "rt-1",
@@ -90,7 +99,7 @@ describe("createBookingCalendarEvent", () => {
     expect(summary).toContain("Data scientist");
   });
 
-  it("skips the event (null Meet URL) when the owner has no calendar-enabled connection", async () => {
+  it("skips the event (null result) when the owner has no calendar-enabled connection", async () => {
     mockFetchGmailConnection.mockResolvedValue({
       refresh_token: "rt-1",
       scope: "https://www.googleapis.com/auth/gmail.modify",
@@ -98,7 +107,7 @@ describe("createBookingCalendarEvent", () => {
 
     const result = await createBookingCalendarEvent(BOOKING);
 
-    expect(result).toEqual({ meetUrl: null });
+    expect(result).toEqual({ meetUrl: null, eventId: null });
     expect(mockCreateInterviewEvent).not.toHaveBeenCalled();
   });
 
@@ -107,7 +116,7 @@ describe("createBookingCalendarEvent", () => {
 
     const result = await createBookingCalendarEvent(BOOKING);
 
-    expect(result).toEqual({ meetUrl: null });
+    expect(result).toEqual({ meetUrl: null, eventId: null });
     expect(mockCreateInterviewEvent).not.toHaveBeenCalled();
   });
 
@@ -120,6 +129,69 @@ describe("createBookingCalendarEvent", () => {
 
     await expect(createBookingCalendarEvent(BOOKING)).resolves.toEqual({
       meetUrl: null,
+      eventId: null,
+    });
+  });
+});
+
+describe("updateBookingCalendarEvent", () => {
+  const RESCHEDULE = {
+    ...BOOKING,
+    googleEventId: "evt-1",
+    startIso: "2026-07-12T09:00:00.000Z",
+  };
+
+  beforeEach(() => {
+    mockFetchGmailConnection.mockResolvedValue({ refresh_token: "rt-1", scope: FULL_SCOPE });
+  });
+
+  it("patches the existing event in place (same id, preserved Meet link)", async () => {
+    mockUpdateInterviewEvent.mockResolvedValue({
+      eventId: "evt-1",
+      meetUrl: "https://meet.google.com/keep-same",
+    });
+
+    const result = await updateBookingCalendarEvent(RESCHEDULE);
+
+    expect(result).toEqual({ eventId: "evt-1", meetUrl: "https://meet.google.com/keep-same" });
+    expect(mockUpdateInterviewEvent).toHaveBeenCalledWith({
+      refreshToken: "rt-1",
+      eventId: "evt-1",
+      startIso: "2026-07-12T09:00:00.000Z",
+      // 45-min slot.
+      endIso: "2026-07-12T09:45:00.000Z",
+      timeZone: "Africa/Casablanca",
+    });
+    expect(mockCreateInterviewEvent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a fresh event when no event id was stored", async () => {
+    mockCreateInterviewEvent.mockResolvedValue({ eventId: "evt-new", meetUrl: null });
+
+    const result = await updateBookingCalendarEvent({ ...RESCHEDULE, googleEventId: null });
+
+    expect(mockUpdateInterviewEvent).not.toHaveBeenCalled();
+    expect(mockCreateInterviewEvent).toHaveBeenCalledOnce();
+    expect(result.eventId).toBe("evt-new");
+  });
+
+  it("falls back to a fresh event when the patch fails (event was deleted)", async () => {
+    mockUpdateInterviewEvent.mockRejectedValue(new Error("Not Found"));
+    mockCreateInterviewEvent.mockResolvedValue({ eventId: "evt-new", meetUrl: null });
+
+    const result = await updateBookingCalendarEvent(RESCHEDULE);
+
+    expect(mockCreateInterviewEvent).toHaveBeenCalledOnce();
+    expect(result.eventId).toBe("evt-new");
+  });
+
+  it("never throws when even the fallback insert fails", async () => {
+    mockUpdateInterviewEvent.mockRejectedValue(new Error("Not Found"));
+    mockCreateInterviewEvent.mockRejectedValue(new Error("Google 503"));
+
+    await expect(updateBookingCalendarEvent(RESCHEDULE)).resolves.toEqual({
+      meetUrl: null,
+      eventId: null,
     });
   });
 });

@@ -5,6 +5,9 @@ const {
   mockOAuth2,
   mockEventsList,
   mockEventsInsert,
+  mockEventsPatch,
+  mockEventsWatch,
+  mockChannelsStop,
   mockCalendarFactory,
 } = vi.hoisted(() => {
     const mockSetCredentials = vi.fn();
@@ -17,14 +20,26 @@ const {
     });
     const mockEventsList = vi.fn();
     const mockEventsInsert = vi.fn();
+    const mockEventsPatch = vi.fn();
+    const mockEventsWatch = vi.fn();
+    const mockChannelsStop = vi.fn();
     const mockCalendarFactory = vi.fn(() => ({
-      events: { list: mockEventsList, insert: mockEventsInsert },
+      events: {
+        list: mockEventsList,
+        insert: mockEventsInsert,
+        patch: mockEventsPatch,
+        watch: mockEventsWatch,
+      },
+      channels: { stop: mockChannelsStop },
     }));
     return {
       mockSetCredentials,
       mockOAuth2,
       mockEventsList,
       mockEventsInsert,
+      mockEventsPatch,
+      mockEventsWatch,
+      mockChannelsStop,
       mockCalendarFactory,
     };
   });
@@ -36,7 +51,15 @@ vi.mock("googleapis", () => ({
   },
 }));
 
-import { createInterviewEvent, fetchCalendarSchedule } from "./calendar";
+import {
+  createInterviewEvent,
+  fetchCalendarSchedule,
+  listChangedCalendarEvents,
+  stopCalendarWatch,
+  SyncTokenExpiredError,
+  updateInterviewEvent,
+  watchCalendarEvents,
+} from "./calendar";
 
 const WINDOW = {
   refreshToken: "rt-1",
@@ -296,5 +319,214 @@ describe("createInterviewEvent", () => {
     await expect(createInterviewEvent(EVENT)).rejects.toThrow(
       "insufficient authentication scopes",
     );
+  });
+});
+
+describe("updateInterviewEvent", () => {
+  const MOVE = {
+    refreshToken: "rt-1",
+    eventId: "evt-1",
+    startIso: "2026-07-12T09:00:00.000Z",
+    endIso: "2026-07-12T09:45:00.000Z",
+    timeZone: "Africa/Casablanca",
+  };
+
+  it("patches only start and end, preserving attendees/description/Meet via the merge", async () => {
+    mockEventsPatch.mockResolvedValue({ data: {} });
+
+    await updateInterviewEvent(MOVE);
+
+    expect(mockEventsPatch).toHaveBeenCalledWith({
+      calendarId: "primary",
+      eventId: "evt-1",
+      sendUpdates: "all",
+      requestBody: {
+        start: { dateTime: "2026-07-12T09:00:00.000Z", timeZone: "Africa/Casablanca" },
+        end: { dateTime: "2026-07-12T09:45:00.000Z", timeZone: "Africa/Casablanca" },
+      },
+    });
+  });
+
+  it("returns the preserved event id and Meet link from the patch response", async () => {
+    mockEventsPatch.mockResolvedValue({
+      data: {
+        id: "evt-1",
+        hangoutLink: "https://meet.google.com/abc-defg-hij",
+      },
+    });
+
+    const result = await updateInterviewEvent(MOVE);
+
+    expect(result).toEqual({
+      eventId: "evt-1",
+      meetUrl: "https://meet.google.com/abc-defg-hij",
+    });
+  });
+
+  it("propagates API errors so the caller can fall back to a fresh insert", async () => {
+    mockEventsPatch.mockRejectedValue(new Error("Not Found"));
+
+    await expect(updateInterviewEvent(MOVE)).rejects.toThrow("Not Found");
+  });
+});
+
+describe("watchCalendarEvents", () => {
+  const WATCH = {
+    refreshToken: "rt-1",
+    address: "https://app.example.com/api/webhooks/google-calendar",
+    channelId: "chan-abc",
+    channelToken: "tok-secret",
+  };
+
+  it("opens a web_hook channel on the primary calendar with our id, token and address", async () => {
+    mockEventsWatch.mockResolvedValue({ data: {} });
+
+    await watchCalendarEvents(WATCH);
+
+    expect(mockEventsWatch).toHaveBeenCalledWith({
+      calendarId: "primary",
+      requestBody: {
+        id: "chan-abc",
+        type: "web_hook",
+        address: "https://app.example.com/api/webhooks/google-calendar",
+        token: "tok-secret",
+      },
+    });
+  });
+
+  it("normalizes the unix-ms expiration string to an ISO instant", async () => {
+    // 1_784_000_000_000 ms = 2026-07-11T... UTC.
+    mockEventsWatch.mockResolvedValue({
+      data: { resourceId: "res-1", expiration: "1784000000000" },
+    });
+
+    const result = await watchCalendarEvents(WATCH);
+
+    expect(result).toEqual({
+      resourceId: "res-1",
+      expirationIso: new Date(1784000000000).toISOString(),
+    });
+  });
+
+  it("returns null fields when Google omits resourceId and expiration", async () => {
+    mockEventsWatch.mockResolvedValue({ data: {} });
+
+    expect(await watchCalendarEvents(WATCH)).toEqual({
+      resourceId: null,
+      expirationIso: null,
+    });
+  });
+});
+
+describe("stopCalendarWatch", () => {
+  it("stops the channel by id and resourceId", async () => {
+    mockChannelsStop.mockResolvedValue({});
+
+    await stopCalendarWatch({
+      refreshToken: "rt-1",
+      channelId: "chan-abc",
+      resourceId: "res-1",
+    });
+
+    expect(mockChannelsStop).toHaveBeenCalledWith({
+      requestBody: { id: "chan-abc", resourceId: "res-1" },
+    });
+  });
+});
+
+describe("listChangedCalendarEvents", () => {
+  it("uses the sync token (not timeMin) for an incremental sync", async () => {
+    mockEventsList.mockResolvedValue({ data: { items: [], nextSyncToken: "sync-2" } });
+
+    const result = await listChangedCalendarEvents({
+      refreshToken: "rt-1",
+      syncToken: "sync-1",
+    });
+
+    expect(mockEventsList).toHaveBeenCalledWith({
+      calendarId: "primary",
+      singleEvents: true,
+      pageToken: undefined,
+      syncToken: "sync-1",
+    });
+    expect(result.nextSyncToken).toBe("sync-2");
+  });
+
+  it("falls back to timeMin for a full sync when no sync token is given", async () => {
+    mockEventsList.mockResolvedValue({ data: { items: [], nextSyncToken: "sync-1" } });
+
+    await listChangedCalendarEvents({
+      refreshToken: "rt-1",
+      timeMinIso: "2026-07-09T00:00:00.000Z",
+    });
+
+    expect(mockEventsList).toHaveBeenCalledWith({
+      calendarId: "primary",
+      singleEvents: true,
+      pageToken: undefined,
+      timeMin: "2026-07-09T00:00:00.000Z",
+    });
+  });
+
+  it("paginates across pages and only keeps the final page's sync token", async () => {
+    mockEventsList
+      .mockResolvedValueOnce({
+        data: {
+          items: [{ id: "e1", start: { dateTime: "2026-07-12T09:00:00Z" }, status: "confirmed" }],
+          nextPageToken: "page-2",
+          // A sync token on a non-final page must be ignored.
+          nextSyncToken: "premature-token",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          items: [{ id: "e2", start: { dateTime: "2026-07-13T10:00:00Z" }, status: "cancelled" }],
+          nextSyncToken: "final-token",
+        },
+      });
+
+    const result = await listChangedCalendarEvents({ refreshToken: "rt-1", syncToken: "s0" });
+
+    expect(mockEventsList).toHaveBeenCalledTimes(2);
+    expect(mockEventsList).toHaveBeenLastCalledWith({
+      calendarId: "primary",
+      singleEvents: true,
+      pageToken: "page-2",
+      syncToken: "s0",
+    });
+    expect(result.events).toEqual([
+      { eventId: "e1", startIso: "2026-07-12T09:00:00.000Z", status: "confirmed" },
+      { eventId: "e2", startIso: "2026-07-13T10:00:00.000Z", status: "cancelled" },
+    ]);
+    expect(result.nextSyncToken).toBe("final-token");
+  });
+
+  it("maps an all-day (date-only) changed event to a null start", async () => {
+    mockEventsList.mockResolvedValue({
+      data: {
+        items: [{ id: "e1", start: { date: "2026-07-12" }, status: "confirmed" }],
+        nextSyncToken: "s1",
+      },
+    });
+
+    const result = await listChangedCalendarEvents({ refreshToken: "rt-1", syncToken: "s0" });
+
+    expect(result.events).toEqual([{ eventId: "e1", startIso: null, status: "confirmed" }]);
+  });
+
+  it("throws SyncTokenExpiredError on a 410 so the caller can full-resync", async () => {
+    mockEventsList.mockRejectedValue(Object.assign(new Error("Gone"), { code: 410 }));
+
+    await expect(
+      listChangedCalendarEvents({ refreshToken: "rt-1", syncToken: "stale" }),
+    ).rejects.toBeInstanceOf(SyncTokenExpiredError);
+  });
+
+  it("propagates non-410 errors unchanged", async () => {
+    mockEventsList.mockRejectedValue(Object.assign(new Error("boom"), { code: 500 }));
+
+    await expect(
+      listChangedCalendarEvents({ refreshToken: "rt-1", syncToken: "s0" }),
+    ).rejects.toThrow("boom");
   });
 });
