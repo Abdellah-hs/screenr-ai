@@ -39,8 +39,13 @@ interface ScreeningRoomMetadata {
   instructions: string;
 }
 
+// Must be a Realtime model the OPENAI_API_KEY can actually access. This account
+// only has the GA `gpt-realtime*` family — `gpt-4o-mini-realtime-preview` is NOT
+// available, and pointing here fails the session the instant it opens, leaving
+// the candidate in a silent room. Verify with `GET /v1/models` before changing.
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
-// "marin"/"cedar" are the natural GA voices; "alloy" et al. sound robotic.
+// "marin"/"cedar" are the natural GA voices for gpt-realtime; "alloy" et al.
+// also work but sound more robotic.
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || "marin";
 
 function parseMetadata(raw: string | undefined): ScreeningRoomMetadata | null {
@@ -100,6 +105,13 @@ export default defineAgent({
       return;
     }
 
+    // Print the model in use so a stale worker is obvious: `dev` mode does NOT
+    // hot-reload, so an old process keeps its old model until fully restarted.
+    // If this line doesn't say model=gpt-realtime, you're running a stale worker.
+    console.info(
+      `screening interview starting — model=${REALTIME_MODEL} voice=${REALTIME_VOICE} app=${meta.application_id}`,
+    );
+
     const turns: TranscriptTurn[] = [];
     // Serializes reports so a fast exchange can't interleave two overwrites
     // out of order.
@@ -140,13 +152,26 @@ export default defineAgent({
     });
 
     const agent = new voice.Agent({ instructions: meta.instructions });
-    await session.start({ agent, room: ctx.room });
 
-    // Kick off the greeting so the candidate hears the interviewer first.
-    await session.generateReply({
-      instructions:
-        "Briefly greet the candidate, confirm you can hear each other, and ask your first question.",
-    });
+    // If the Realtime session can't open (e.g. a model the key can't access),
+    // the candidate would otherwise just sit in a silent room. Fail loudly here
+    // with the model name so the cause is obvious in the worker logs.
+    try {
+      await session.start({ agent, room: ctx.room });
+
+      // Kick off the greeting so the candidate hears the interviewer first.
+      await session.generateReply({
+        instructions:
+          "Briefly greet the candidate, confirm you can hear each other, and ask your first question.",
+      });
+    } catch (err) {
+      console.error(
+        `Realtime session failed to start (model=${REALTIME_MODEL}, voice=${REALTIME_VOICE}) — ` +
+          `the candidate will hear silence. Verify the model is accessible to OPENAI_API_KEY.`,
+        err instanceof Error ? err.message : err,
+      );
+      throw err;
+    }
   },
 });
 

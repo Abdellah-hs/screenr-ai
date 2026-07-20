@@ -97,6 +97,10 @@ export default function VoiceScreening({
   const [timedOut, setTimedOut] = useState(false);
   // Live caption of the interviewer's current/last spoken question.
   const [caption, setCaption] = useState("");
+  // True when the browser is blocking audio autoplay. Without a user gesture,
+  // attaching the agent's track plays nothing — so we surface a tap-to-enable
+  // button rather than leaving the candidate in silence.
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   const roomRef = useRef<Room | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -163,6 +167,7 @@ export default function VoiceScreening({
     setSecondsLeft(CALL_SECONDS);
     setTimedOut(false);
     setCaption("");
+    setAudioBlocked(false);
     candidateSegmentsRef.current = new Set();
     wasLiveRef.current = false;
     try {
@@ -176,6 +181,12 @@ export default function VoiceScreening({
         if (track.kind === Track.Kind.Audio && audioRef.current) {
           track.attach(audioRef.current);
         }
+      });
+
+      // Autoplay can be blocked until a user gesture; mirror the room's
+      // playback status so the "Enable sound" prompt appears/clears correctly.
+      room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        setAudioBlocked(!room.canPlaybackAudio);
       });
 
       // A drop before finishing is recoverable — the candidate can simply
@@ -211,6 +222,16 @@ export default function VoiceScreening({
       await room.connect(grant.serverUrl, grant.participantToken);
       await room.localParticipant.setMicrophoneEnabled(true);
 
+      // The "Start interview" click is a live user gesture — use it to unlock
+      // audio playback now, so the interviewer's greeting isn't swallowed by the
+      // browser's autoplay policy. If it doesn't take, the button below recovers.
+      try {
+        await room.startAudio();
+      } catch {
+        // ignore — AudioPlaybackStatusChanged + the "Enable sound" button recover it
+      }
+      setAudioBlocked(!room.canPlaybackAudio);
+
       wasLiveRef.current = true;
       setStatus("live");
       startTimer();
@@ -242,10 +263,24 @@ export default function VoiceScreening({
     setSecondsLeft(CALL_SECONDS);
     setTimedOut(false);
     setCaption("");
+    setAudioBlocked(false);
     candidateSegmentsRef.current = new Set();
     wasLiveRef.current = false;
     setError(null);
     setStatus("idle");
+  }
+
+  // Retry unlocking audio playback from an explicit tap (a fresh user gesture),
+  // for browsers that ignored the unlock attempt during connect.
+  async function enableSound() {
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      await room.startAudio();
+    } catch {
+      // still blocked — leave the button up for another try
+    }
+    setAudioBlocked(!room.canPlaybackAudio);
   }
 
   async function submit() {
@@ -342,6 +377,23 @@ export default function VoiceScreening({
         <p className="text-xs text-[#6B7280]">
           Please complete by <strong>{formatDeadline(expiresAt)}</strong>.
         </p>
+      )}
+
+      {/* Autoplay unlock prompt — shown only when the browser is holding back
+          the interviewer's audio until an explicit tap. */}
+      {(live || connecting) && audioBlocked && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="alert">
+          <p className="text-xs leading-relaxed text-[#92400E]">
+            <strong>Sound is blocked by your browser.</strong> Tap to hear the interviewer.
+          </p>
+          <button
+            type="button"
+            onClick={enableSound}
+            className="shrink-0 rounded-lg bg-[#B45309] px-3 py-1.5 text-xs font-medium text-white cursor-pointer hover:bg-[#92400E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B45309] focus-visible:ring-offset-2 transition-colors duration-200"
+          >
+            Enable sound
+          </button>
+        </div>
       )}
 
       {/* Live captions of the interviewer's questions — a lifeline if the audio
