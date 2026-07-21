@@ -53,6 +53,9 @@ function campaign(over: Partial<CampaignBySlug> = {}): CampaignBySlug {
     user_id: "user-1",
     title: "Backend Engineer",
     status: "active",
+    accepting_applications: true,
+    deadline: null,
+    deadline_enforced: false,
     ...over,
   };
 }
@@ -303,6 +306,36 @@ describe("submitApplication", () => {
 
     await expect(submitApplication(form())).rejects.toThrow(/isn't accepting applications/i);
     expect(mockIngest).not.toHaveBeenCalled();
+  });
+
+  it("refuses to ingest into an active campaign with intake switched off", async () => {
+    mockFetchBySlug.mockResolvedValue(
+      campaign({ status: "active", accepting_applications: false }),
+    );
+
+    await expect(submitApplication(form())).rejects.toThrow(/isn't accepting applications/i);
+    expect(mockIngest).not.toHaveBeenCalled();
+  });
+
+  it("refuses to ingest when an enforced deadline has already passed", async () => {
+    mockFetchBySlug.mockResolvedValue(
+      campaign({ status: "active", deadline: "2020-01-01T00:00:00.000Z", deadline_enforced: true }),
+    );
+
+    await expect(submitApplication(form())).rejects.toThrow(/isn't accepting applications/i);
+    expect(mockIngest).not.toHaveBeenCalled();
+  });
+
+  it("still ingests when a passed deadline is not enforced", async () => {
+    mockFetchBySlug.mockResolvedValue(
+      campaign({ status: "active", deadline: "2020-01-01T00:00:00.000Z", deadline_enforced: false }),
+    );
+
+    const result = await submitApplication(form());
+    await flushAfter();
+
+    expect(result).toEqual({ ok: true });
+    expect(mockIngest).toHaveBeenCalled();
   });
 
   it("carries the specific rejection reason in the problem email (no email on the CV)", async () => {

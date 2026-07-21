@@ -337,6 +337,214 @@ Rules:
   }));
 }
 
+// ─── Job description drafting (campaign creation assist) ─────────────────────
+// Advisory generation only: produces draft copy the recruiter edits before
+// saving. It never writes anything. Grounded strictly in recruiter-provided
+// inputs so the description (which later feeds screening/rubric context) stays
+// honest — the prompt forbids inventing salary, benefits, visa or legal claims.
+
+export const JOB_DESCRIPTION_MODEL = "gpt-4o-mini";
+export const JOB_DESCRIPTION_PROMPT_VERSION = "v1_job_description";
+
+const JobDescriptionResponseSchema = z.object({
+  description: z.string(),
+});
+
+export interface JobDescriptionInput {
+  /** "generate" writes from the structured inputs; "improve" refines a draft. */
+  mode: "generate" | "improve";
+  title: string;
+  department?: string | null;
+  location?: string | null;
+  seniority?: string | null;
+  employmentType?: string | null;
+  skills?: string[];
+  companyContext?: string | null;
+  /** Required for "improve" — the recruiter's current description text. */
+  currentDraft?: string | null;
+}
+
+const JOB_DESCRIPTION_SYSTEM = `You are an expert HR hiring consultant who writes clear, structured job descriptions.
+
+Structure the description with these sections (use short plain-text headings, no markdown code fences, no tables):
+- Role summary
+- Key responsibilities
+- Required qualifications
+- Preferred qualifications
+- What success looks like
+
+Hard rules:
+- Use ONLY the details the recruiter provides as facts. Do not invent specifics.
+- Never fabricate salary, compensation, benefits, equity, visa/relocation, or legal/EEO claims. Omit them entirely unless the recruiter supplied them.
+- If a detail is missing, write in general terms rather than making one up.
+- Keep it concise, professional, and free of hype or clichés.
+- Write in the second person ("you will…") for responsibilities where natural.`;
+
+/** Assemble the grounded input block shared by both modes. */
+function jobDescriptionFacts(input: JobDescriptionInput): string {
+  const lines = [
+    `Role title: ${input.title}`,
+    input.department ? `Department: ${input.department}` : null,
+    input.location ? `Location: ${input.location}` : null,
+    input.seniority ? `Seniority: ${input.seniority}` : null,
+    input.employmentType ? `Employment type: ${input.employmentType}` : null,
+    input.skills && input.skills.length > 0
+      ? `Key skills: ${input.skills.join(", ")}`
+      : null,
+    input.companyContext ? `Company context: ${input.companyContext}` : null,
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+/**
+ * Draft (or refine) a job description from recruiter-provided inputs. Returns
+ * plain text suitable for the campaign description textarea. Throws on refusal
+ * or an empty result so the caller can surface a clear error.
+ */
+export async function generateJobDescription(
+  input: JobDescriptionInput,
+): Promise<string> {
+  assertApiKeyConfigured();
+
+  const facts = jobDescriptionFacts(input);
+  const userContent =
+    input.mode === "improve"
+      ? `Improve the following job description. Keep every fact that is already present, fix structure/clarity/professionalism, and organize it into the standard sections. Do not add specifics that aren't supported by the inputs below.\n\nInputs:\n${facts}\n\nCurrent draft:\n${input.currentDraft ?? ""}`
+      : `Write a job description for this role using only these inputs:\n\n${facts}`;
+
+  const completion = await openai.chat.completions.parse({
+    model: JOB_DESCRIPTION_MODEL,
+    temperature: 0.6,
+    messages: [
+      { role: "system", content: JOB_DESCRIPTION_SYSTEM },
+      { role: "user", content: userContent },
+    ],
+    response_format: zodResponseFormat(JobDescriptionResponseSchema, "job_description"),
+  });
+
+  const message = completion.choices[0]?.message;
+
+  if (!message) {
+    throw new Error("OpenAI returned no message for the job description.");
+  }
+
+  if (message.refusal) {
+    throw new Error(`OpenAI refused job description generation: ${message.refusal}`);
+  }
+
+  if (!message.parsed) {
+    throw new Error("OpenAI returned no parsed job description.");
+  }
+
+  const text = message.parsed.description.trim();
+  if (!text) {
+    throw new Error("OpenAI returned an empty job description.");
+  }
+
+  return text;
+}
+
+// ─── Social post drafting (campaign promotion assist) ───────────────────────
+// Advisory generation only: turns campaign data into platform-native "we're
+// hiring" copy the recruiter edits and posts manually (no auto-publishing).
+// Same honesty guardrails as the description drafter — no invented facts.
+
+export const SOCIAL_POST_MODEL = "gpt-4o-mini";
+export const SOCIAL_POST_PROMPT_VERSION = "v1_social_posts";
+
+export type SocialPostTone = "professional" | "friendly" | "enthusiastic" | "concise";
+
+const SocialPostResponseSchema = z.object({
+  linkedin: z.string(),
+  x: z.string(),
+  facebook: z.string(),
+  general: z.string(),
+});
+
+export interface SocialPostInput {
+  title: string;
+  description: string;
+  department?: string | null;
+  location?: string | null;
+  applyUrl?: string | null;
+  tone?: SocialPostTone | null;
+}
+
+/** Platform-tuned copy variants for one campaign. */
+export type SocialPosts = z.infer<typeof SocialPostResponseSchema>;
+
+const SOCIAL_POST_SYSTEM = `You are an expert recruiting copywriter. You turn a job description into social posts that make talented people want to apply. These are marketing posts, NOT a requirements checklist.
+
+Every post must:
+- Open with a hook — a compelling first line, never just the job title.
+- Tell a short, human story: what the person will actually build or do, the impact they'll have, and why the role is worth their time.
+- Translate requirements into benefits and an inviting picture of the work. Do NOT simply restate or bullet the requirements — that is the most common failure; avoid it.
+- End with a clear call to action and the apply link (if one is provided).
+
+Tune each post to how its platform reads:
+- linkedin: 3-6 short paragraphs, confident and professional, a few relevant hashtags at the end, and a nudge to refer ("know someone great? tag them").
+- x: a single post of 280 characters or fewer — punchy hook + link, 1-3 hashtags.
+- facebook: friendly and community-minded, a couple of short paragraphs.
+- general: an upbeat, reusable blurb with a strong CTA — good for any channel.
+
+Stay honest without going flat: you may write with warmth, energy, and general encouragement ("collaborative team", "grow your career", "own real problems"), but never state specific salary, compensation, benefits, equity, visa/relocation, or legal/EEO claims — and never invent concrete tools, numbers, or facts that aren't in the inputs. If an apply link is provided, include it; if not, use a plain CTA like "apply now" without a fabricated URL. Match the requested tone and skip clichés and empty buzzwords.`;
+
+/**
+ * Draft "we're hiring" social copy for a campaign, one variant per platform.
+ * Advisory only — returns text the recruiter reviews, edits, and posts. Throws
+ * on refusal so the caller can surface a clear error.
+ */
+export async function generateSocialPosts(input: SocialPostInput): Promise<SocialPosts> {
+  assertApiKeyConfigured();
+
+  const facts = [
+    `Role title: ${input.title}`,
+    input.department ? `Department: ${input.department}` : null,
+    input.location ? `Location: ${input.location}` : null,
+    input.applyUrl ? `Apply link: ${input.applyUrl}` : null,
+    `Role description:\n${input.description}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const tone = input.tone ?? "professional";
+
+  const completion = await openai.chat.completions.parse({
+    model: SOCIAL_POST_MODEL,
+    temperature: 0.85,
+    messages: [
+      { role: "system", content: SOCIAL_POST_SYSTEM },
+      {
+        role: "user",
+        content: `Tone: ${tone}\n\nWrite engaging "we're hiring" posts for this role. Sell the opportunity — don't just repeat the description below.\n\n${facts}`,
+      },
+    ],
+    response_format: zodResponseFormat(SocialPostResponseSchema, "social_posts"),
+  });
+
+  const message = completion.choices[0]?.message;
+
+  if (!message) {
+    throw new Error("OpenAI returned no message for the social posts.");
+  }
+
+  if (message.refusal) {
+    throw new Error(`OpenAI refused social post generation: ${message.refusal}`);
+  }
+
+  if (!message.parsed) {
+    throw new Error("OpenAI returned no parsed social posts.");
+  }
+
+  const { linkedin, x, facebook, general } = message.parsed;
+  return {
+    linkedin: linkedin.trim(),
+    x: x.trim(),
+    facebook: facebook.trim(),
+    general: general.trim(),
+  };
+}
+
 export const RESUME_SCORING_MODEL = "gpt-4o-mini";
 export const RESUME_SCORING_PROMPT_VERSION = "v2_resume_scoring";
 

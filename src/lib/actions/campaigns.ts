@@ -2,13 +2,15 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { Campaign, CampaignStatus } from "@/lib/constants";
+import type { Campaign, CampaignStatus, CampaignStatusSelection } from "@/lib/constants";
 import {
   parseCampaignFormData,
   uuidSchema,
   campaignStatusSchema,
+  campaignStatusSelectionSchema,
   campaignIdsSchema,
 } from "@/lib/validations";
+import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 import { requireUserId } from "@/lib/auth/guards";
 import { scoreUnscoredCampaignCandidates } from "./candidates";
 
@@ -22,6 +24,7 @@ import {
   fetchCampaignStatus,
   updateCampaignStatusTx,
   softDeleteCampaignTx,
+  restoreCampaignTx,
 } from "@/lib/data/campaigns";
 
 // ─── GET all campaigns ───────────────────────────────────────────────────────
@@ -60,7 +63,9 @@ export async function createCampaign(formData: FormData) {
 
   // Validate all inputs
   const {
-    title, description, department, positions, status, deadline, location,
+    title, description, department, positions, status,
+    accepting_applications: acceptingApplications,
+    deadline, deadline_enforced: deadlineEnforced, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
     interview_persona: interviewPersona,
     interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
@@ -75,7 +80,9 @@ export async function createCampaign(formData: FormData) {
       department,
       positions,
       status,
+      accepting_applications: acceptingApplications,
       deadline: deadline ? new Date(deadline).toISOString() : null,
+      deadline_enforced: deadlineEnforced,
       location,
       automation_mode: automationMode,
       screening_threshold: screeningThreshold,
@@ -100,18 +107,21 @@ export async function createCampaign(formData: FormData) {
 
 export async function updateCampaignStatus(
   campaignId: string,
-  status: CampaignStatus
+  selection: CampaignStatusSelection
 ) {
   const userId = await requireUserId();
   uuidSchema.parse(campaignId);
-  const toStatus = campaignStatusSchema.parse(status);
+  // The inline changer sends a 5-option selection; decode it into the lifecycle
+  // status + the intake switch, so "Active — not accepting" works from the list.
+  const validSelection = campaignStatusSelectionSchema.parse(selection);
+  const { status: toStatus, accepting_applications } = decodeStatusSelection(validSelection);
 
   // Campaign status is freely settable (no transition graph); we read the
   // current status only to record the old → new pair in the audit log.
   const fromStatus = await fetchCampaignStatus(campaignId, userId);
   if (!fromStatus) throw new Error("Campaign not found");
 
-  await updateCampaignStatusTx(campaignId, fromStatus, toStatus, userId);
+  await updateCampaignStatusTx(campaignId, fromStatus, toStatus, userId, accepting_applications);
 
   // Status drives the freeze rule on every candidate detail page under this
   // campaign (approve / send / re-score buttons), so revalidate the subtree,
@@ -131,6 +141,21 @@ export async function deleteCampaign(campaignId: string) {
   await softDeleteCampaignTx(campaignId, userId);
 
   revalidatePath("/campaigns");
+}
+
+// ─── RESTORE campaign (undo soft delete) ─────────────────────────────────────
+// The Talent Pool's "Restore" action for a removed campaign. Clears the
+// campaign's `deleted_at` so it — and the normal candidate click-through under
+// it — reappears. Revalidates both the campaign list and the Talent Pool.
+
+export async function restoreCampaign(campaignId: string) {
+  const userId = await requireUserId();
+  uuidSchema.parse(campaignId);
+
+  await restoreCampaignTx(campaignId, userId);
+
+  revalidatePath("/campaigns");
+  revalidatePath("/candidates");
 }
 
 // ─── BULK row actions (list multi-select) ────────────────────────────────────
@@ -188,7 +213,9 @@ export async function updateCampaign(id: string, formData: FormData) {
 
   // Validate all inputs
   const {
-    title, description, department, positions, status, deadline, location,
+    title, description, department, positions, status,
+    accepting_applications: acceptingApplications,
+    deadline, deadline_enforced: deadlineEnforced, location,
     automation_mode: automationMode, screening_threshold: screeningThreshold,
     interview_persona: interviewPersona,
     interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
@@ -204,7 +231,9 @@ export async function updateCampaign(id: string, formData: FormData) {
       department,
       positions,
       status,
+      accepting_applications: acceptingApplications,
       deadline: deadline ? new Date(deadline).toISOString() : null,
+      deadline_enforced: deadlineEnforced,
       location,
       automation_mode: automationMode,
       screening_threshold: screeningThreshold,

@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-
 interface Props {
   initialSlotMinutes?: number | null;
   initialTimezone?: string | null;
@@ -11,25 +9,26 @@ interface Props {
 const inputClass =
   "w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors";
 
+// Default for a campaign that hasn't set a slot length (create form / legacy rows).
+const DEFAULT_SLOT_MINUTES = 45;
+const DEFAULT_HORIZON_DAYS = 14;
+
 /**
  * Recruiter-facing settings for final-interview slot booking. Availability
- * itself is NOT configured here — it's fully automatic: every weekday 9am-6pm
- * is offered, minus the owner's real Google Calendar conflicts, with a
- * 15-minute buffer (see `generateBusinessHourWindows` / `fetchOwnerSchedule`).
- * The recruiter marks nothing on their calendar. This form only keeps the
- * scalar knobs: slot length, booking horizon, and a fallback timezone.
+ * itself is fully automatic — every weekday 9am-6pm is offered, minus the
+ * owner's real Google Calendar conflicts, with a 15-minute buffer (see
+ * `generateBusinessHourWindows` / `fetchOwnerSchedule`). The recruiter marks
+ * nothing on their calendar.
+ *
+ * Two knobs stay configurable: slot length and booking horizon. The fallback
+ * timezone is auto-detected from the calendar, so it's no longer shown — it
+ * rides along as a hidden field to preserve any value an existing campaign saved.
  */
 export default function InterviewAvailabilityEditor({
   initialSlotMinutes = null,
   initialTimezone = null,
-  initialHorizonDays = 14,
+  initialHorizonDays = DEFAULT_HORIZON_DAYS,
 }: Props) {
-  const [slotMinutes, setSlotMinutes] = useState<string>(
-    initialSlotMinutes != null ? String(initialSlotMinutes) : "45",
-  );
-  const [timezone, setTimezone] = useState<string>(initialTimezone ?? "");
-  const [horizonDays, setHorizonDays] = useState<string>(String(initialHorizonDays));
-
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-medium text-[#111827]">Final Interview Availability</h3>
@@ -60,7 +59,7 @@ export default function InterviewAvailabilityEditor({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs text-[#374151] mb-1">Slot length (minutes)</label>
           <input
@@ -68,25 +67,9 @@ export default function InterviewAvailabilityEditor({
             name="interview_slot_minutes"
             min="5"
             max="240"
-            value={slotMinutes}
-            onChange={(e) => setSlotMinutes(e.target.value)}
+            defaultValue={initialSlotMinutes ?? DEFAULT_SLOT_MINUTES}
             className={inputClass}
           />
-        </div>
-        <div>
-          <label className="block text-xs text-[#374151] mb-1">Fallback timezone (IANA)</label>
-          <input
-            type="text"
-            name="interview_timezone"
-            value={timezone}
-            onChange={(e) => setTimezone(e.target.value)}
-            placeholder="e.g. Africa/Casablanca"
-            className={inputClass}
-          />
-          <p className="mt-1 text-xs text-[#9CA3AF]">
-            Usually auto-detected from your calendar — used only if Google doesn&apos;t
-            report one.
-          </p>
         </div>
         <div>
           <label className="block text-xs text-[#374151] mb-1">Booking horizon (days)</label>
@@ -95,12 +78,15 @@ export default function InterviewAvailabilityEditor({
             name="interview_booking_horizon_days"
             min="1"
             max="90"
-            value={horizonDays}
-            onChange={(e) => setHorizonDays(e.target.value)}
+            defaultValue={initialHorizonDays}
             className={inputClass}
           />
         </div>
       </div>
+
+      {/* Fallback timezone is auto-detected from the calendar; kept as a hidden
+          field so an existing campaign's saved value isn't wiped on edit. */}
+      <input type="hidden" name="interview_timezone" defaultValue={initialTimezone ?? ""} />
     </div>
   );
 }
