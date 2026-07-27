@@ -1,11 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, Track, type RemoteTrack } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type RemoteTrack,
+  type RemoteParticipant,
+} from "livekit-client";
 import {
   startCandidateVoiceScreening,
   submitVoiceScreening,
 } from "@/lib/actions/respond";
+import {
+  AGENT_JOIN_TIMEOUT_MS,
+  diagnoseAgentSilence,
+  realtimeTrace,
+} from "@/lib/realtime/interview-diagnostics";
 
 interface VoiceScreeningProps {
   token: string;
@@ -109,6 +120,12 @@ export default function VoiceScreening({
   // Segment ids of the candidate's finalized turns (segments stream in
   // revisions; a Set keeps the count exact).
   const candidateSegmentsRef = useRef<Set<string>>(new Set());
+  // Interviewer-presence tracking for the silence watchdog: did the agent join
+  // the room, and did its audio arrive? The watchdog reads these to pinpoint a
+  // stall — "worker never joined" vs "agent joined but stayed mute".
+  const agentPresentRef = useRef(false);
+  const agentAudioRef = useRef(false);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Informational only — the server re-checks and is the real gate.
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
@@ -118,14 +135,49 @@ export default function VoiceScreening({
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      clearWatchdog();
       roomRef.current?.disconnect();
     };
   }, []);
+
+  // Auto-unlock audio on the next interaction ANYWHERE on the page while the
+  // browser is holding the interviewer's voice back — so a candidate doesn't
+  // have to find the exact "Enable sound" button for audio to start. The
+  // dedicated button stays as an explicit fallback.
+  useEffect(() => {
+    if (!audioBlocked) return;
+    const tryUnlock = async () => {
+      const room = roomRef.current;
+      if (!room) return;
+      try {
+        await room.startAudio();
+        for (const el of document.querySelectorAll("audio")) {
+          void el.play().catch(() => {});
+        }
+      } catch {
+        // keep the listeners; a later gesture may succeed
+      }
+      setAudioBlocked(!room.canPlaybackAudio);
+    };
+    window.addEventListener("pointerdown", tryUnlock);
+    window.addEventListener("keydown", tryUnlock);
+    return () => {
+      window.removeEventListener("pointerdown", tryUnlock);
+      window.removeEventListener("keydown", tryUnlock);
+    };
+  }, [audioBlocked]);
 
   function stopTimer() {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+  }
+
+  function clearWatchdog() {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
     }
   }
 
@@ -155,12 +207,39 @@ export default function VoiceScreening({
 
   function teardown() {
     stopTimer();
+    clearWatchdog();
     const room = roomRef.current;
     roomRef.current = null;
     room?.disconnect();
   }
 
+  // Attach the interviewer's audio track to our sink and nudge playback.
+  // attach() alone can be swallowed by the autoplay policy, so play()
+  // explicitly and reflect whether the browser is still holding it back.
+  // The agent's audio arriving is the "interviewer is really here" signal, so
+  // it clears the silence watchdog.
+  function attachAgentAudio(track: RemoteTrack, room: Room) {
+    if (track.kind !== Track.Kind.Audio || !audioRef.current) return;
+    agentPresentRef.current = true;
+    agentAudioRef.current = true;
+    clearWatchdog();
+    realtimeTrace("voice-screening", "interviewer audio attached");
+    track.attach(audioRef.current);
+    void audioRef.current.play().catch(() => {});
+    setAudioBlocked(!room.canPlaybackAudio);
+  }
+
   async function start() {
+    // getUserMedia only exists in a secure context (https or http://localhost).
+    // Over plain-http (e.g. a LAN IP), navigator.mediaDevices is undefined and
+    // LiveKit throws a cryptic "reading 'getUserMedia'" — surface the real cause.
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError(
+        "Your browser can't access the microphone on this page. It needs a secure connection — open this link over https, or on this computer use http://localhost:3000.",
+      );
+      setStatus("error");
+      return;
+    }
     setError(null);
     setStatus("connecting");
     setResponseCount(0);
@@ -170,6 +249,9 @@ export default function VoiceScreening({
     setAudioBlocked(false);
     candidateSegmentsRef.current = new Set();
     wasLiveRef.current = false;
+    agentPresentRef.current = false;
+    agentAudioRef.current = false;
+    clearWatchdog();
     try {
       const grant = await startCandidateVoiceScreening(token);
 
@@ -178,9 +260,15 @@ export default function VoiceScreening({
 
       // The interviewer's voice: attach the agent's audio track when it lands.
       room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-        if (track.kind === Track.Kind.Audio && audioRef.current) {
-          track.attach(audioRef.current);
-        }
+        attachAgentAudio(track, room);
+      });
+
+      // The interviewer joining is the first success milestone. The watchdog
+      // uses it to tell "the worker never showed up" apart from "the agent
+      // joined but stayed mute".
+      room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+        agentPresentRef.current = true;
+        realtimeTrace("voice-screening", "interviewer joined", p.identity);
       });
 
       // Autoplay can be blocked until a user gesture; mirror the room's
@@ -220,7 +308,26 @@ export default function VoiceScreening({
       });
 
       await room.connect(grant.serverUrl, grant.participantToken);
-      await room.localParticipant.setMicrophoneEnabled(true);
+      realtimeTrace("voice-screening", "room connected; awaiting interviewer");
+
+      // If the agent had already joined / published before our listeners were
+      // installed (fast dispatch, or a reconnect), ParticipantConnected /
+      // TrackSubscribed won't re-fire — so reconcile against what's already in
+      // the room: mark the agent present and attach any existing audio.
+      for (const participant of room.remoteParticipants.values()) {
+        agentPresentRef.current = true;
+        for (const pub of participant.audioTrackPublications.values()) {
+          if (pub.track) attachAgentAudio(pub.track, room);
+        }
+      }
+
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      } catch {
+        throw new Error(
+          "We couldn't turn on your microphone. Please allow microphone access in your browser and try again.",
+        );
+      }
 
       // The "Start interview" click is a live user gesture — use it to unlock
       // audio playback now, so the interviewer's greeting isn't swallowed by the
@@ -231,6 +338,26 @@ export default function VoiceScreening({
         // ignore — AudioPlaybackStatusChanged + the "Enable sound" button recover it
       }
       setAudioBlocked(!room.canPlaybackAudio);
+
+      // Arm the silence watchdog: if the interviewer never joins or never
+      // speaks within the window, stop waiting and surface the precise cause
+      // instead of sitting on a silent room forever. Cleared the moment the
+      // agent's audio arrives (attachAgentAudio).
+      if (!agentAudioRef.current) {
+        watchdogRef.current = setTimeout(() => {
+          if (agentAudioRef.current) return;
+          const { reason, message, devHint } = diagnoseAgentSilence({
+            agentPresent: agentPresentRef.current,
+            agentAudio: agentAudioRef.current,
+          });
+          console.error(
+            `[voice-screening] interviewer silent after ${AGENT_JOIN_TIMEOUT_MS}ms (reason=${reason}). ${devHint}`,
+          );
+          teardown();
+          setError(message);
+          setStatus("error");
+        }, AGENT_JOIN_TIMEOUT_MS);
+      }
 
       wasLiveRef.current = true;
       setStatus("live");

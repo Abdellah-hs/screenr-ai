@@ -1,8 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, Track, type RemoteTrack, type LocalTrackPublication } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type RemoteTrack,
+  type RemoteParticipant,
+  type LocalTrackPublication,
+} from "livekit-client";
 import { startCandidateInterview, submitInterview } from "@/lib/actions/interview";
+import {
+  AGENT_JOIN_TIMEOUT_MS,
+  diagnoseAgentSilence,
+  realtimeTrace,
+} from "@/lib/realtime/interview-diagnostics";
 
 interface VideoInterviewProps {
   token: string;
@@ -109,6 +121,12 @@ export default function VideoInterview({
   const wasLiveRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const candidateSegmentsRef = useRef<Set<string>>(new Set());
+  // Interviewer-presence tracking for the silence watchdog: did the agent join
+  // the room, and did its audio arrive? The watchdog reads these to pinpoint a
+  // stall — "worker never joined" vs "agent joined but stayed mute".
+  const agentPresentRef = useRef(false);
+  const agentAudioRef = useRef(false);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
 
@@ -124,6 +142,7 @@ export default function VideoInterview({
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      clearWatchdog();
       roomRef.current?.disconnect();
     };
   }, []);
@@ -132,6 +151,13 @@ export default function VideoInterview({
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+  }
+
+  function clearWatchdog() {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
     }
   }
 
@@ -157,12 +183,39 @@ export default function VideoInterview({
 
   function teardown() {
     stopTimer();
+    clearWatchdog();
     const room = roomRef.current;
     roomRef.current = null;
     room?.disconnect();
   }
 
+  // Attach the interviewer's audio track to our sink and nudge playback.
+  // attach() alone can be swallowed by the autoplay policy, so play()
+  // explicitly and reflect whether the browser is still holding it back.
+  // The agent's audio arriving is the "interviewer is really here" signal, so
+  // it clears the silence watchdog.
+  function attachAgentAudio(track: RemoteTrack, room: Room) {
+    if (track.kind !== Track.Kind.Audio || !audioRef.current) return;
+    agentPresentRef.current = true;
+    agentAudioRef.current = true;
+    clearWatchdog();
+    realtimeTrace("video-interview", "interviewer audio attached");
+    track.attach(audioRef.current);
+    void audioRef.current.play().catch(() => {});
+    setAudioBlocked(!room.canPlaybackAudio);
+  }
+
   async function start() {
+    // getUserMedia only exists in a secure context (https or http://localhost).
+    // Over plain-http (e.g. a LAN IP), navigator.mediaDevices is undefined and
+    // LiveKit throws a cryptic "reading 'getUserMedia'" — surface the real cause.
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError(
+        "Your browser can't access the camera and microphone on this page. It needs a secure connection — open this link over https, or on this computer use http://localhost:3000.",
+      );
+      setStatus("error");
+      return;
+    }
     setError(null);
     setStatus("connecting");
     setResponseCount(0);
@@ -172,6 +225,9 @@ export default function VideoInterview({
     setAudioBlocked(false);
     candidateSegmentsRef.current = new Set();
     wasLiveRef.current = false;
+    agentPresentRef.current = false;
+    agentAudioRef.current = false;
+    clearWatchdog();
     try {
       const grant = await startCandidateInterview(token);
 
@@ -180,9 +236,15 @@ export default function VideoInterview({
 
       // The interviewer's voice: attach the agent's audio track when it lands.
       room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
-        if (track.kind === Track.Kind.Audio && audioRef.current) {
-          track.attach(audioRef.current);
-        }
+        attachAgentAudio(track, room);
+      });
+
+      // The interviewer joining is the first success milestone. The watchdog
+      // uses it to tell "the worker never showed up" apart from "the agent
+      // joined but stayed mute".
+      room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+        agentPresentRef.current = true;
+        realtimeTrace("video-interview", "interviewer joined", p.identity);
       });
 
       // Self-view: attach the candidate's own camera track once it publishes.
@@ -222,8 +284,27 @@ export default function VideoInterview({
       });
 
       await room.connect(grant.serverUrl, grant.participantToken);
-      await room.localParticipant.setMicrophoneEnabled(true);
-      await room.localParticipant.setCameraEnabled(true);
+      realtimeTrace("video-interview", "room connected; awaiting interviewer");
+
+      // If the agent had already joined / published before our listeners were
+      // installed (fast dispatch, or a reconnect), ParticipantConnected /
+      // TrackSubscribed won't re-fire — so reconcile against what's already in
+      // the room: mark the agent present and attach any existing audio.
+      for (const participant of room.remoteParticipants.values()) {
+        agentPresentRef.current = true;
+        for (const pub of participant.audioTrackPublications.values()) {
+          if (pub.track) attachAgentAudio(pub.track, room);
+        }
+      }
+
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true);
+        await room.localParticipant.setCameraEnabled(true);
+      } catch {
+        throw new Error(
+          "We couldn't turn on your camera and microphone. Please allow access in your browser and try again.",
+        );
+      }
 
       // The "Start interview" click is a live user gesture — unlock audio now.
       try {
@@ -232,6 +313,26 @@ export default function VideoInterview({
         // ignore — AudioPlaybackStatusChanged + the "Enable sound" button recover it
       }
       setAudioBlocked(!room.canPlaybackAudio);
+
+      // Arm the silence watchdog: if the interviewer never joins or never
+      // speaks within the window, stop waiting and surface the precise cause
+      // instead of sitting on a silent room forever. Cleared the moment the
+      // agent's audio arrives (attachAgentAudio).
+      if (!agentAudioRef.current) {
+        watchdogRef.current = setTimeout(() => {
+          if (agentAudioRef.current) return;
+          const { reason, message, devHint } = diagnoseAgentSilence({
+            agentPresent: agentPresentRef.current,
+            agentAudio: agentAudioRef.current,
+          });
+          console.error(
+            `[video-interview] interviewer silent after ${AGENT_JOIN_TIMEOUT_MS}ms (reason=${reason}). ${devHint}`,
+          );
+          teardown();
+          setError(message);
+          setStatus("error");
+        }, AGENT_JOIN_TIMEOUT_MS);
+      }
 
       wasLiveRef.current = true;
       setStatus("live");
