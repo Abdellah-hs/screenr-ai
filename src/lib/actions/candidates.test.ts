@@ -14,6 +14,7 @@ const {
   mockFetchCampaignStatus,
   mockAssertCampaignActiveById,
   mockFetchScreeningQuestions,
+  mockFetchTalentPoolRows,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockCheckRateLimit: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockFetchCampaignStatus: vi.fn(),
   mockAssertCampaignActiveById: vi.fn(),
   mockFetchScreeningQuestions: vi.fn(),
+  mockFetchTalentPoolRows: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -68,6 +70,10 @@ vi.mock("@/lib/data/campaigns", () => ({
   fetchActiveRubricVersion: vi.fn(),
 }));
 
+vi.mock("@/lib/data/talent-pool", () => ({
+  fetchTalentPoolRows: mockFetchTalentPoolRows,
+}));
+
 // Freeze guard — default to a no-op (active) so existing tests are unaffected;
 // gate tests override it to reject.
 vi.mock("./campaign-guards", () => ({
@@ -86,6 +92,7 @@ import {
   decideHitlReview,
   getCandidateById,
   getCandidatesByCampaignId,
+  getTalentPool,
   rescoreCandidateResume,
   scoreUnscoredCampaignCandidates,
   updateCandidateStage,
@@ -102,6 +109,7 @@ import {
   fetchCampaignScoringConfig,
   fetchActiveRubricVersion,
 } from "@/lib/data/campaigns";
+import type { TalentPoolRow } from "@/lib/data/talent-pool";
 
 beforeEach(() => {
   mockRequireUserId.mockReset();
@@ -113,6 +121,7 @@ beforeEach(() => {
   mockFetchCampaignStatus.mockReset();
   mockAssertCampaignActiveById.mockReset();
   mockFetchScreeningQuestions.mockReset();
+  mockFetchTalentPoolRows.mockReset();
 
   // Default happy-path setup — individual tests override what they need.
   mockRequireUserId.mockResolvedValue("user-1");
@@ -134,6 +143,108 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+describe("getTalentPool", () => {
+  // One raw talent-pool row (application + embedded candidate + campaign). The
+  // default is a resume-scored candidate awaiting review on a live campaign.
+  function poolRow(over: Partial<TalentPoolRow> = {}): TalentPoolRow {
+    return {
+      id: "app-1",
+      campaign_id: "camp-1",
+      candidate_id: "cand-1",
+      status: "screening_review_pending",
+      resume_score: 82,
+      screening_q_score: null,
+      interview_score: null,
+      screening_tier: "strong",
+      score_rationale: "Strong React background",
+      score_factors: [],
+      scored_at: "2026-07-10T00:00:00.000Z",
+      rubric_version: 1,
+      created_at: "2026-07-10T00:00:00.000Z",
+      updated_at: "2026-07-10T00:00:00.000Z",
+      candidates: {
+        id: "cand-1",
+        first_name: "Ada",
+        last_name: "Lovelace",
+        email: "ada@example.com",
+        phone: null,
+        location: "London",
+        created_at: "2026-07-01T00:00:00.000Z",
+      },
+      campaigns: {
+        id: "camp-1",
+        title: "Senior Software Engineer",
+        status: "active",
+        deleted_at: null,
+      },
+      screening_question_responses: null,
+      ...over,
+    };
+  }
+
+  it("rejects an anonymous user before hitting the data layer", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(getTalentPool()).rejects.toThrow(/unauthorized/i);
+    expect(mockFetchTalentPoolRows).not.toHaveBeenCalled();
+  });
+
+  it("groups a person's applications across campaigns into one entry, newest first", async () => {
+    mockFetchTalentPoolRows.mockResolvedValue([
+      poolRow({
+        id: "app-1",
+        campaign_id: "camp-1",
+        created_at: "2026-07-10T00:00:00.000Z",
+        campaigns: { id: "camp-1", title: "Backend Engineer", status: "active", deleted_at: null },
+      }),
+      poolRow({
+        id: "app-2",
+        campaign_id: "camp-2",
+        created_at: "2026-07-12T00:00:00.000Z",
+        campaigns: { id: "camp-2", title: "Platform Engineer", status: "active", deleted_at: null },
+      }),
+    ]);
+
+    const pool = await getTalentPool();
+
+    expect(pool).toHaveLength(1);
+    expect(pool[0].applications.map((a) => a.campaignTitle)).toEqual([
+      "Platform Engineer",
+      "Backend Engineer",
+    ]);
+  });
+
+  it("keeps a person whose only campaign was removed, flagging the origin", async () => {
+    mockFetchTalentPoolRows.mockResolvedValue([
+      poolRow({
+        campaigns: {
+          id: "camp-1",
+          title: "Senior Software Engineer",
+          status: "active",
+          deleted_at: "2026-07-15T00:00:00.000Z",
+        },
+      }),
+    ]);
+
+    const pool = await getTalentPool();
+
+    expect(pool).toHaveLength(1);
+    expect(pool[0].applications[0].campaignRemoved).toBe(true);
+  });
+
+  it("surfaces the current stage's score and tier for each application", async () => {
+    mockFetchTalentPoolRows.mockResolvedValue([poolRow()]);
+
+    const pool = await getTalentPool();
+
+    expect(pool[0].applications[0].score).toEqual({
+      overall: 82,
+      stage: "resume",
+      tier: "strong",
+    });
+  });
 });
 
 describe("decideHitlReview", () => {

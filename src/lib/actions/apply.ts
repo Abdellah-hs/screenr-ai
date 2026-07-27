@@ -7,7 +7,7 @@ import type { SupabaseDb } from "@/lib/supabase/types";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestOrigin } from "@/lib/http/origin";
 import { fetchCampaignBySlug } from "@/lib/data/campaigns";
-import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
+import { isCampaignAcceptingApplications } from "@/lib/rules/campaign-status";
 import { isSupportedResumeMimeType } from "@/lib/resume-ingest/mime";
 import {
   ingestResumeDocument,
@@ -94,7 +94,7 @@ export async function loadApplyContext(slug: string): Promise<ApplyContext> {
 
   return {
     campaign_title: campaign.title,
-    is_accepting: isCampaignProcessingActive(campaign.status),
+    is_accepting: isCampaignAcceptingApplications(campaign, new Date()),
   };
 }
 
@@ -156,7 +156,7 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
 
   const campaign = await fetchCampaignBySlug(slug, db);
   if (!campaign) throw new Error(NOT_FOUND_MESSAGE);
-  if (!isCampaignProcessingActive(campaign.status)) throw new Error(CLOSED_MESSAGE);
+  if (!isCampaignAcceptingApplications(campaign, new Date())) throw new Error(CLOSED_MESSAGE);
 
   const buffer = Buffer.from(await file.arrayBuffer());
 

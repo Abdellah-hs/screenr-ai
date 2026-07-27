@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 
 // ─── Campaign Validation ────────────────────────────────────────────────────
 
@@ -12,7 +13,12 @@ export const campaignFormSchema = z.object({
   department: z.string().max(100).nullable(),
   positions: z.number().int().min(1).max(1000),
   status: z.enum(campaignStatusValues),
+  // Manual intake switch (decoded from the status dropdown alongside `status`).
+  accepting_applications: z.boolean(),
   deadline: z.string().nullable(),
+  // When true the deadline gates the public apply page; when false it's just
+  // informational. Derived from a checkbox, so it's always a concrete boolean.
+  deadline_enforced: z.boolean(),
   location: z.string().max(200).nullable(),
   automation_mode: z.enum(automationModeValues),
   screening_threshold: z.number().int().min(0).max(100),
@@ -24,10 +30,21 @@ export const campaignFormSchema = z.object({
   interview_booking_horizon_days: z.number().int().min(1).max(90),
 });
 
-// Standalone status validator for the inline / bulk status changers (a quick
-// status set outside the full edit form). Campaign status is freely settable,
-// so this just guards that the value is a real status.
+// Standalone status validator for the bulk status changer (a quick status set
+// outside the full edit form). Campaign status is freely settable, so this just
+// guards that the value is a real status.
 export const campaignStatusSchema = z.enum(campaignStatusValues);
+
+// The 5-option status dropdown value (real statuses + the `active_no_intake` UI
+// token). Used by the inline per-campaign status changer, which can also flip
+// the intake switch. Decoded via decodeStatusSelection into status + flag.
+export const campaignStatusSelectionSchema = z.enum([
+  "draft",
+  "active",
+  "active_no_intake",
+  "paused",
+  "closed",
+]);
 
 export const screeningCriterionSchema = z.object({
   id: z.string().optional(),
@@ -101,8 +118,13 @@ export function parseCampaignFormData(formData: FormData) {
     description: (formData.get("description") as string) || "",
     department: (formData.get("department") as string) || null,
     positions: Number.isNaN(rawPositions) ? 1 : rawPositions,
-    status: (formData.get("status") as string) || "draft",
+    // The status dropdown carries the two "Active —" options; decode into the
+    // real lifecycle status + the manual intake switch.
+    ...decodeStatusSelection((formData.get("status") as string) || "draft"),
     deadline: (formData.get("deadline") as string) || null,
+    // Radio group: the "true"/"false" option value, defaulting to false
+    // (informational) when absent.
+    deadline_enforced: formData.get("deadline_enforced") === "true",
     location: (formData.get("location") as string) || null,
     automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
     screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
@@ -151,6 +173,51 @@ function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
 // ─── AI Generation Validation ───────────────────────────────────────────────
 
 export const aiDescriptionSchema = z.string().min(10, "Description too short for AI generation").max(10000, "Description too long");
+
+// Inputs for the AI job-description assist. All grounding fields are optional
+// except the title; "improve" additionally requires a non-empty current draft.
+// These are generation-only inputs — none of them are persisted on the campaign.
+export const generateDescriptionSchema = z
+  .object({
+    mode: z.enum(["generate", "improve"]),
+    title: z.string().trim().min(1, "A role title is needed to generate a description").max(200),
+    department: z.string().trim().max(200).optional(),
+    location: z.string().trim().max(200).optional(),
+    seniority: z.string().trim().max(100).optional(),
+    employmentType: z.string().trim().max(100).optional(),
+    skills: z.array(z.string().trim().min(1).max(100)).max(30).optional(),
+    companyContext: z.string().trim().max(2000).optional(),
+    currentDraft: z.string().trim().max(10000).optional(),
+  })
+  .refine(
+    (v) => v.mode !== "improve" || (v.currentDraft?.length ?? 0) > 0,
+    { message: "There's no draft to improve yet.", path: ["currentDraft"] },
+  );
+
+export type GenerateDescriptionInput = z.infer<typeof generateDescriptionSchema>;
+
+// Inputs for the AI social-post generator. Advisory generation only — produces
+// copy the recruiter edits and posts manually; nothing here is persisted.
+export const SOCIAL_POST_TONES = ["professional", "friendly", "enthusiastic", "concise"] as const;
+
+export const socialPostSchema = z.object({
+  title: z.string().trim().min(1, "A role title is needed to generate posts").max(200),
+  description: z.string().trim().min(1, "A description is needed to generate posts").max(10000),
+  department: z.string().trim().max(200).optional(),
+  location: z.string().trim().max(200).optional(),
+  applyUrl: z.string().trim().max(500).optional(),
+  tone: z.enum(SOCIAL_POST_TONES).optional(),
+});
+
+export type SocialPostGenerationInput = z.infer<typeof socialPostSchema>;
+
+// The (possibly edited) copy a recruiter publishes to a connected channel.
+// LinkedIn's member-post commentary caps at 3000 characters.
+export const socialPublishSchema = z.object({
+  text: z.string().trim().min(1, "There's nothing to publish").max(3000, "Post exceeds LinkedIn's 3000-character limit"),
+});
+
+export type SocialPublishInput = z.infer<typeof socialPublishSchema>;
 
 // ─── Application State Validation ───────────────────────────────────────────
 

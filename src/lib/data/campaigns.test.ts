@@ -22,6 +22,7 @@ import {
   insertCampaignTx,
   updateCampaignStatusTx,
   softDeleteCampaignTx,
+  restoreCampaignTx,
   mapAvailabilityRows,
 } from "./campaigns";
 import type { DimensionImportance } from "@/lib/constants";
@@ -152,9 +153,17 @@ describe("fetchCampaignBySlug", () => {
     vi.clearAllMocks();
   });
 
-  it("returns the campaign mapped to id/user/title/status", async () => {
+  it("returns the campaign mapped to id/user/title/status + deadline gate fields", async () => {
     single.mockResolvedValue({
-      data: { id: "camp-1", user_id: "user-1", title: "Backend Engineer", status: "active" },
+      data: {
+        id: "camp-1",
+        user_id: "user-1",
+        title: "Backend Engineer",
+        status: "active",
+        accepting_applications: false,
+        deadline: "2026-07-25T00:00:00.000Z",
+        deadline_enforced: true,
+      },
       error: null,
     });
 
@@ -165,8 +174,26 @@ describe("fetchCampaignBySlug", () => {
       user_id: "user-1",
       title: "Backend Engineer",
       status: "active",
+      accepting_applications: false,
+      deadline: "2026-07-25T00:00:00.000Z",
+      deadline_enforced: true,
     });
     expect(eq).toHaveBeenCalledWith("public_slug", "backend-engineer");
+  });
+
+  it("defaults intake/deadline fields when the row omits them (legacy rows)", async () => {
+    single.mockResolvedValue({
+      data: { id: "camp-1", user_id: "user-1", title: "Backend Engineer", status: "active" },
+      error: null,
+    });
+
+    const result = await fetchCampaignBySlug("backend-engineer", db);
+
+    expect(result).toMatchObject({
+      accepting_applications: true,
+      deadline: null,
+      deadline_enforced: false,
+    });
   });
 
   it("returns null when no campaign owns the slug", async () => {
@@ -302,6 +329,57 @@ describe("softDeleteCampaignTx", () => {
     updateSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
 
     await expect(softDeleteCampaignTx("camp-1", "user-1")).rejects.toThrow();
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+});
+
+// Mirrors softDeleteCampaignTx but clears deleted_at, scoped to a currently-
+// removed campaign via `.not("deleted_at", "is", null)` (so the chain ends in
+// not → select → single). Also an override-based describe, so it stays out of
+// the select-based describes above.
+describe("restoreCampaignTx", () => {
+  const updateSingle = vi.fn();
+  const auditInsert = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    auditInsert.mockResolvedValue({ error: null });
+    mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
+      if (table === "campaign_audit_log") {
+        return { insert: auditInsert };
+      }
+      return {
+        update: () => ({
+          eq: () => ({
+            eq: () => ({
+              not: () => ({
+                select: () => ({ single: updateSingle }),
+              }),
+            }),
+          }),
+        }),
+      };
+    });
+  });
+
+  it("clears deleted_at and appends a campaign_restored audit row", async () => {
+    updateSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+
+    await restoreCampaignTx("camp-1", "user-1");
+
+    expect(auditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaign_id: "camp-1",
+        user_id: "user-1",
+        action: "campaign_restored",
+      }),
+    );
+  });
+
+  it("throws and skips the audit row when nothing was restored", async () => {
+    updateSingle.mockResolvedValue({ data: null, error: { message: "no rows" } });
+
+    await expect(restoreCampaignTx("camp-1", "user-1")).rejects.toThrow();
     expect(auditInsert).not.toHaveBeenCalled();
   });
 });

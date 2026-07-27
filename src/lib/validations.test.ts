@@ -8,7 +8,52 @@ import {
   applicationStateSchema,
   stageChangeRationaleSchema,
   applyApplicantSchema,
+  generateDescriptionSchema,
+  socialPostSchema,
 } from './validations';
+
+describe('generateDescriptionSchema', () => {
+  it('accepts a generate request with just a title', () => {
+    const result = generateDescriptionSchema.safeParse({ mode: 'generate', title: 'Backend Engineer' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a missing/empty title', () => {
+    const result = generateDescriptionSchema.safeParse({ mode: 'generate', title: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an improve request with no current draft', () => {
+    const result = generateDescriptionSchema.safeParse({ mode: 'improve', title: 'Backend Engineer' });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts an improve request that carries a draft', () => {
+    const result = generateDescriptionSchema.safeParse({
+      mode: 'improve',
+      title: 'Backend Engineer',
+      currentDraft: 'some existing text',
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('socialPostSchema', () => {
+  const valid = { title: 'Backend Engineer', description: 'Build APIs.' };
+
+  it('accepts a minimal title + description', () => {
+    expect(socialPostSchema.safeParse(valid).success).toBe(true);
+  });
+
+  it('rejects an empty title or description', () => {
+    expect(socialPostSchema.safeParse({ ...valid, title: '' }).success).toBe(false);
+    expect(socialPostSchema.safeParse({ ...valid, description: '' }).success).toBe(false);
+  });
+
+  it('rejects an unknown tone', () => {
+    expect(socialPostSchema.safeParse({ ...valid, tone: 'sarcastic' }).success).toBe(false);
+  });
+});
 
 describe('uuidSchema', () => {
   it('accepts a valid v4 UUID', () => {
@@ -39,7 +84,9 @@ describe('campaignFormSchema', () => {
     department: 'Engineering',
     positions: 2,
     status: 'draft' as const,
+    accepting_applications: true,
     deadline: null,
+    deadline_enforced: false,
     location: 'Remote',
     automation_mode: 'human_in_loop' as const,
     screening_threshold: 70,
@@ -207,6 +254,38 @@ describe('parseCampaignFormData', () => {
     const fd = buildFormData({ positions: 'abc' });
     const result = parseCampaignFormData(fd);
     expect(result.positions).toBe(1);
+  });
+
+  it('decodes the "active_no_intake" status option to active + intake closed', () => {
+    const fd = buildFormData({ status: 'active_no_intake' });
+    const result = parseCampaignFormData(fd);
+    expect(result.status).toBe('active');
+    expect(result.accepting_applications).toBe(false);
+  });
+
+  it('decodes a plain "active" status option to active + intake open', () => {
+    const fd = buildFormData({ status: 'active' });
+    const result = parseCampaignFormData(fd);
+    expect(result.status).toBe('active');
+    expect(result.accepting_applications).toBe(true);
+  });
+
+  it('reads deadline_enforced=true from the "true" radio option', () => {
+    const fd = buildFormData({ deadline_enforced: 'true' });
+    const result = parseCampaignFormData(fd);
+    expect(result.deadline_enforced).toBe(true);
+  });
+
+  it('reads deadline_enforced=false from the "false" radio option', () => {
+    const fd = buildFormData({ deadline_enforced: 'false' });
+    const result = parseCampaignFormData(fd);
+    expect(result.deadline_enforced).toBe(false);
+  });
+
+  it('defaults deadline_enforced to false when the field is absent', () => {
+    const fd = buildFormData();
+    const result = parseCampaignFormData(fd);
+    expect(result.deadline_enforced).toBe(false);
   });
 
   it('returns empty arrays when JSON fields are malformed', () => {

@@ -345,9 +345,11 @@ export type Database = {
       }
       campaigns: {
         Row: {
+          accepting_applications: boolean
           automation_mode: Database["public"]["Enums"]["automation_mode_enum"]
           created_at: string
           deadline: string | null
+          deadline_enforced: boolean
           deleted_at: string | null
           department: string | null
           description: string
@@ -367,9 +369,11 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          accepting_applications?: boolean
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null
+          deadline_enforced?: boolean
           deleted_at?: string | null
           department?: string | null
           description?: string
@@ -389,9 +393,11 @@ export type Database = {
           user_id: string
         }
         Update: {
+          accepting_applications?: boolean
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null
+          deadline_enforced?: boolean
           deleted_at?: string | null
           department?: string | null
           description?: string
@@ -864,6 +870,48 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      social_connections: {
+        Row: {
+          access_token: string
+          account_id: string | null
+          account_name: string | null
+          connected_at: string
+          created_at: string
+          id: string
+          provider: string
+          scope: string | null
+          token_expires_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          account_id?: string | null
+          account_name?: string | null
+          connected_at?: string
+          created_at?: string
+          id?: string
+          provider: string
+          scope?: string | null
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          account_id?: string | null
+          account_name?: string | null
+          connected_at?: string
+          created_at?: string
+          id?: string
+          provider?: string
+          scope?: string | null
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
     }
     Views: {

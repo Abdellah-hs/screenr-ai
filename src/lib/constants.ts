@@ -113,7 +113,14 @@ export interface Campaign {
   department: string | null;
   positions: number;
   status: CampaignStatus;
+  /** Whether the public apply page accepts NEW applications while active. The
+   *  manual intake switch behind the "Active — accepting / not accepting"
+   *  dropdown options. Only meaningful when status is `active`. */
+  accepting_applications: boolean;
   deadline: string | null;
+  /** When true, the public apply page stops accepting applications after the
+   *  deadline day passes. When false the deadline is informational only. */
+  deadline_enforced: boolean;
   location: string | null;
   timezone: string | null;
   /** URL-safe slug for the public apply page (`/apply/<slug>`). */
@@ -141,6 +148,32 @@ export interface Campaign {
 export const CAMPAIGN_STATUSES: { value: CampaignStatus; label: string }[] = [
   { value: "draft", label: "Draft" },
   { value: "active", label: "Active" },
+  { value: "paused", label: "Paused" },
+  { value: "closed", label: "Closed" },
+];
+
+/**
+ * Recruiter-facing status options for the campaign form. The two "Active —"
+ * rows both map to the `active` lifecycle status, split by the
+ * `accepting_applications` flag, so the dropdown reads intuitively.
+ * `active_no_intake` is a UI-only token, decoded to
+ * `{ status: "active", accepting_applications: false }` server-side (see
+ * encode/decodeStatusSelection in `src/lib/rules/campaign-status.ts`).
+ */
+export type CampaignStatusSelection =
+  | "draft"
+  | "active"
+  | "active_no_intake"
+  | "paused"
+  | "closed";
+
+export const CAMPAIGN_STATUS_SELECTIONS: {
+  value: CampaignStatusSelection;
+  label: string;
+}[] = [
+  { value: "draft", label: "Draft" },
+  { value: "active", label: "Active — accepting applications" },
+  { value: "active_no_intake", label: "Active — not accepting new applications" },
   { value: "paused", label: "Paused" },
   { value: "closed", label: "Closed" },
 ];
@@ -458,5 +491,37 @@ export function pipelineDisplayScore(
   const target = STAGE_SCORE_FOR[candidate.stage];
   if (!target) return null;
   return candidate.scores.find((s) => s.stage === target) ?? null;
+}
+
+// ─── Talent Pool ────────────────────────────────────────────────────────────
+// The Talent Pool is people-first: candidates live independent of any single
+// campaign (CLAUDE.md "Talent Pool"). Each person carries their application
+// history — one entry per campaign they applied through — so removing a
+// campaign never hides the person; it just flags that origin as removed.
+
+/** One campaign a person applied through, with its current-stage evidence. */
+export interface TalentPoolApplication {
+  applicationId: string;
+  campaignId: string;
+  campaignTitle: string;
+  campaignStatus: CampaignStatus;
+  /** The owning campaign has been soft-removed — surfaced, never hidden. */
+  campaignRemoved: boolean;
+  stage: CandidateStage;
+  /** Stage-appropriate score (resume/screening/…), or null if none yet. */
+  score: { overall: number; stage: CandidateScore["stage"]; tier: ScreeningTier | null } | null;
+  appliedAt: string;
+}
+
+/** A person in the Talent Pool, with every campaign they've applied to. */
+export interface TalentPoolCandidate {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  location: string | null;
+  applications: TalentPoolApplication[];
+  /** Most recent application date across their history — drives list order. */
+  latestActivityAt: string;
 }
 

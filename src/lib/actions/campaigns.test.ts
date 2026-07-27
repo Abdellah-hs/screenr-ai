@@ -6,6 +6,7 @@ const {
   mockFetchCampaignStatus,
   mockUpdateCampaignStatusTx,
   mockSoftDeleteCampaignTx,
+  mockRestoreCampaignTx,
   mockRevalidatePath,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
@@ -13,6 +14,7 @@ const {
   mockFetchCampaignStatus: vi.fn(),
   mockUpdateCampaignStatusTx: vi.fn(),
   mockSoftDeleteCampaignTx: vi.fn(),
+  mockRestoreCampaignTx: vi.fn(),
   mockRevalidatePath: vi.fn(),
 }));
 
@@ -30,6 +32,7 @@ vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignStatus: mockFetchCampaignStatus,
   updateCampaignStatusTx: mockUpdateCampaignStatusTx,
   softDeleteCampaignTx: mockSoftDeleteCampaignTx,
+  restoreCampaignTx: mockRestoreCampaignTx,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -54,6 +57,7 @@ import {
   deleteCampaign,
   deleteCampaigns,
   updateCampaignsStatus,
+  restoreCampaign,
 } from "./campaigns";
 import { fetchCampaignById } from "@/lib/data/campaigns";
 
@@ -79,6 +83,29 @@ describe("getCampaignById", () => {
       id: VALID_CAMPAIGN_ID,
     });
     expect(vi.mocked(fetchCampaignById)).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, "user-1");
+  });
+});
+
+describe("restoreCampaign", () => {
+  it("rejects unauthenticated callers before restoring", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(restoreCampaign(VALID_CAMPAIGN_ID)).rejects.toThrow("Unauthorized");
+    expect(mockRestoreCampaignTx).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed campaign id before touching the data layer", async () => {
+    await expect(restoreCampaign("not-a-uuid")).rejects.toThrow();
+    expect(mockRestoreCampaignTx).not.toHaveBeenCalled();
+  });
+
+  it("restores the owned campaign and revalidates the pool + list", async () => {
+    mockRestoreCampaignTx.mockResolvedValue(undefined);
+
+    await restoreCampaign(VALID_CAMPAIGN_ID);
+
+    expect(mockRestoreCampaignTx).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, "user-1");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/candidates");
   });
 });
 
@@ -158,6 +185,21 @@ describe("updateCampaignStatus", () => {
       "draft",
       "paused",
       "user-1",
+      true,
+    );
+  });
+
+  it("decodes 'active_no_intake' to active + intake closed", async () => {
+    mockFetchCampaignStatus.mockResolvedValue("draft");
+
+    await updateCampaignStatus(VALID_CAMPAIGN_ID, "active_no_intake");
+
+    expect(mockUpdateCampaignStatusTx).toHaveBeenCalledWith(
+      VALID_CAMPAIGN_ID,
+      "draft",
+      "active",
+      "user-1",
+      false,
     );
   });
 
@@ -171,6 +213,7 @@ describe("updateCampaignStatus", () => {
       "draft",
       "active",
       "user-1",
+      true,
     );
     // "layout" so the candidate detail pages under the campaign (whose
     // controls are freeze-gated on this status) refresh too.
