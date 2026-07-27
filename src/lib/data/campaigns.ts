@@ -84,7 +84,9 @@ function assembleCampaign(
     department: (row.department as string) || null,
     positions: row.positions as number,
     status: row.status as CampaignStatus,
+    accepting_applications: (row.accepting_applications as boolean) ?? true,
     deadline: (row.deadline as string) || null,
+    deadline_enforced: (row.deadline_enforced as boolean) ?? false,
     location: (row.location as string) || null,
     timezone: (row.timezone as string) || null,
     public_slug: (row.public_slug as string) || null,
@@ -322,13 +324,23 @@ export async function updateCampaignStatusTx(
   id: string,
   fromStatus: CampaignStatus,
   toStatus: CampaignStatus,
-  userId: string
+  userId: string,
+  acceptingApplications?: boolean
 ): Promise<void> {
   const supabase = await createClient();
 
+  // Bulk callers pass only a status (intake left untouched); the inline changer
+  // passes the intake flag too so the two "Active —" options work from there.
+  const statusUpdate: { status: CampaignStatus; accepting_applications?: boolean } = {
+    status: toStatus,
+  };
+  if (acceptingApplications !== undefined) {
+    statusUpdate.accepting_applications = acceptingApplications;
+  }
+
   const { data: updated, error } = await supabase
     .from("campaigns")
-    .update({ status: toStatus })
+    .update(statusUpdate)
     .eq("id", id)
     .eq("user_id", userId)
     .is("deleted_at", null)
@@ -385,11 +397,49 @@ export async function softDeleteCampaignTx(
   });
 }
 
+/**
+ * Undo a soft-delete (the "Restore" action from the Talent Pool). Clears
+ * `deleted_at` so the campaign — and the normal candidate click-through under
+ * it — reappears everywhere. Scoped to the owning, currently-removed campaign
+ * (`deleted_at is not null`) so it doubles as an ownership gate and is a no-op
+ * on a campaign that was never removed. Appends a `campaign_restored` audit row.
+ */
+export async function restoreCampaignTx(
+  id: string,
+  userId: string
+): Promise<void> {
+  const supabase = await createClient();
+
+  const { data: restored, error } = await supabase
+    .from("campaigns")
+    .update({ deleted_at: null })
+    .eq("id", id)
+    .eq("user_id", userId)
+    .not("deleted_at", "is", null)
+    .select("id")
+    .single();
+
+  if (error || !restored) {
+    throw new Error(error?.message || "Campaign not found or not removed");
+  }
+
+  await supabase.from("campaign_audit_log").insert({
+    campaign_id: id,
+    user_id: userId,
+    action: "campaign_restored",
+    entity_type: "campaign",
+    entity_id: id,
+  });
+}
+
 export interface CampaignBySlug {
   campaign_id: string;
   user_id: string;
   title: string;
   status: CampaignStatus;
+  accepting_applications: boolean;
+  deadline: string | null;
+  deadline_enforced: boolean;
 }
 
 /**
@@ -408,7 +458,7 @@ export async function fetchCampaignBySlug(
   const supabase = db ?? createAdminClient();
   const { data } = await supabase
     .from("campaigns")
-    .select("id, user_id, title, status")
+    .select("id, user_id, title, status, accepting_applications, deadline, deadline_enforced")
     .eq("public_slug", slug)
     .is("deleted_at", null)
     .single();
@@ -419,6 +469,9 @@ export async function fetchCampaignBySlug(
     user_id: data.user_id as string,
     title: data.title as string,
     status: data.status as CampaignStatus,
+    accepting_applications: (data.accepting_applications as boolean) ?? true,
+    deadline: (data.deadline as string) || null,
+    deadline_enforced: (data.deadline_enforced as boolean) ?? false,
   };
 }
 
@@ -802,7 +855,9 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
       department: source.department,
       positions: source.positions,
       status: "draft" as CampaignStatus,
+      accepting_applications: source.accepting_applications,
       deadline: source.deadline,
+      deadline_enforced: source.deadline_enforced,
       location: source.location,
       automation_mode: source.automation_mode,
       screening_threshold: source.screening_threshold,

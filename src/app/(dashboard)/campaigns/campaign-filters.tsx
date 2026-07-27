@@ -187,6 +187,7 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                       <CampaignStatusChanger
                         campaignId={campaign.id}
                         currentStatus={campaign.status ?? "draft"}
+                        acceptingApplications={campaign.accepting_applications}
                       />
                     </td>
                     <td className="px-6 py-4">

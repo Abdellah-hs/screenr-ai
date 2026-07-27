@@ -1,4 +1,8 @@
-import { CAMPAIGN_STATUSES, type CampaignStatus } from "@/lib/constants";
+import {
+  CAMPAIGN_STATUSES,
+  type CampaignStatus,
+  type CampaignStatusSelection,
+} from "@/lib/constants";
 
 /**
  * Campaign-status options. Campaign status is a lightweight lifecycle label
@@ -23,6 +27,97 @@ const ALL_STATUSES: CampaignStatus[] = CAMPAIGN_STATUSES.map((s) => s.value);
  */
 export function isCampaignProcessingActive(status: CampaignStatus): boolean {
   return status === "active";
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a campaign's application deadline has passed, treating the deadline
+ * DAY as inclusive: applications close at the end of the deadline day (UTC), so
+ * a deadline of 2026-07-25 accepts through 2026-07-25T23:59:59.999Z and is
+ * "passed" from 2026-07-26T00:00:00Z onward. A null/blank/unparseable deadline
+ * is never passed.
+ */
+export function isDeadlinePassed(deadline: string | null, now: Date): boolean {
+  if (!deadline) return false;
+  const d = new Date(deadline);
+  if (Number.isNaN(d.getTime())) return false;
+  const endOfDeadlineDay =
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + DAY_MS;
+  return now.getTime() >= endOfDeadlineDay;
+}
+
+/** The campaign fields that decide whether the public apply page accepts CVs. */
+export interface CampaignApplyGate {
+  status: CampaignStatus;
+  accepting_applications: boolean;
+  deadline: string | null;
+  deadline_enforced: boolean;
+}
+
+/**
+ * Whether the public apply page should accept a new application right now. Three
+ * gates, all required: the campaign must be processing (active); the recruiter's
+ * manual intake switch (`accepting_applications`) must be on; AND — only when
+ * they opted into deadline enforcement — the deadline must not have passed. An
+ * unenforced deadline never blocks applications (it's informational). This is
+ * the single decision the apply action reads.
+ */
+export function isCampaignAcceptingApplications(
+  campaign: CampaignApplyGate,
+  now: Date,
+): boolean {
+  if (!isCampaignProcessingActive(campaign.status)) return false;
+  if (!campaign.accepting_applications) return false;
+  if (campaign.deadline_enforced && isDeadlinePassed(campaign.deadline, now)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Decode the form's status dropdown value into the two persisted fields. The
+ * `active_no_intake` UI token means "active but closed to new applications";
+ * every other value is a real lifecycle status that leaves intake open. Unknown
+ * values fall back to `draft` (fail-safe: not accepting).
+ */
+export function decodeStatusSelection(selection: string): {
+  status: CampaignStatus;
+  accepting_applications: boolean;
+} {
+  if (selection === "active_no_intake") {
+    return { status: "active", accepting_applications: false };
+  }
+  const known = ALL_STATUSES.find((s) => s === selection);
+  return { status: known ?? "draft", accepting_applications: true };
+}
+
+/** Inverse of decodeStatusSelection — pick the dropdown value for a campaign. */
+export function encodeStatusSelection(
+  status: CampaignStatus,
+  acceptingApplications: boolean,
+): CampaignStatusSelection {
+  if (status === "active" && !acceptingApplications) return "active_no_intake";
+  return status;
+}
+
+const ALL_STATUS_SELECTIONS: CampaignStatusSelection[] = [
+  "draft",
+  "active",
+  "active_no_intake",
+  "paused",
+  "closed",
+];
+
+/**
+ * Selections the inline changer offers — every option except the campaign's
+ * current one (setting it to what it already is would be a no-op). Mirrors
+ * `settableCampaignStatuses` but over the 5-option status+intake dropdown.
+ */
+export function settableStatusSelections(
+  current: CampaignStatusSelection,
+): CampaignStatusSelection[] {
+  return ALL_STATUS_SELECTIONS.filter((s) => s !== current);
 }
 
 /** Guard: throws unless the campaign is active, freezing all candidate processing. */

@@ -46,8 +46,18 @@ import {
   type CampaignScoringConfig,
   type ResumeScoreResult,
 } from "@/lib/rules/resume-scoring";
-import { toCandidateStage } from "@/lib/constants";
-import type { ApplicationState, Candidate, CandidateScore, ScoreFactor, ScreeningTier } from "@/lib/constants";
+import { toCandidateStage, pipelineDisplayScore } from "@/lib/constants";
+import type {
+  ApplicationState,
+  Candidate,
+  CandidateScore,
+  CampaignStatus,
+  ScoreFactor,
+  ScreeningTier,
+  TalentPoolApplication,
+  TalentPoolCandidate,
+} from "@/lib/constants";
+import { fetchTalentPoolRows } from "@/lib/data/talent-pool";
 import type { Database } from "@/types/database.types";
 
 type ApplicationRow = Database["public"]["Tables"]["applications"]["Row"];
@@ -194,6 +204,73 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       updated_at: app.updated_at,
     };
   });
+}
+
+/**
+ * The Talent Pool: every candidate the recruiter owns (via their campaigns),
+ * grouped by person, each carrying their full application history so removing a
+ * campaign never hides the person — the removed campaign is just flagged on its
+ * history entry. Reuses the same stage/score derivation as the per-campaign
+ * table so a person's numbers read identically in both places.
+ */
+export async function getTalentPool(): Promise<TalentPoolCandidate[]> {
+  const userId = await requireUserId();
+  const rows = await fetchTalentPoolRows(userId);
+
+  const byCandidate = new Map<string, TalentPoolCandidate>();
+
+  for (const row of rows) {
+    const stage = toCandidateStage(row.status);
+    // Rubric versions are only needed for the stale-score badge, which the
+    // Talent Pool doesn't show — pass null and take the stage-appropriate score.
+    const scores = buildScoresArray(
+      row,
+      null,
+      scoredScreeningResponse(row.screening_question_responses),
+      null,
+    );
+    const display = pipelineDisplayScore({ stage, scores });
+
+    const application: TalentPoolApplication = {
+      applicationId: row.id,
+      campaignId: row.campaign_id,
+      campaignTitle: row.campaigns.title,
+      campaignStatus: row.campaigns.status as CampaignStatus,
+      campaignRemoved: row.campaigns.deleted_at != null,
+      stage,
+      score: display
+        ? { overall: display.overall, stage: display.stage, tier: display.tier ?? null }
+        : null,
+      appliedAt: row.created_at,
+    };
+
+    const cand = row.candidates;
+    const existing = byCandidate.get(cand.id);
+    if (existing) {
+      existing.applications.push(application);
+      if (application.appliedAt > existing.latestActivityAt) {
+        existing.latestActivityAt = application.appliedAt;
+      }
+    } else {
+      byCandidate.set(cand.id, {
+        id: cand.id,
+        name: `${cand.first_name} ${cand.last_name}`.trim() || cand.email,
+        email: cand.email,
+        phone: cand.phone,
+        location: cand.location,
+        applications: [application],
+        latestActivityAt: application.appliedAt,
+      });
+    }
+  }
+
+  const people = Array.from(byCandidate.values());
+  // Each person's history newest-first; people ordered by most-recent activity.
+  for (const person of people) {
+    person.applications.sort((a, b) => b.appliedAt.localeCompare(a.appliedAt));
+  }
+  people.sort((a, b) => b.latestActivityAt.localeCompare(a.latestActivityAt));
+  return people;
 }
 
 export async function getCandidateById(applicationId: string) {

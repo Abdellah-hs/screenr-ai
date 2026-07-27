@@ -3,12 +3,14 @@ import { notFound } from "next/navigation";
 import { getCampaignById } from "@/lib/actions/campaigns";
 import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import { getScreeningQuestions } from "@/lib/actions/screening-questions";
+import { getLinkedInConnectionStatus } from "@/lib/actions/integrations";
 import RubricDisplay from "@/components/campaigns/rubric-display";
 import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
 import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
 import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
 import { CampaignApplyLink } from "@/components/campaigns/campaign-apply-link";
+import { SocialPostGenerator } from "@/components/campaigns/social-post-generator";
 import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
 import { uuidSchema } from "@/lib/validations";
 
@@ -22,10 +24,11 @@ export default async function CampaignDetailPage({
   // the parallel fetches below run a query against a garbage uuid.
   if (!uuidSchema.safeParse(id).success) notFound();
 
-  const [campaign, candidates, screeningQuestions] = await Promise.all([
+  const [campaign, candidates, screeningQuestions, linkedInStatus] = await Promise.all([
     getCampaignById(id),
     getCandidatesByCampaignId(id),
     getScreeningQuestions(id),
+    getLinkedInConnectionStatus(),
   ]);
 
   if (!campaign) {
@@ -59,6 +62,7 @@ export default async function CampaignDetailPage({
             <CampaignStatusChanger
               campaignId={campaign.id}
               currentStatus={campaign.status ?? "draft"}
+              acceptingApplications={campaign.accepting_applications}
             />
           </div>
           {campaign.department && (
@@ -173,6 +177,19 @@ export default async function CampaignDetailPage({
           <CampaignApplyLink slug={campaign.public_slug} isActive={isActive} />
         </div>
       )}
+
+      {/* AI social-post generator — drafts shareable "we're hiring" copy per
+          channel (copy-to-post; no auto-publishing). */}
+      <div className="mb-6">
+        <SocialPostGenerator
+          title={campaign.title}
+          description={campaign.description}
+          department={campaign.department}
+          location={campaign.location}
+          slug={campaign.public_slug}
+          linkedInConnected={linkedInStatus.connected}
+        />
+      </div>
 
       {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
       {campaign.rubrics.length > 0 && (

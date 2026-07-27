@@ -14,6 +14,8 @@ import {
   extractResumeData,
   generateScreeningCriteria,
   generateRubricDimensions,
+  generateJobDescription,
+  generateSocialPosts,
   scoreResumeAgainstCriteria,
   RESUME_SCORING_SEED,
 } from "./openai";
@@ -37,6 +39,119 @@ afterEach(() => {
   } else {
     process.env.OPENAI_API_KEY = ORIGINAL_API_KEY;
   }
+});
+
+describe("generateJobDescription", () => {
+  it("returns the trimmed description text from the model", async () => {
+    mockParse.mockResolvedValueOnce(
+      parsedResponse({ description: "  Role summary\nYou will build things.\n  " }),
+    );
+
+    const text = await generateJobDescription({ mode: "generate", title: "Backend Engineer" });
+
+    expect(text).toBe("Role summary\nYou will build things.");
+  });
+
+  it("grounds the prompt in the recruiter-provided inputs", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse({ description: "A draft." }));
+
+    await generateJobDescription({
+      mode: "generate",
+      title: "Backend Engineer",
+      seniority: "Senior",
+      skills: ["Go", "PostgreSQL"],
+    });
+
+    const userMessage = mockParse.mock.calls[0][0].messages.find(
+      (m: { role: string }) => m.role === "user",
+    );
+    expect(userMessage.content).toContain("Backend Engineer");
+    expect(userMessage.content).toContain("Senior");
+    expect(userMessage.content).toContain("Go, PostgreSQL");
+  });
+
+  it("includes the current draft when improving", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse({ description: "Improved." }));
+
+    await generateJobDescription({
+      mode: "improve",
+      title: "Backend Engineer",
+      currentDraft: "rough notes about the role",
+    });
+
+    const userMessage = mockParse.mock.calls[0][0].messages.find(
+      (m: { role: string }) => m.role === "user",
+    );
+    expect(userMessage.content).toContain("Current draft:");
+    expect(userMessage.content).toContain("rough notes about the role");
+  });
+
+  it("throws when the model refuses", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "cannot help with that"));
+
+    await expect(
+      generateJobDescription({ mode: "generate", title: "Backend Engineer" }),
+    ).rejects.toThrow(/refused/i);
+  });
+
+  it("throws when the model returns empty text", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse({ description: "   " }));
+
+    await expect(
+      generateJobDescription({ mode: "generate", title: "Backend Engineer" }),
+    ).rejects.toThrow(/empty/i);
+  });
+});
+
+describe("generateSocialPosts", () => {
+  const allPlatforms = {
+    linkedin: "  We're hiring a Backend Engineer.  ",
+    x: "We're hiring! #jobs",
+    facebook: "Come join us.",
+    general: "Open role: Backend Engineer. Apply now.",
+  };
+
+  it("returns trimmed copy for every platform", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(allPlatforms));
+
+    const posts = await generateSocialPosts({
+      title: "Backend Engineer",
+      description: "Build APIs.",
+    });
+
+    expect(posts.linkedin).toBe("We're hiring a Backend Engineer.");
+    expect(posts.x).toBe("We're hiring! #jobs");
+    expect(posts.facebook).toBe("Come join us.");
+    expect(posts.general).toBe("Open role: Backend Engineer. Apply now.");
+  });
+
+  it("grounds the prompt in campaign facts, apply link, and tone", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(allPlatforms));
+
+    await generateSocialPosts({
+      title: "Backend Engineer",
+      description: "Build APIs.",
+      location: "Remote",
+      applyUrl: "https://jobs.example.com/apply/backend",
+      tone: "enthusiastic",
+    });
+
+    const userMessage = mockParse.mock.calls[0][0].messages.find(
+      (m: { role: string }) => m.role === "user",
+    );
+    expect(userMessage.content).toContain("Backend Engineer");
+    expect(userMessage.content).toContain("Remote");
+    expect(userMessage.content).toContain("https://jobs.example.com/apply/backend");
+    expect(userMessage.content).toContain("enthusiastic");
+  });
+
+  it("throws when the model refuses", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "cannot help"));
+
+    await expect(
+      generateSocialPosts({ title: "Backend Engineer", description: "Build APIs." }),
+    ).rejects.toThrow(/refused/i);
+  });
 });
 
 describe("generateScreeningCriteria", () => {

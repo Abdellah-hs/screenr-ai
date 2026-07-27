@@ -3,6 +3,17 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { createCampaign } from "@/lib/actions/campaigns";
+import { CAMPAIGN_STATUS_SELECTIONS } from "@/lib/constants";
+
+/** Today's date as YYYY-MM-DD in the user's local timezone, for a date input's
+ *  `min` so a deadline can't be set in the past. */
+function todayLocalYmd(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+import { DescriptionField } from "@/components/campaigns/description-field";
 import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
@@ -57,19 +68,7 @@ export default function NewCampaignPage() {
           />
         </div>
 
-        <div>
-          <label htmlFor="description" className="block text-sm font-medium text-[#111827] mb-1">
-            Description <span className="text-[#DC2626]">*</span>
-          </label>
-          <textarea
-            id="description"
-            name="description"
-            required
-            rows={4}
-            className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors resize-y"
-            placeholder="Describe the role and requirements..."
-          />
-        </div>
+        <DescriptionField />
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -111,10 +110,11 @@ export default function NewCampaignPage() {
               defaultValue="draft"
               className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             >
-              <option value="draft">Draft</option>
-              <option value="active">Active</option>
-              <option value="paused">Paused</option>
-              <option value="closed">Closed</option>
+              {CAMPAIGN_STATUS_SELECTIONS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -126,8 +126,33 @@ export default function NewCampaignPage() {
               id="deadline"
               name="deadline"
               type="date"
+              min={todayLocalYmd()}
+              suppressHydrationWarning
               className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
             />
+
+            <fieldset className="mt-2">
+              <legend className="text-xs font-medium text-[#6B7280] mb-1">After the deadline passes</legend>
+              <label className="flex items-center gap-2 text-sm text-[#374151] cursor-pointer">
+                <input
+                  type="radio"
+                  name="deadline_enforced"
+                  value="false"
+                  defaultChecked
+                  className="h-4 w-4 border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] cursor-pointer"
+                />
+                Keep accepting (informational only)
+              </label>
+              <label className="mt-1 flex items-center gap-2 text-sm text-[#374151] cursor-pointer">
+                <input
+                  type="radio"
+                  name="deadline_enforced"
+                  value="true"
+                  className="h-4 w-4 border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] cursor-pointer"
+                />
+                Stop accepting applications
+              </label>
+            </fieldset>
           </div>
         </div>
 

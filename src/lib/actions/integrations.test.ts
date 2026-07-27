@@ -4,6 +4,8 @@ const {
   mockRequireUserId,
   mockFetchGmailConnection,
   mockDeleteGmailConnection,
+  mockFetchSocialConnection,
+  mockDeleteSocialConnection,
   mockRevokeRefreshToken,
   mockVerifyRefreshToken,
   mockRevalidatePath,
@@ -11,6 +13,8 @@ const {
   mockRequireUserId: vi.fn(),
   mockFetchGmailConnection: vi.fn(),
   mockDeleteGmailConnection: vi.fn(),
+  mockFetchSocialConnection: vi.fn(),
+  mockDeleteSocialConnection: vi.fn(),
   mockRevokeRefreshToken: vi.fn(),
   mockVerifyRefreshToken: vi.fn(),
   mockRevalidatePath: vi.fn(),
@@ -23,6 +27,8 @@ vi.mock("@/lib/auth/guards", () => ({
 vi.mock("@/lib/data/integrations", () => ({
   fetchGmailConnection: mockFetchGmailConnection,
   deleteGmailConnection: mockDeleteGmailConnection,
+  fetchSocialConnection: mockFetchSocialConnection,
+  deleteSocialConnection: mockDeleteSocialConnection,
 }));
 
 // Only the network-touching functions are mocked; `hasCalendarScopes` is pure
@@ -40,7 +46,12 @@ vi.mock("next/cache", () => ({
   revalidatePath: mockRevalidatePath,
 }));
 
-import { getGmailConnectionStatus, disconnectGmail } from "./integrations";
+import {
+  getGmailConnectionStatus,
+  disconnectGmail,
+  getLinkedInConnectionStatus,
+  disconnectLinkedIn,
+} from "./integrations";
 import {
   CALENDAR_EVENTS_SCOPE,
   CALENDAR_FREEBUSY_SCOPE,
@@ -193,6 +204,89 @@ describe("disconnectGmail", () => {
 
     expect(mockRevokeRefreshToken).not.toHaveBeenCalled();
     expect(mockDeleteGmailConnection).not.toHaveBeenCalled();
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/settings");
+    expect(result).toEqual({ success: true });
+  });
+});
+
+describe("getLinkedInConnectionStatus", () => {
+  it("rejects unauthenticated callers before reading any data", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(getLinkedInConnectionStatus()).rejects.toThrow("Unauthorized");
+    expect(mockFetchSocialConnection).not.toHaveBeenCalled();
+  });
+
+  it("reports not connected when there is no stored connection", async () => {
+    mockFetchSocialConnection.mockResolvedValue(null);
+
+    await expect(getLinkedInConnectionStatus()).resolves.toEqual({
+      connected: false,
+      needsReconnect: false,
+      accountName: null,
+      connectedAt: null,
+    });
+  });
+
+  it("reports connected when the stored token has not expired", async () => {
+    mockFetchSocialConnection.mockResolvedValue({
+      access_token: "tok-1",
+      account_name: "Ada Lovelace",
+      account_id: "member-9",
+      token_expires_at: "2999-01-01T00:00:00.000Z",
+      connected_at: "2026-07-22T00:00:00Z",
+    });
+
+    const status = await getLinkedInConnectionStatus();
+
+    expect(status.connected).toBe(true);
+    expect(status.needsReconnect).toBe(false);
+    expect(status.accountName).toBe("Ada Lovelace");
+  });
+
+  it("reports needsReconnect when the stored token has expired", async () => {
+    mockFetchSocialConnection.mockResolvedValue({
+      access_token: "tok-1",
+      account_name: "Ada Lovelace",
+      account_id: "member-9",
+      token_expires_at: "2000-01-01T00:00:00.000Z",
+      connected_at: "2026-07-22T00:00:00Z",
+    });
+
+    const status = await getLinkedInConnectionStatus();
+
+    expect(status.connected).toBe(false);
+    expect(status.needsReconnect).toBe(true);
+  });
+
+  it("degrades to not connected when the read fails (e.g. table not migrated yet)", async () => {
+    mockFetchSocialConnection.mockRejectedValue(
+      Object.assign(new Error("relation does not exist"), { code: "42P01" }),
+    );
+
+    await expect(getLinkedInConnectionStatus()).resolves.toEqual({
+      connected: false,
+      needsReconnect: false,
+      accountName: null,
+      connectedAt: null,
+    });
+  });
+});
+
+describe("disconnectLinkedIn", () => {
+  it("rejects unauthenticated callers before deleting anything", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(disconnectLinkedIn()).rejects.toThrow("Unauthorized");
+    expect(mockDeleteSocialConnection).not.toHaveBeenCalled();
+  });
+
+  it("deletes the linkedin connection and revalidates settings", async () => {
+    mockDeleteSocialConnection.mockResolvedValue(undefined);
+
+    const result = await disconnectLinkedIn();
+
+    expect(mockDeleteSocialConnection).toHaveBeenCalledWith("user-1", "linkedin");
     expect(mockRevalidatePath).toHaveBeenCalledWith("/settings");
     expect(result).toEqual({ success: true });
   });

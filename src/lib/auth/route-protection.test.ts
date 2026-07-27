@@ -15,6 +15,10 @@ describe("isProtectedPath", () => {
     expect(isProtectedPath("/admin/duplicates")).toBe(true);
   });
 
+  it("protects the talent pool", () => {
+    expect(isProtectedPath("/candidates")).toBe(true);
+  });
+
   it("protects settings (regression: previously 500'd when unauthenticated)", () => {
     expect(isProtectedPath("/settings")).toBe(true);
     expect(isProtectedPath("/settings/integrations")).toBe(true);
