@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseDb } from "@/lib/supabase/types";
+import type { Json } from "@/types/database.types";
 
 /**
  * Data layer for AI video-interview sessions (Phase A).
@@ -27,13 +28,35 @@ export type InterviewSessionStatus =
   | "expired"
   | "failed";
 
+/** One scored competency of an interview, with the model's rationale. */
+export interface InterviewDimension {
+  name: string;
+  score: number;
+  rationale: string;
+}
+
+/**
+ * Persisted interview score (Phase B), stored on `interview_sessions.scores`.
+ * Independent stage evidence (CLAUDE.md) — no rollup with resume/screening.
+ */
+export interface InterviewScore {
+  overall_score: number;
+  overall_rationale: string;
+  dimensions: InterviewDimension[];
+  strengths: string[];
+  concerns: string[];
+  /** interview-stage rubric version active at score time (staleness tracking). */
+  rubric_version: number | null;
+  scored_at: string;
+}
+
 export interface InterviewSessionRow {
   id: string;
   application_id: string;
   status: InterviewSessionStatus;
   transcript: InterviewTranscriptTurn[];
   recording_url: string | null;
-  scores: unknown | null;
+  scores: InterviewScore | null;
   proctoring: unknown | null;
   expires_at: string | null;
   started_at: string | null;
@@ -207,6 +230,65 @@ export async function markInterviewFailed(
   if (error) {
     throw new Error(
       `Failed to mark interview failed: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
+ * Persist the AI interview score on the session AND its audit-log evidence, per
+ * CLAUDE.md's "Mandatory AI Output Persistence" rule. The score is the
+ * interview analogue of `saveAnswerScores`. Session status is unchanged (the
+ * APPLICATION advancing to `interview_scored` is the action's job); this only
+ * writes the evidence.
+ *
+ * Runs on an injected `db` because the auto-score fires in the candidate's
+ * session-less submit request — the caller passes the admin client there.
+ */
+export async function saveInterviewScore(
+  args: {
+    applicationId: string;
+    campaignId: string;
+    candidateId: string;
+    score: InterviewScore;
+    audit: {
+      model: string;
+      promptVersion: string;
+      rawOutput: string;
+      inputSnapshot: Json;
+    };
+  },
+  db: SupabaseDb,
+): Promise<void> {
+  const q = db as AnyDb;
+
+  const { error: updateError } = await q
+    .from("interview_sessions")
+    .update({ scores: args.score })
+    .eq("application_id", args.applicationId);
+
+  if (updateError) {
+    throw new Error(
+      `Failed to save interview score: ${updateError.message ?? JSON.stringify(updateError)}`,
+    );
+  }
+
+  const { error: auditError } = await q.from("ai_audit_log").insert({
+    campaign_id: args.campaignId,
+    candidate_id: args.candidateId,
+    stage: "interview_scoring",
+    model: args.audit.model,
+    prompt_version: args.audit.promptVersion,
+    rubric_version:
+      args.score.rubric_version != null ? String(args.score.rubric_version) : null,
+    input_snapshot: args.audit.inputSnapshot,
+    raw_output: args.audit.rawOutput,
+    parsed_score: args.score.overall_score,
+    rationale: args.score.overall_rationale,
+  });
+
+  if (auditError) {
+    throw new Error(
+      `Failed to save interview score audit: ${auditError.message ?? JSON.stringify(auditError)}`,
     );
   }
 }

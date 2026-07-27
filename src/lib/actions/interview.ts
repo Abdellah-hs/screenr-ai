@@ -1,14 +1,18 @@
 "use server";
 
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { uuidSchema } from "@/lib/validations";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
+import { createAdminClient } from "@/lib/supabase/admin";
 import {
   fetchInterviewContextByApplicationId,
+  fetchInterviewScoringContext,
   type InterviewCandidateContext,
 } from "@/lib/data/candidates";
+import { runInterviewScoring } from "./interview-scoring";
 import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
@@ -203,7 +207,47 @@ export async function submitInterview(input: { token: string }): Promise<{ ok: t
     "Candidate completed the AI video interview",
   );
 
+  // Score the interview automatically — no recruiter click required — but AFTER
+  // the response, so the candidate's "done" screen never waits on AI scoring.
+  // Best-effort; failures are logged, never surfaced (the transcript is durable
+  // and a recruiter can still score manually). The advancement stays rule-driven
+  // inside runInterviewScoring (Control > AI > Data).
+  after(() => autoScoreInterview(application_id));
+
   return { ok: true };
+}
+
+/**
+ * Best-effort auto-scoring right after a completed interview. Runs in the
+ * candidate's token-verified request, where there is no recruiter session, so
+ * it resolves the campaign config + owner from the application alone via the
+ * admin client. A failure must never surface to the candidate (they've already
+ * left): the transcript is persisted and a recruiter can score manually.
+ */
+async function autoScoreInterview(applicationId: string): Promise<void> {
+  try {
+    const db = createAdminClient();
+    const ctx = await fetchInterviewScoringContext(applicationId, db);
+    if (!ctx?.description) {
+      console.warn(
+        `autoScoreInterview: skipping ${applicationId} — campaign has no job description to score against.`,
+      );
+      return;
+    }
+    await runInterviewScoring({
+      applicationId,
+      campaignId: ctx.campaign_id,
+      candidateId: ctx.candidate_id,
+      ownerUserId: ctx.owner_user_id,
+      description: ctx.description,
+      resumeSummary: ctx.resume_summary,
+    });
+  } catch (err) {
+    console.error(
+      `autoScoreInterview failed for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 /**

@@ -33,6 +33,7 @@ vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: mockCheckRateLimit }));
 vi.mock("next/headers", () => ({ headers: mockHeaders }));
 vi.mock("@/lib/data/candidates", () => ({
   fetchInterviewContextByApplicationId: mockFetchInterviewContext,
+  fetchInterviewScoringContext: vi.fn(),
 }));
 vi.mock("@/lib/data/interview-sessions", () => ({
   fetchInterviewSessionByApplicationId: mockFetchSession,
@@ -42,6 +43,13 @@ vi.mock("@/lib/data/interview-sessions", () => ({
 }));
 vi.mock("@/lib/services/livekit", () => ({ createInterviewRoomGrant: mockCreateGrant }));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplication: mockTransition }));
+
+// Isolate the auto-score: submitInterview schedules it via after(); mock after
+// to a no-op and stub the scoring core so the OpenAI-instantiating module never
+// loads into this test's import graph.
+vi.mock("next/server", () => ({ after: vi.fn() }));
+vi.mock("./interview-scoring", () => ({ runInterviewScoring: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 
 import {
   loadInterviewContext,

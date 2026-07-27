@@ -7,6 +7,7 @@ function makeChain(result: Result) {
   const chain = {
     update: vi.fn(() => chain),
     upsert: vi.fn(() => Promise.resolve(result)),
+    insert: vi.fn(() => Promise.resolve(result)),
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
     in: vi.fn(() => chain),
@@ -27,6 +28,8 @@ import {
   finalizeInterviewTranscript,
   markInterviewExpired,
   markInterviewFailed,
+  saveInterviewScore,
+  type InterviewScore,
 } from "./interview-sessions";
 
 let chain: ReturnType<typeof makeChain>;
@@ -153,5 +156,60 @@ describe("markInterviewExpired / markInterviewFailed", () => {
   it("marks the session failed", async () => {
     await markInterviewFailed("app-1", db as never);
     expect(chain.update).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
+  });
+});
+
+describe("saveInterviewScore", () => {
+  const score: InterviewScore = {
+    overall_score: 85,
+    overall_rationale: "Strong systems depth.",
+    dimensions: [{ name: "Technical depth", score: 90, rationale: "ledger rewrite" }],
+    strengths: ["Ledger systems"],
+    concerns: [],
+    rubric_version: 3,
+    scored_at: "2026-07-27T00:00:00.000Z",
+  };
+
+  it("writes the score onto the session and inserts a matching audit row", async () => {
+    await saveInterviewScore(
+      {
+        applicationId: "app-1",
+        campaignId: "camp-1",
+        candidateId: "cand-1",
+        score,
+        audit: { model: "gpt-4o-mini", promptVersion: "v1", rawOutput: "{}", inputSnapshot: {} },
+      },
+      db as never,
+    );
+
+    expect(db.from).toHaveBeenCalledWith("interview_sessions");
+    expect(chain.update).toHaveBeenCalledWith({ scores: score });
+    expect(chain.eq).toHaveBeenCalledWith("application_id", "app-1");
+
+    expect(db.from).toHaveBeenCalledWith("ai_audit_log");
+    expect(chain.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "interview_scoring",
+        parsed_score: 85,
+        rubric_version: "3",
+        candidate_id: "cand-1",
+      }),
+    );
+  });
+
+  it("throws when the session write fails", async () => {
+    useResult({ error: new Error("db down") });
+    await expect(
+      saveInterviewScore(
+        {
+          applicationId: "app-1",
+          campaignId: "camp-1",
+          candidateId: "cand-1",
+          score,
+          audit: { model: "m", promptVersion: "v", rawOutput: "{}", inputSnapshot: {} },
+        },
+        db as never,
+      ),
+    ).rejects.toThrow("db down");
   });
 });

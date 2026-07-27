@@ -439,6 +439,62 @@ export async function fetchInterviewContextByApplicationId(
 }
 
 /**
+ * Session-less context for auto-scoring a completed interview: the job
+ * description to score against, the owning recruiter (for attribution), the
+ * candidate id, and a short résumé summary for the scorer. Accepts an injected
+ * `db` because the auto-score fires in the candidate's session-less submit
+ * request — the caller passes the admin client so RLS doesn't blank the read.
+ */
+export interface InterviewScoringContext {
+  campaign_id: string;
+  candidate_id: string;
+  owner_user_id: string;
+  description: string | null;
+  resume_summary: string | null;
+}
+
+export async function fetchInterviewScoringContext(
+  applicationId: string,
+  db?: SupabaseDb,
+): Promise<InterviewScoringContext | null> {
+  const supabase = db ?? (await createClient());
+  const select =
+    "candidate_id, campaign_id, campaigns!inner(user_id, description), candidates!inner(parsed_data)";
+  const { data, error } = await supabase
+    .from("applications")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(select as any)
+    .eq("id", applicationId)
+    .single();
+
+  if (error || !data) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = data as any;
+  const campaign = row.campaigns;
+  if (!campaign?.user_id) return null;
+
+  return {
+    campaign_id: row.campaign_id,
+    candidate_id: row.candidate_id,
+    owner_user_id: campaign.user_id,
+    description: campaign.description ?? null,
+    resume_summary: buildResumeSummary(row.candidates?.parsed_data ?? null),
+  };
+}
+
+/** Compact one-paragraph résumé summary to give the interview scorer context. */
+function buildResumeSummary(parsed: ParsedResumeData | null): string | null {
+  if (!parsed) return null;
+  const parts = [
+    parsed.headline,
+    parsed.summary,
+    parsed.skills?.length ? `Skills: ${parsed.skills.slice(0, 15).join(", ")}` : null,
+  ].filter((p): p is string => Boolean(p && p.trim()));
+  const summary = parts.join(". ").trim();
+  return summary.length > 0 ? summary.slice(0, 1500) : null;
+}
+
+/**
  * System-driven advancement (rule-based, e.g. resume scoring passes threshold).
  * Delegates to transitionApplication() so validation + audit log stay consistent.
  */
