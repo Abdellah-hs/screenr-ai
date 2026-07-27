@@ -63,6 +63,13 @@ function sign(data: string): string {
 export const SCHEDULE_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
+ * TTL for an `/interview/<token>` link. The on-demand AI interview is invited
+ * with a deadline like screening — the candidate starts whenever ready before
+ * it lapses. Matches the 7-day screening-response default.
+ */
+export const INTERVIEW_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
  * Sign a token for a screening response link.
  * @param applicationId the application the candidate is responding to
  * @param ttlMs how long the link should be valid (default 7 days)

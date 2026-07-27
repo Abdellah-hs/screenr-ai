@@ -30,6 +30,11 @@ vi.mock("@/lib/http/origin", () => ({
 vi.mock("@/lib/auth/screening-token", () => ({
   signResponseToken: () => "signed-token",
   SCHEDULE_TOKEN_TTL_MS: 30 * 24 * 60 * 60 * 1000,
+  INTERVIEW_TOKEN_TTL_MS: 7 * 24 * 60 * 60 * 1000,
+}));
+
+vi.mock("@/lib/data/interview-sessions", () => ({
+  ensureInterviewSession: vi.fn(),
 }));
 
 import { sendTransitionNotification } from "./transition-notifications";
@@ -68,14 +73,27 @@ describe("sendTransitionNotification", () => {
     expect(sent.html).toContain("https://hire.example.com/schedule/signed-token");
   });
 
-  it("emails the candidate a link-free advance notice on transition to interview_invited", async () => {
+  it("emails the candidate the AI-interview invite with the token link on transition to interview_invited", async () => {
     await sendTransitionNotification("app-1", "interview_invited", USER_ID);
 
     expect(mockSendEmail).toHaveBeenCalledTimes(1);
     const sent = mockSendEmail.mock.calls[0][1];
     expect(sent.to).toBe("jane@example.com");
     expect(sent.subject).toContain("Senior Engineer");
-    expect(sent.text).not.toContain("https://hire.example.com/schedule/");
+    expect(sent.text).toContain("https://hire.example.com/interview/signed-token");
+    expect(sent.html).toContain("https://hire.example.com/interview/signed-token");
+  });
+
+  it("ensures the interview session row exists (for agent transcript reports) on interview_invited", async () => {
+    const { ensureInterviewSession } = await import("@/lib/data/interview-sessions");
+
+    await sendTransitionNotification("app-1", "interview_invited", USER_ID);
+
+    expect(ensureInterviewSession).toHaveBeenCalledWith(
+      "app-1",
+      expect.any(Date),
+      expect.objectContaining({ __brand: "admin-client" }),
+    );
   });
 
   it("sends nothing for the retired interview_scheduling trigger (booking moved to the final interview)", async () => {

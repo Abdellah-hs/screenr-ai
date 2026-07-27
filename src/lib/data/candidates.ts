@@ -393,6 +393,52 @@ export async function fetchApplicationForResponse(
 }
 
 /**
+ * Session-less read for the AI interview flow: campaign framing + the
+ * candidate's parsed résumé, so the interview agent's instructions can be
+ * grounded in the candidate's real background. Like `fetchApplicationForResponse`
+ * it does no user scoping — the caller has already verified a signed interview
+ * token.
+ */
+export interface InterviewCandidateContext {
+  application_id: string;
+  campaign_id: string;
+  campaign_title: string;
+  campaign_status: CampaignStatus;
+  candidate_first_name: string | null;
+  candidate_last_name: string | null;
+  /** The candidate's parsed résumé (null if never ingested). */
+  resume: ParsedResumeData | null;
+}
+
+export async function fetchInterviewContextByApplicationId(
+  applicationId: string,
+): Promise<InterviewCandidateContext | null> {
+  const supabase = await createClient();
+  const select =
+    "id, campaign_id, campaigns!inner(id, title, status), candidates!inner(first_name, last_name, parsed_data)";
+  const { data } = await supabase
+    .from("applications")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(select as any)
+    .eq("id", applicationId)
+    .single();
+
+  if (!data) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const row = data as any;
+
+  return {
+    application_id: row.id,
+    campaign_id: row.campaign_id,
+    campaign_title: row.campaigns?.title ?? "the role",
+    campaign_status: row.campaigns?.status,
+    candidate_first_name: row.candidates?.first_name ?? null,
+    candidate_last_name: row.candidates?.last_name ?? null,
+    resume: (row.candidates?.parsed_data ?? null) as ParsedResumeData | null,
+  };
+}
+
+/**
  * System-driven advancement (rule-based, e.g. resume scoring passes threshold).
  * Delegates to transitionApplication() so validation + audit log stay consistent.
  */

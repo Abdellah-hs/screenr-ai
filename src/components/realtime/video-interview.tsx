@@ -7,18 +7,16 @@ import {
   Track,
   type RemoteTrack,
   type RemoteParticipant,
+  type LocalTrackPublication,
 } from "livekit-client";
-import {
-  startCandidateVoiceScreening,
-  submitVoiceScreening,
-} from "@/lib/actions/respond";
+import { startCandidateInterview, submitInterview } from "@/lib/actions/interview";
 import {
   AGENT_JOIN_TIMEOUT_MS,
   diagnoseAgentSilence,
   realtimeTrace,
 } from "@/lib/realtime/interview-diagnostics";
 
-interface VoiceScreeningProps {
+interface VideoInterviewProps {
   token: string;
   campaignTitle: string;
   /** ISO deadline after which the link expires (surfaced to the candidate). */
@@ -37,9 +35,9 @@ type Status =
 const STATUS_LABEL: Record<Status, string> = {
   idle: "Ready when you are",
   connecting: "Connecting…",
-  live: "Live — the interviewer can hear you",
+  live: "Live — the interviewer can see and hear you",
   review: "Review before you submit",
-  submitting: "Saving your responses…",
+  submitting: "Saving your interview…",
   done: "All done",
   error: "Something went wrong",
 };
@@ -54,9 +52,9 @@ const STATUS_DOT: Record<Status, string> = {
   error: "bg-red-500",
 };
 
-/** Hard cap on the live call. When it hits 0 the call is ended and the
+/** Hard cap on the live interview. When it hits 0 the call ends and the
  *  candidate is taken to the review step to submit. */
-const CALL_SECONDS = 5 * 60;
+const CALL_SECONDS = 20 * 60;
 
 /** LiveKit publishes live transcription segments on this text-stream topic. */
 const TRANSCRIPTION_TOPIC = "lk.transcription";
@@ -76,49 +74,52 @@ function formatDeadline(iso: string): string {
   });
 }
 
+/** Desktop-only: the AI interview requires a real keyboard/camera setup (PRD
+ *  candidate-facing constraint). Coarse pointer or a narrow viewport → phone/
+ *  tablet, which we block with a friendly switch-device message. */
+function computeIsDesktop(): boolean {
+  if (typeof window === "undefined") return true;
+  const coarse = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  const narrow = window.innerWidth < 1024;
+  return !coarse && !narrow;
+}
+
 const PRIMARY_BTN =
   "px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
 
 /**
- * Candidate-facing voice screening, on LiveKit since the migration: the server
- * action opens a room (agent instructions live in its metadata, out of the
- * candidate's reach), this component joins with mic audio, and the server-side
- * agent worker runs the interview and reports the transcript to the app as
- * the call progresses. The browser never assembles or submits transcript
- * content anymore — on "Submit responses" it sends only the token, and the
- * server finalizes from the agent-reported draft.
+ * Candidate-facing AI video interview on LiveKit. Mirrors the voice-screening
+ * flow: the server action opens a room (résumé-grounded agent instructions live
+ * in its metadata, out of the candidate's reach), this component joins with
+ * camera + mic, and the server-side interview agent worker runs the interview
+ * and reports the transcript to the app as the call progresses. The browser
+ * never assembles or submits transcript content — on "Submit" it sends only the
+ * token, and the server finalizes from the agent-reported draft.
  *
- * What the client still does: live captions + a response counter from the
- * room's transcription streams (display only), a hard 5-minute countdown, and
- * the review / re-record step (a re-record simply opens a fresh room; the new
- * draft overwrites the old).
+ * What the client adds over the voice flow: a camera self-view, a desktop-only
+ * gate, and a longer call cap.
  */
-export default function VoiceScreening({
+export default function VideoInterview({
   token,
   campaignTitle,
   expiresAt,
-}: VoiceScreeningProps) {
+}: VideoInterviewProps) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
-  // Counts the candidate's *own* spoken turns — the call is only submittable
-  // once they've answered something. Display-only; the server re-checks
-  // against the agent-reported transcript.
   const [responseCount, setResponseCount] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(CALL_SECONDS);
   const [timedOut, setTimedOut] = useState(false);
-  // Live caption of the interviewer's current/last spoken question.
   const [caption, setCaption] = useState("");
-  // True when the browser is blocking audio autoplay. Without a user gesture,
-  // attaching the agent's track plays nothing — so we surface a tap-to-enable
-  // button rather than leaving the candidate in silence.
   const [audioBlocked, setAudioBlocked] = useState(false);
+  // Starts optimistic (true) so SSR/first paint doesn't flash the block screen;
+  // corrected on mount + resize.
+  const [isDesktop, setIsDesktop] = useState(true);
 
   const roomRef = useRef<Room | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const selfViewRef = useRef<HTMLVideoElement | null>(null);
   const wasLiveRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Segment ids of the candidate's finalized turns (segments stream in
-  // revisions; a Set keeps the count exact).
   const candidateSegmentsRef = useRef<Set<string>>(new Set());
   // Interviewer-presence tracking for the silence watchdog: did the agent join
   // the room, and did its audio arrive? The watchdog reads these to pinpoint a
@@ -127,11 +128,17 @@ export default function VoiceScreening({
   const agentAudioRef = useRef(false);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Informational only — the server re-checks and is the real gate.
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
 
-  // Leave the room and stop the countdown on unmount (refs only, so this runs
-  // exactly once on teardown without re-subscribing every render).
+  // Track desktop-ness on mount + resize.
+  useEffect(() => {
+    const update = () => setIsDesktop(computeIsDesktop());
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  // Leave the room and stop the countdown on unmount.
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -139,33 +146,6 @@ export default function VoiceScreening({
       roomRef.current?.disconnect();
     };
   }, []);
-
-  // Auto-unlock audio on the next interaction ANYWHERE on the page while the
-  // browser is holding the interviewer's voice back — so a candidate doesn't
-  // have to find the exact "Enable sound" button for audio to start. The
-  // dedicated button stays as an explicit fallback.
-  useEffect(() => {
-    if (!audioBlocked) return;
-    const tryUnlock = async () => {
-      const room = roomRef.current;
-      if (!room) return;
-      try {
-        await room.startAudio();
-        for (const el of document.querySelectorAll("audio")) {
-          void el.play().catch(() => {});
-        }
-      } catch {
-        // keep the listeners; a later gesture may succeed
-      }
-      setAudioBlocked(!room.canPlaybackAudio);
-    };
-    window.addEventListener("pointerdown", tryUnlock);
-    window.addEventListener("keydown", tryUnlock);
-    return () => {
-      window.removeEventListener("pointerdown", tryUnlock);
-      window.removeEventListener("keydown", tryUnlock);
-    };
-  }, [audioBlocked]);
 
   function stopTimer() {
     if (timerRef.current) {
@@ -181,8 +161,6 @@ export default function VoiceScreening({
     }
   }
 
-  // Start the 5-minute countdown. Computes remaining time from a fixed deadline
-  // each tick, so a throttled/backgrounded tab can't drift the clock.
   function startTimer() {
     stopTimer();
     const deadline = Date.now() + CALL_SECONDS * 1000;
@@ -197,8 +175,6 @@ export default function VoiceScreening({
     }, 250);
   }
 
-  // Hard cap reached: end the call and move to review so the candidate can
-  // still submit what the agent captured.
   function handleTimeUp() {
     setTimedOut(true);
     teardown();
@@ -223,7 +199,7 @@ export default function VoiceScreening({
     agentPresentRef.current = true;
     agentAudioRef.current = true;
     clearWatchdog();
-    realtimeTrace("voice-screening", "interviewer audio attached");
+    realtimeTrace("video-interview", "interviewer audio attached");
     track.attach(audioRef.current);
     void audioRef.current.play().catch(() => {});
     setAudioBlocked(!room.canPlaybackAudio);
@@ -235,7 +211,7 @@ export default function VoiceScreening({
     // LiveKit throws a cryptic "reading 'getUserMedia'" — surface the real cause.
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setError(
-        "Your browser can't access the microphone on this page. It needs a secure connection — open this link over https, or on this computer use http://localhost:3000.",
+        "Your browser can't access the camera and microphone on this page. It needs a secure connection — open this link over https, or on this computer use http://localhost:3000.",
       );
       setStatus("error");
       return;
@@ -253,7 +229,7 @@ export default function VoiceScreening({
     agentAudioRef.current = false;
     clearWatchdog();
     try {
-      const grant = await startCandidateVoiceScreening(token);
+      const grant = await startCandidateInterview(token);
 
       const room = new Room();
       roomRef.current = room;
@@ -268,18 +244,20 @@ export default function VoiceScreening({
       // joined but stayed mute".
       room.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
         agentPresentRef.current = true;
-        realtimeTrace("voice-screening", "interviewer joined", p.identity);
+        realtimeTrace("video-interview", "interviewer joined", p.identity);
       });
 
-      // Autoplay can be blocked until a user gesture; mirror the room's
-      // playback status so the "Enable sound" prompt appears/clears correctly.
+      // Self-view: attach the candidate's own camera track once it publishes.
+      room.on(RoomEvent.LocalTrackPublished, (pub: LocalTrackPublication) => {
+        if (pub.track?.kind === Track.Kind.Video && selfViewRef.current) {
+          pub.track.attach(selfViewRef.current);
+        }
+      });
+
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
         setAudioBlocked(!room.canPlaybackAudio);
       });
 
-      // A drop before finishing is recoverable — the candidate can simply
-      // reconnect (fresh room, fresh agent). Don't clobber a state the user
-      // has already advanced to (review/submit/done).
       room.on(RoomEvent.Disconnected, () => {
         if (roomRef.current) {
           teardown();
@@ -289,9 +267,7 @@ export default function VoiceScreening({
         }
       });
 
-      // Live transcription segments, published by the agent for both sides of
-      // the conversation. Candidate turns drive the response counter; agent
-      // turns drive the caption — a lifeline if the audio lags or cuts out.
+      // Live transcription segments, published by the agent for both sides.
       room.registerTextStreamHandler(TRANSCRIPTION_TOPIC, async (reader, participant) => {
         const isCandidate = participant?.identity === room.localParticipant.identity;
         const segmentId = reader.info.attributes?.["lk.segment_id"] ?? reader.info.id;
@@ -308,7 +284,7 @@ export default function VoiceScreening({
       });
 
       await room.connect(grant.serverUrl, grant.participantToken);
-      realtimeTrace("voice-screening", "room connected; awaiting interviewer");
+      realtimeTrace("video-interview", "room connected; awaiting interviewer");
 
       // If the agent had already joined / published before our listeners were
       // installed (fast dispatch, or a reconnect), ParticipantConnected /
@@ -323,15 +299,14 @@ export default function VoiceScreening({
 
       try {
         await room.localParticipant.setMicrophoneEnabled(true);
+        await room.localParticipant.setCameraEnabled(true);
       } catch {
         throw new Error(
-          "We couldn't turn on your microphone. Please allow microphone access in your browser and try again.",
+          "We couldn't turn on your camera and microphone. Please allow access in your browser and try again.",
         );
       }
 
-      // The "Start interview" click is a live user gesture — use it to unlock
-      // audio playback now, so the interviewer's greeting isn't swallowed by the
-      // browser's autoplay policy. If it doesn't take, the button below recovers.
+      // The "Start interview" click is a live user gesture — unlock audio now.
       try {
         await room.startAudio();
       } catch {
@@ -351,7 +326,7 @@ export default function VoiceScreening({
             agentAudio: agentAudioRef.current,
           });
           console.error(
-            `[voice-screening] interviewer silent after ${AGENT_JOIN_TIMEOUT_MS}ms (reason=${reason}). ${devHint}`,
+            `[video-interview] interviewer silent after ${AGENT_JOIN_TIMEOUT_MS}ms (reason=${reason}). ${devHint}`,
           );
           teardown();
           setError(message);
@@ -364,27 +339,21 @@ export default function VoiceScreening({
       startTimer();
     } catch (e) {
       teardown();
-      setError(e instanceof Error ? e.message : "Failed to start the call.");
+      setError(e instanceof Error ? e.message : "Failed to start the interview.");
       setStatus("error");
     }
   }
 
-  // End the live call and move to the review step — nothing is finalized
-  // until the candidate explicitly submits.
   function finish() {
     teardown();
     if (!wasLiveRef.current) {
-      // Never actually connected — nothing to review.
       setStatus("idle");
       return;
     }
     setStatus("review");
   }
 
-  // Discard the captured call and let the candidate record again from scratch.
-  // Starting again opens a fresh room; the agent's new report overwrites the
-  // previous draft server-side.
-  function reRecord() {
+  function restart() {
     teardown();
     setResponseCount(0);
     setSecondsLeft(CALL_SECONDS);
@@ -397,8 +366,6 @@ export default function VoiceScreening({
     setStatus("idle");
   }
 
-  // Retry unlocking audio playback from an explicit tap (a fresh user gesture),
-  // for browsers that ignored the unlock attempt during connect.
   async function enableSound() {
     const room = roomRef.current;
     if (!room) return;
@@ -414,10 +381,10 @@ export default function VoiceScreening({
     setStatus("submitting");
     setError(null);
     try {
-      await submitVoiceScreening({ token });
+      await submitInterview({ token });
       setStatus("done");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't save your responses.");
+      setError(e instanceof Error ? e.message : "Couldn't save your interview.");
       setStatus("review");
     }
   }
@@ -429,6 +396,25 @@ export default function VoiceScreening({
   const hasResponses = responseCount > 0;
   const lowTime = secondsLeft <= 60;
 
+  // Desktop-only gate — shown whenever the device isn't a desktop, before any
+  // room is opened. Never blocks a call already in progress on a resize down.
+  if (!isDesktop && status === "idle") {
+    return (
+      <div className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-6 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
+          <svg className="h-6 w-6 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17h4.5m-6.75 3h9a1.5 1.5 0 001.5-1.5v-15A1.5 1.5 0 0015.75 2h-9A1.5 1.5 0 005.25 3.5v15A1.5 1.5 0 006.75 20z" />
+          </svg>
+        </div>
+        <h2 className="mb-2 text-lg font-semibold text-[#111827]">Please switch to a computer</h2>
+        <p className="text-sm text-[#92400E]">
+          This video interview for <strong>{campaignTitle}</strong> needs a desktop or laptop with
+          a camera. Open this same link on a computer in a quiet, well-lit room to begin.
+        </p>
+      </div>
+    );
+  }
+
   if (status === "done") {
     return (
       <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
@@ -439,8 +425,8 @@ export default function VoiceScreening({
         </div>
         <h2 className="mb-2 text-lg font-semibold text-[#111827]">Thanks — that&apos;s everything</h2>
         <p className="text-sm text-[#6B7280]">
-          Your responses for <strong>{campaignTitle}</strong> have been recorded. The hiring
-          team will be in touch by email.
+          Your interview for <strong>{campaignTitle}</strong> has been recorded. The hiring team
+          will review it and be in touch by email.
         </p>
       </div>
     );
@@ -474,21 +460,20 @@ export default function VoiceScreening({
       {status === "idle" && !expired && (
         <>
           <p className="text-sm text-[#6B7280]">
-            This is a short spoken interview for <strong>{campaignTitle}</strong> — about{" "}
-            <strong>5 minutes</strong>. When you start, allow microphone access and the
-            interviewer will greet you and ask a few questions. Speak naturally — you can take
-            your time, and you&apos;ll be able to review before submitting.
+            This is an AI-led video interview for <strong>{campaignTitle}</strong> — about{" "}
+            <strong>20 minutes</strong>. When you start, allow camera and microphone access, and
+            the interviewer will greet you and ask questions based on your background. Speak
+            naturally — you&apos;ll be able to review before submitting.
           </p>
 
-          {/* Pre-call environment notice. */}
           <div className="flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="note">
             <svg className="mt-0.5 h-4 w-4 shrink-0 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
             </svg>
             <p className="text-xs leading-relaxed text-[#92400E]">
-              <strong>Find a quiet room before you start.</strong> Background noise makes it
-              harder for the interviewer to understand you. Use a quiet space with no chatter or
-              music, and headphones with a mic if you have them.
+              <strong>Find a quiet, well-lit room before you start.</strong> Sit facing a light
+              source with your face clearly visible, close other tabs and apps, and use headphones
+              with a mic if you have them.
             </p>
           </div>
         </>
@@ -506,8 +491,24 @@ export default function VoiceScreening({
         </p>
       )}
 
-      {/* Autoplay unlock prompt — shown only when the browser is holding back
-          the interviewer's audio until an explicit tap. */}
+      {/* Video stage — dark panel with the candidate's self-view. */}
+      {(live || connecting) && (
+        <div className="relative overflow-hidden rounded-xl bg-[#0F172A] aspect-video">
+          <video
+            ref={selfViewRef}
+            autoPlay
+            playsInline
+            muted
+            className="h-full w-full object-cover [transform:scaleX(-1)]"
+          />
+          <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/50 px-2.5 py-1 text-xs font-medium text-white">
+            <span className={`inline-block h-2 w-2 rounded-full ${live ? "bg-red-500" : "bg-amber-400 animate-pulse"}`} aria-hidden />
+            You
+          </span>
+        </div>
+      )}
+
+      {/* Autoplay unlock prompt. */}
       {(live || connecting) && audioBlocked && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="alert">
           <p className="text-xs leading-relaxed text-[#92400E]">
@@ -523,8 +524,7 @@ export default function VoiceScreening({
         </div>
       )}
 
-      {/* Live captions of the interviewer's questions — a lifeline if the audio
-          lags or cuts out. */}
+      {/* Live captions of the interviewer's questions. */}
       {(live || connecting) && (
         <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
           <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#0369A1]">
@@ -547,20 +547,17 @@ export default function VoiceScreening({
       {review && (
         <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
           {timedOut && (
-            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">
-              Your 5 minutes are up.
-            </p>
+            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">Your 20 minutes are up.</p>
           )}
           {hasResponses ? (
             <p className="text-sm text-[#0C4A6E]">
               We captured <strong>{responseCount}</strong> spoken{" "}
-              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re
-              ready, or re-record if you&apos;d like another take.
+              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re ready, or
+              restart if you&apos;d like to redo the interview.
             </p>
           ) : (
             <p className="text-sm text-[#0C4A6E]">
-              We didn&apos;t catch any spoken answers on that call. Please re-record before
-              submitting.
+              We didn&apos;t catch any spoken answers. Please restart before submitting.
             </p>
           )}
         </div>
@@ -579,16 +576,16 @@ export default function VoiceScreening({
         )}
         {review && hasResponses && (
           <button type="button" onClick={submit} className={PRIMARY_BTN}>
-            Submit responses
+            Submit interview
           </button>
         )}
         {review && (
           <button
             type="button"
-            onClick={reRecord}
+            onClick={restart}
             className="px-4 py-2 text-sm font-medium text-[#0C4A6E] bg-white border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200"
           >
-            Re-record
+            Restart
           </button>
         )}
         {submitting && (

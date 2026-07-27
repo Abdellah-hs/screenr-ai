@@ -677,6 +677,59 @@ export type Database = {
           },
         ]
       }
+      interview_sessions: {
+        Row: {
+          application_id: string
+          completed_at: string | null
+          created_at: string
+          expires_at: string | null
+          id: string
+          proctoring: Json | null
+          recording_url: string | null
+          scores: Json | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["interview_session_status_enum"]
+          transcript: Json
+          updated_at: string
+        }
+        Insert: {
+          application_id: string
+          completed_at?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          proctoring?: Json | null
+          recording_url?: string | null
+          scores?: Json | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["interview_session_status_enum"]
+          transcript?: Json
+          updated_at?: string
+        }
+        Update: {
+          application_id?: string
+          completed_at?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          proctoring?: Json | null
+          recording_url?: string | null
+          scores?: Json | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["interview_session_status_enum"]
+          transcript?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interview_sessions_application_id_fkey"
+            columns: ["application_id"]
+            isOneToOne: true
+            referencedRelation: "applications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rubric_dimensions: {
         Row: {
           created_at: string
@@ -972,6 +1025,12 @@ export type Database = {
         | "pressure"
         | "collaborative"
         | "socratic"
+      interview_session_status_enum:
+        | "invited"
+        | "in_progress"
+        | "completed"
+        | "expired"
+        | "failed"
       pipeline_stage_enum: "resume" | "screening_q" | "interview"
       reviewer_role_enum: "lead" | "reviewer" | "observer"
       screening_response_status_enum:
@@ -1142,6 +1201,13 @@ export const Constants = {
         "pressure",
         "collaborative",
         "socratic",
+      ],
+      interview_session_status_enum: [
+        "invited",
+        "in_progress",
+        "completed",
+        "expired",
+        "failed",
       ],
       pipeline_stage_enum: ["resume", "screening_q", "interview"],
       reviewer_role_enum: ["lead", "reviewer", "observer"],

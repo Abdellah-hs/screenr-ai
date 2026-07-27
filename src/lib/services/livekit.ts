@@ -30,6 +30,17 @@ export interface ScreeningRoomMetadata {
   instructions: string;
 }
 
+/**
+ * What the candidate's browser needs to join their AI video interview. Same
+ * shape as the screening grant — the difference is on the client (it publishes
+ * camera + mic, not mic alone) and in the room name prefix the interview agent
+ * worker keys off.
+ */
+export type InterviewRoomGrant = ScreeningRoomGrant;
+
+/** Metadata the interview agent worker reads off the room. */
+export type InterviewRoomMetadata = ScreeningRoomMetadata;
+
 /** A room with nobody in it closes itself after this many seconds. */
 const EMPTY_ROOM_TIMEOUT_SECONDS = 5 * 60;
 
@@ -38,6 +49,9 @@ const MAX_PARTICIPANTS = 2;
 
 /** Join tokens are minted right before connecting; keep them short-lived. */
 const TOKEN_TTL = "15m";
+
+/** An interview runs longer than a screening; give the join token more room. */
+const INTERVIEW_TOKEN_TTL = "45m";
 
 function requireEnv(name: "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRET"): string {
   const value = process.env[name];
@@ -87,6 +101,59 @@ export async function createScreeningRoomGrant(args: {
     canSubscribe: true,
     // Text/data is how live captions reach the candidate; publishing data is
     // harmless (the agent ignores candidate data), but room admin is not granted.
+    canPublishData: true,
+  });
+
+  return {
+    serverUrl,
+    roomName,
+    participantToken: await token.toJwt(),
+  };
+}
+
+/**
+ * Create a fresh room for one AI video-interview attempt and mint the
+ * candidate's join token. Mirrors `createScreeningRoomGrant` — the interview
+ * agent worker keys off the `interview-` room-name prefix, the instructions
+ * (résumé-grounded) travel in room metadata out of the candidate's reach, and
+ * the same `canPublish` grant covers the candidate's camera as well as their
+ * mic. The token gets a longer TTL because interviews run longer than the
+ * ~5-minute screening call.
+ */
+export async function createInterviewRoomGrant(args: {
+  applicationId: string;
+  instructions: string;
+}): Promise<InterviewRoomGrant> {
+  const serverUrl = requireEnv("LIVEKIT_URL");
+  const apiKey = requireEnv("LIVEKIT_API_KEY");
+  const apiSecret = requireEnv("LIVEKIT_API_SECRET");
+
+  const roomName = `interview-${args.applicationId}-${randomBytes(4).toString("hex")}`;
+
+  const metadata: InterviewRoomMetadata = {
+    application_id: args.applicationId,
+    instructions: args.instructions,
+  };
+
+  const rooms = new RoomServiceClient(serverUrl, apiKey, apiSecret);
+  await rooms.createRoom({
+    name: roomName,
+    metadata: JSON.stringify(metadata),
+    emptyTimeout: EMPTY_ROOM_TIMEOUT_SECONDS,
+    maxParticipants: MAX_PARTICIPANTS,
+  });
+
+  const token = new AccessToken(apiKey, apiSecret, {
+    identity: `candidate-${args.applicationId}`,
+    ttl: INTERVIEW_TOKEN_TTL,
+  });
+  token.addGrant({
+    room: roomName,
+    roomJoin: true,
+    // canPublish covers all track kinds, so the candidate publishes camera +
+    // mic; the client decides which tracks to enable.
+    canPublish: true,
+    canSubscribe: true,
     canPublishData: true,
   });
 
