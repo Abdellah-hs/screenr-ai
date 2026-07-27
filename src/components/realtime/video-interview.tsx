@@ -1,0 +1,507 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { Room, RoomEvent, Track, type RemoteTrack, type LocalTrackPublication } from "livekit-client";
+import { startCandidateInterview, submitInterview } from "@/lib/actions/interview";
+
+interface VideoInterviewProps {
+  token: string;
+  campaignTitle: string;
+  /** ISO deadline after which the link expires (surfaced to the candidate). */
+  expiresAt?: string;
+}
+
+type Status =
+  | "idle"
+  | "connecting"
+  | "live"
+  | "review"
+  | "submitting"
+  | "done"
+  | "error";
+
+const STATUS_LABEL: Record<Status, string> = {
+  idle: "Ready when you are",
+  connecting: "Connecting…",
+  live: "Live — the interviewer can see and hear you",
+  review: "Review before you submit",
+  submitting: "Saving your interview…",
+  done: "All done",
+  error: "Something went wrong",
+};
+
+const STATUS_DOT: Record<Status, string> = {
+  idle: "bg-[#94A3B8]",
+  connecting: "bg-amber-500 animate-pulse",
+  live: "bg-green-500",
+  review: "bg-[#0369A1]",
+  submitting: "bg-amber-500 animate-pulse",
+  done: "bg-green-500",
+  error: "bg-red-500",
+};
+
+/** Hard cap on the live interview. When it hits 0 the call ends and the
+ *  candidate is taken to the review step to submit. */
+const CALL_SECONDS = 20 * 60;
+
+/** LiveKit publishes live transcription segments on this text-stream topic. */
+const TRANSCRIPTION_TOPIC = "lk.transcription";
+
+function formatClock(total: number): string {
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatDeadline(iso: string): string {
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Desktop-only: the AI interview requires a real keyboard/camera setup (PRD
+ *  candidate-facing constraint). Coarse pointer or a narrow viewport → phone/
+ *  tablet, which we block with a friendly switch-device message. */
+function computeIsDesktop(): boolean {
+  if (typeof window === "undefined") return true;
+  const coarse = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  const narrow = window.innerWidth < 1024;
+  return !coarse && !narrow;
+}
+
+const PRIMARY_BTN =
+  "px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
+
+/**
+ * Candidate-facing AI video interview on LiveKit. Mirrors the voice-screening
+ * flow: the server action opens a room (résumé-grounded agent instructions live
+ * in its metadata, out of the candidate's reach), this component joins with
+ * camera + mic, and the server-side interview agent worker runs the interview
+ * and reports the transcript to the app as the call progresses. The browser
+ * never assembles or submits transcript content — on "Submit" it sends only the
+ * token, and the server finalizes from the agent-reported draft.
+ *
+ * What the client adds over the voice flow: a camera self-view, a desktop-only
+ * gate, and a longer call cap.
+ */
+export default function VideoInterview({
+  token,
+  campaignTitle,
+  expiresAt,
+}: VideoInterviewProps) {
+  const [status, setStatus] = useState<Status>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [responseCount, setResponseCount] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(CALL_SECONDS);
+  const [timedOut, setTimedOut] = useState(false);
+  const [caption, setCaption] = useState("");
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  // Starts optimistic (true) so SSR/first paint doesn't flash the block screen;
+  // corrected on mount + resize.
+  const [isDesktop, setIsDesktop] = useState(true);
+
+  const roomRef = useRef<Room | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const selfViewRef = useRef<HTMLVideoElement | null>(null);
+  const wasLiveRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const candidateSegmentsRef = useRef<Set<string>>(new Set());
+
+  const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
+
+  // Track desktop-ness on mount + resize.
+  useEffect(() => {
+    const update = () => setIsDesktop(computeIsDesktop());
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  // Leave the room and stop the countdown on unmount.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      roomRef.current?.disconnect();
+    };
+  }, []);
+
+  function stopTimer() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  function startTimer() {
+    stopTimer();
+    const deadline = Date.now() + CALL_SECONDS * 1000;
+    setSecondsLeft(CALL_SECONDS);
+    timerRef.current = setInterval(() => {
+      const remain = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      setSecondsLeft(remain);
+      if (remain <= 0) {
+        stopTimer();
+        handleTimeUp();
+      }
+    }, 250);
+  }
+
+  function handleTimeUp() {
+    setTimedOut(true);
+    teardown();
+    setStatus((s) => (s === "live" ? "review" : s));
+  }
+
+  function teardown() {
+    stopTimer();
+    const room = roomRef.current;
+    roomRef.current = null;
+    room?.disconnect();
+  }
+
+  async function start() {
+    setError(null);
+    setStatus("connecting");
+    setResponseCount(0);
+    setSecondsLeft(CALL_SECONDS);
+    setTimedOut(false);
+    setCaption("");
+    setAudioBlocked(false);
+    candidateSegmentsRef.current = new Set();
+    wasLiveRef.current = false;
+    try {
+      const grant = await startCandidateInterview(token);
+
+      const room = new Room();
+      roomRef.current = room;
+
+      // The interviewer's voice: attach the agent's audio track when it lands.
+      room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
+        if (track.kind === Track.Kind.Audio && audioRef.current) {
+          track.attach(audioRef.current);
+        }
+      });
+
+      // Self-view: attach the candidate's own camera track once it publishes.
+      room.on(RoomEvent.LocalTrackPublished, (pub: LocalTrackPublication) => {
+        if (pub.track?.kind === Track.Kind.Video && selfViewRef.current) {
+          pub.track.attach(selfViewRef.current);
+        }
+      });
+
+      room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        setAudioBlocked(!room.canPlaybackAudio);
+      });
+
+      room.on(RoomEvent.Disconnected, () => {
+        if (roomRef.current) {
+          teardown();
+          setStatus((s) =>
+            s === "review" || s === "submitting" || s === "done" ? s : "idle",
+          );
+        }
+      });
+
+      // Live transcription segments, published by the agent for both sides.
+      room.registerTextStreamHandler(TRANSCRIPTION_TOPIC, async (reader, participant) => {
+        const isCandidate = participant?.identity === room.localParticipant.identity;
+        const segmentId = reader.info.attributes?.["lk.segment_id"] ?? reader.info.id;
+        let text = "";
+        for await (const chunk of reader) {
+          text += chunk;
+          if (!isCandidate && text.trim()) setCaption(text);
+        }
+        const isFinal = reader.info.attributes?.["lk.transcription_final"] === "true";
+        if (isCandidate && isFinal && text.trim()) {
+          candidateSegmentsRef.current.add(segmentId);
+          setResponseCount(candidateSegmentsRef.current.size);
+        }
+      });
+
+      await room.connect(grant.serverUrl, grant.participantToken);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      await room.localParticipant.setCameraEnabled(true);
+
+      // The "Start interview" click is a live user gesture — unlock audio now.
+      try {
+        await room.startAudio();
+      } catch {
+        // ignore — AudioPlaybackStatusChanged + the "Enable sound" button recover it
+      }
+      setAudioBlocked(!room.canPlaybackAudio);
+
+      wasLiveRef.current = true;
+      setStatus("live");
+      startTimer();
+    } catch (e) {
+      teardown();
+      setError(e instanceof Error ? e.message : "Failed to start the interview.");
+      setStatus("error");
+    }
+  }
+
+  function finish() {
+    teardown();
+    if (!wasLiveRef.current) {
+      setStatus("idle");
+      return;
+    }
+    setStatus("review");
+  }
+
+  function restart() {
+    teardown();
+    setResponseCount(0);
+    setSecondsLeft(CALL_SECONDS);
+    setTimedOut(false);
+    setCaption("");
+    setAudioBlocked(false);
+    candidateSegmentsRef.current = new Set();
+    wasLiveRef.current = false;
+    setError(null);
+    setStatus("idle");
+  }
+
+  async function enableSound() {
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      await room.startAudio();
+    } catch {
+      // still blocked — leave the button up for another try
+    }
+    setAudioBlocked(!room.canPlaybackAudio);
+  }
+
+  async function submit() {
+    setStatus("submitting");
+    setError(null);
+    try {
+      await submitInterview({ token });
+      setStatus("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save your interview.");
+      setStatus("review");
+    }
+  }
+
+  const connecting = status === "connecting";
+  const live = status === "live";
+  const review = status === "review";
+  const submitting = status === "submitting";
+  const hasResponses = responseCount > 0;
+  const lowTime = secondsLeft <= 60;
+
+  // Desktop-only gate — shown whenever the device isn't a desktop, before any
+  // room is opened. Never blocks a call already in progress on a resize down.
+  if (!isDesktop && status === "idle") {
+    return (
+      <div className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-6 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
+          <svg className="h-6 w-6 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17h4.5m-6.75 3h9a1.5 1.5 0 001.5-1.5v-15A1.5 1.5 0 0015.75 2h-9A1.5 1.5 0 005.25 3.5v15A1.5 1.5 0 006.75 20z" />
+          </svg>
+        </div>
+        <h2 className="mb-2 text-lg font-semibold text-[#111827]">Please switch to a computer</h2>
+        <p className="text-sm text-[#92400E]">
+          This video interview for <strong>{campaignTitle}</strong> needs a desktop or laptop with
+          a camera. Open this same link on a computer in a quiet, well-lit room to begin.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === "done") {
+    return (
+      <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
+          <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <h2 className="mb-2 text-lg font-semibold text-[#111827]">Thanks — that&apos;s everything</h2>
+        <p className="text-sm text-[#6B7280]">
+          Your interview for <strong>{campaignTitle}</strong> has been recorded. The hiring team
+          will review it and be in touch by email.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className={`inline-block h-2.5 w-2.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
+          <span className="text-sm font-medium text-[#0C4A6E]" role="status" aria-live="polite">
+            {STATUS_LABEL[status]}
+          </span>
+        </div>
+        {live && (
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold tabular-nums ${
+              lowTime ? "bg-red-50 text-red-600" : "bg-[#F0F9FF] text-[#0369A1]"
+            }`}
+            role="timer"
+            aria-label={`${secondsLeft} seconds remaining`}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {formatClock(secondsLeft)}
+          </span>
+        )}
+      </div>
+
+      {status === "idle" && !expired && (
+        <>
+          <p className="text-sm text-[#6B7280]">
+            This is an AI-led video interview for <strong>{campaignTitle}</strong> — about{" "}
+            <strong>20 minutes</strong>. When you start, allow camera and microphone access, and
+            the interviewer will greet you and ask questions based on your background. Speak
+            naturally — you&apos;ll be able to review before submitting.
+          </p>
+
+          <div className="flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="note">
+            <svg className="mt-0.5 h-4 w-4 shrink-0 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <p className="text-xs leading-relaxed text-[#92400E]">
+              <strong>Find a quiet, well-lit room before you start.</strong> Sit facing a light
+              source with your face clearly visible, close other tabs and apps, and use headphones
+              with a mic if you have them.
+            </p>
+          </div>
+        </>
+      )}
+
+      {expired && status !== "submitting" && (
+        <p className="text-sm text-red-600" role="alert">
+          This link has expired. Please contact the hiring team for a new one.
+        </p>
+      )}
+
+      {expiresAt && !expired && (status === "idle" || review) && (
+        <p className="text-xs text-[#6B7280]">
+          Please complete by <strong>{formatDeadline(expiresAt)}</strong>.
+        </p>
+      )}
+
+      {/* Video stage — dark panel with the candidate's self-view. */}
+      {(live || connecting) && (
+        <div className="relative overflow-hidden rounded-xl bg-[#0F172A] aspect-video">
+          <video
+            ref={selfViewRef}
+            autoPlay
+            playsInline
+            muted
+            className="h-full w-full object-cover [transform:scaleX(-1)]"
+          />
+          <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/50 px-2.5 py-1 text-xs font-medium text-white">
+            <span className={`inline-block h-2 w-2 rounded-full ${live ? "bg-red-500" : "bg-amber-400 animate-pulse"}`} aria-hidden />
+            You
+          </span>
+        </div>
+      )}
+
+      {/* Autoplay unlock prompt. */}
+      {(live || connecting) && audioBlocked && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="alert">
+          <p className="text-xs leading-relaxed text-[#92400E]">
+            <strong>Sound is blocked by your browser.</strong> Tap to hear the interviewer.
+          </p>
+          <button
+            type="button"
+            onClick={enableSound}
+            className="shrink-0 rounded-lg bg-[#B45309] px-3 py-1.5 text-xs font-medium text-white cursor-pointer hover:bg-[#92400E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B45309] focus-visible:ring-offset-2 transition-colors duration-200"
+          >
+            Enable sound
+          </button>
+        </div>
+      )}
+
+      {/* Live captions of the interviewer's questions. */}
+      {(live || connecting) && (
+        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#0369A1]">
+            Interviewer
+          </p>
+          <p className="min-h-[1.5rem] text-sm leading-relaxed text-[#0C4A6E]" aria-live="polite">
+            {caption || (
+              <span className="text-[#6B7280]">
+                Listening… the interviewer&apos;s questions will appear here as they speak.
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {live && hasResponses && (
+        <p className="text-xs text-[#6B7280]">{responseCount} responses captured so far.</p>
+      )}
+
+      {review && (
+        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+          {timedOut && (
+            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">Your 20 minutes are up.</p>
+          )}
+          {hasResponses ? (
+            <p className="text-sm text-[#0C4A6E]">
+              We captured <strong>{responseCount}</strong> spoken{" "}
+              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re ready, or
+              restart if you&apos;d like to redo the interview.
+            </p>
+          ) : (
+            <p className="text-sm text-[#0C4A6E]">
+              We didn&apos;t catch any spoken answers. Please restart before submitting.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {!live && !review && !submitting && (
+          <button type="button" onClick={start} disabled={connecting || expired} className={PRIMARY_BTN}>
+            {connecting ? "Connecting…" : status === "error" ? "Try again" : "Start interview"}
+          </button>
+        )}
+        {live && (
+          <button type="button" onClick={finish} className={PRIMARY_BTN}>
+            I&apos;m finished
+          </button>
+        )}
+        {review && hasResponses && (
+          <button type="button" onClick={submit} className={PRIMARY_BTN}>
+            Submit interview
+          </button>
+        )}
+        {review && (
+          <button
+            type="button"
+            onClick={restart}
+            className="px-4 py-2 text-sm font-medium text-[#0C4A6E] bg-white border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200"
+          >
+            Restart
+          </button>
+        )}
+        {submitting && (
+          <button type="button" disabled className={PRIMARY_BTN}>
+            Saving…
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-sm text-red-600" role="alert">
+          {error}
+        </p>
+      )}
+
+      {/* Interviewer audio sink. */}
+      <audio ref={audioRef} autoPlay />
+    </div>
+  );
+}

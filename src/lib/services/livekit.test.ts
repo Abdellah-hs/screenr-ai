@@ -17,7 +17,7 @@ vi.mock("livekit-server-sdk", () => ({
   AccessToken: mockAccessToken,
 }));
 
-import { createScreeningRoomGrant } from "./livekit";
+import { createScreeningRoomGrant, createInterviewRoomGrant } from "./livekit";
 
 describe("createScreeningRoomGrant", () => {
   beforeEach(() => {
@@ -85,6 +85,66 @@ describe("createScreeningRoomGrant", () => {
 
     await expect(
       createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" }),
+    ).rejects.toThrow(/LIVEKIT/);
+    expect(mockCreateRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe("createInterviewRoomGrant", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockToJwt.mockResolvedValue("jwt-abc");
+    process.env.LIVEKIT_URL = "wss://demo.livekit.cloud";
+    process.env.LIVEKIT_API_KEY = "APIkey";
+    process.env.LIVEKIT_API_SECRET = "secret";
+  });
+
+  it("opens an interview-scoped room carrying the résumé-grounded instructions in metadata", async () => {
+    await createInterviewRoomGrant({
+      applicationId: "app-1",
+      instructions: "Ask about their Stripe ledger work.",
+    });
+
+    const arg = mockCreateRoom.mock.calls[0][0];
+    expect(arg.name).toMatch(/^interview-app-1-/);
+    expect(JSON.parse(arg.metadata)).toEqual({
+      application_id: "app-1",
+      instructions: "Ask about their Stripe ledger work.",
+    });
+  });
+
+  it("grants the candidate camera + mic publish rights scoped to that room", async () => {
+    const grant = await createInterviewRoomGrant({
+      applicationId: "app-1",
+      instructions: "x",
+    });
+
+    const grantArg = mockAddGrant.mock.calls[0][0];
+    expect(grantArg).toMatchObject({
+      room: grant.roomName,
+      roomJoin: true,
+      canPublish: true,
+      canSubscribe: true,
+    });
+    expect(grantArg.roomCreate).toBeFalsy();
+  });
+
+  it("returns the server url, room name, and a minted join token", async () => {
+    const grant = await createInterviewRoomGrant({
+      applicationId: "app-1",
+      instructions: "x",
+    });
+
+    expect(grant.serverUrl).toBe("wss://demo.livekit.cloud");
+    expect(grant.roomName).toMatch(/^interview-app-1-/);
+    expect(grant.participantToken).toBe("jwt-abc");
+  });
+
+  it("throws when LiveKit env vars are missing", async () => {
+    delete process.env.LIVEKIT_API_KEY;
+
+    await expect(
+      createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" }),
     ).rejects.toThrow(/LIVEKIT/);
     expect(mockCreateRoom).not.toHaveBeenCalled();
   });

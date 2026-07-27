@@ -4,9 +4,11 @@ import { getCampaignById, getResumeCriteriaCount } from "@/lib/actions/campaigns
 import { getCandidateById } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { getInterviewBooking } from "@/lib/actions/schedule";
+import { getInterviewSession } from "@/lib/actions/interview";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
+import InterviewTranscript from "@/components/candidates/interview-transcript";
 import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
 import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
 import { TIER_LABELS } from "@/lib/constants";
@@ -338,17 +340,19 @@ export default async function CandidateDetailPage({
     notFound();
   }
 
-  const [campaign, candidate, screeningState, resumeCriteriaCount, booking] = await Promise.all([
-    getCampaignById(id),
-    getCandidateById(candidateId),
-    getCandidateScreeningState(candidateId).catch(() => ({
-      status: null,
-      questions: [],
-      response: null,
-    })),
-    getResumeCriteriaCount(id).catch(() => 0),
-    getInterviewBooking(candidateId).catch(() => null),
-  ]);
+  const [campaign, candidate, screeningState, resumeCriteriaCount, booking, interviewSession] =
+    await Promise.all([
+      getCampaignById(id),
+      getCandidateById(candidateId),
+      getCandidateScreeningState(candidateId).catch(() => ({
+        status: null,
+        questions: [],
+        response: null,
+      })),
+      getResumeCriteriaCount(id).catch(() => 0),
+      getInterviewBooking(candidateId).catch(() => null),
+      getInterviewSession(candidateId).catch(() => null),
+    ]);
 
   const hasResumeCriteria = resumeCriteriaCount > 0;
 
@@ -757,6 +761,8 @@ export default async function CandidateDetailPage({
             response={screeningState.response}
             campaignActive={isActive}
           />
+
+          <InterviewTranscript session={interviewSession} />
 
           <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider">
             Evaluation Scores

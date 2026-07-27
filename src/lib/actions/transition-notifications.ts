@@ -4,8 +4,14 @@ import { fetchApplicationEmailContext } from "@/lib/data/candidates";
 import { sendEmail } from "@/lib/services/email";
 import { getRecruiterGmailClient } from "./gmail-sender";
 import { getRequestOrigin } from "@/lib/http/origin";
-import { signResponseToken, SCHEDULE_TOKEN_TTL_MS } from "@/lib/auth/screening-token";
+import {
+  signResponseToken,
+  SCHEDULE_TOKEN_TTL_MS,
+  INTERVIEW_TOKEN_TTL_MS,
+} from "@/lib/auth/screening-token";
+import { ensureInterviewSession } from "@/lib/data/interview-sessions";
 import { buildInterviewAdvanceEmail } from "@/lib/services/email-templates/interview-advance";
+import { buildInterviewInviteEmail } from "@/lib/services/email-templates/interview-invite";
 import { buildInterviewSchedulingEmail } from "@/lib/services/email-templates/interview-scheduling";
 import { buildRejectScreeningEmail } from "@/lib/services/email-templates/reject-screening";
 import type { BuiltEmail } from "@/lib/services/email-templates/shared";
@@ -15,6 +21,9 @@ interface TransitionEmailContext {
   campaignTitle: string;
   /** Token-gated /schedule link — present only for final_interview_scheduling. */
   scheduleUrl?: string;
+  /** Token-gated /interview link + deadline — present only for interview_invited. */
+  interviewUrl?: string;
+  interviewExpiresAt?: string;
 }
 
 /**
@@ -38,9 +47,20 @@ function buildTransitionEmail(
 ): BuiltEmail | null {
   switch (toState) {
     case "interview_invited":
-      return buildInterviewAdvanceEmail({
+      // With the AI interview live, carry the real invite link. Fall back to
+      // the link-free advance notice only if the URL couldn't be built (e.g.
+      // missing origin) so the candidate is never left with a broken link.
+      if (!ctx.interviewUrl) {
+        return buildInterviewAdvanceEmail({
+          candidateName: ctx.candidateName,
+          campaignTitle: ctx.campaignTitle,
+        });
+      }
+      return buildInterviewInviteEmail({
         candidateName: ctx.candidateName,
         campaignTitle: ctx.campaignTitle,
+        interviewUrl: ctx.interviewUrl,
+        expiresAt: ctx.interviewExpiresAt,
       });
     case "final_interview_scheduling":
       // The caller always supplies scheduleUrl for this state; guard anyway so
@@ -90,10 +110,34 @@ export async function sendTransitionNotification(
       scheduleUrl = `${origin}/schedule/${encodeURIComponent(token)}`;
     }
 
+    // The AI interview invite needs a token-gated /interview link + a deadline,
+    // and the session row must exist so the agent's transcript reports have a
+    // row to land on. Best-effort: a session-ensure failure must not block the
+    // email (the candidate can still be re-invited).
+    let interviewUrl: string | undefined;
+    let interviewExpiresAt: string | undefined;
+    if (toState === "interview_invited") {
+      const origin = await getRequestOrigin();
+      const token = signResponseToken(applicationId, INTERVIEW_TOKEN_TTL_MS);
+      interviewUrl = `${origin}/interview/${encodeURIComponent(token)}`;
+      const expiresAt = new Date(Date.now() + INTERVIEW_TOKEN_TTL_MS);
+      interviewExpiresAt = expiresAt.toISOString();
+      try {
+        await ensureInterviewSession(applicationId, expiresAt, db);
+      } catch (err) {
+        console.error(
+          `Failed to ensure interview session for ${applicationId} (non-blocking):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     const email = buildTransitionEmail(toState, {
       candidateName: ctx.candidateName,
       campaignTitle: ctx.campaignTitle,
       scheduleUrl,
+      interviewUrl,
+      interviewExpiresAt,
     });
     if (!email) return; // no notification configured for this state
 
