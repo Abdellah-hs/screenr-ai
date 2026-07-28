@@ -46,6 +46,27 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
 }
 
 /**
+ * Generate a time-limited signed URL for an interview recording (Phase B2).
+ * Same shape as `getResumeSignedUrl`, against the private `interview-recordings`
+ * bucket. Returns null when there's no key, or when the object doesn't exist yet
+ * (egress still finalizing) — the recruiter UI then shows "processing" instead
+ * of a broken player.
+ */
+export async function getInterviewRecordingSignedUrl(
+  storageKey: string,
+): Promise<string | null> {
+  if (!storageKey) return null;
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.storage
+    .from("interview-recordings")
+    .createSignedUrl(storageKey, 3600);
+
+  if (error || !data) return null;
+  return data.signedUrl;
+}
+
+/**
  * Insert a candidate from parsed resume data, flagging duplicates instead of
  * auto-merging.
  *

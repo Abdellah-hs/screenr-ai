@@ -8,9 +8,12 @@ const {
   mockFetchSession,
   mockEnsureSession,
   mockMarkStarted,
+  mockSaveRecording,
   mockFinalize,
   mockCreateGrant,
   mockTransition,
+  mockIsRecordingConfigured,
+  mockStartRecording,
 } = vi.hoisted(() => ({
   mockVerifyToken: vi.fn(),
   mockCheckRateLimit: vi.fn(),
@@ -19,9 +22,12 @@ const {
   mockFetchSession: vi.fn(),
   mockEnsureSession: vi.fn(),
   mockMarkStarted: vi.fn(),
+  mockSaveRecording: vi.fn(),
   mockFinalize: vi.fn(),
   mockCreateGrant: vi.fn(),
   mockTransition: vi.fn(),
+  mockIsRecordingConfigured: vi.fn(),
+  mockStartRecording: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/screening-token", () => ({
@@ -34,14 +40,20 @@ vi.mock("next/headers", () => ({ headers: mockHeaders }));
 vi.mock("@/lib/data/candidates", () => ({
   fetchInterviewContextByApplicationId: mockFetchInterviewContext,
   fetchInterviewScoringContext: vi.fn(),
+  getInterviewRecordingSignedUrl: vi.fn(),
 }));
 vi.mock("@/lib/data/interview-sessions", () => ({
   fetchInterviewSessionByApplicationId: mockFetchSession,
   ensureInterviewSession: mockEnsureSession,
   markInterviewStarted: mockMarkStarted,
+  saveInterviewRecording: mockSaveRecording,
   finalizeInterviewTranscript: mockFinalize,
 }));
 vi.mock("@/lib/services/livekit", () => ({ createInterviewRoomGrant: mockCreateGrant }));
+vi.mock("@/lib/services/livekit-egress", () => ({
+  isInterviewRecordingConfigured: mockIsRecordingConfigured,
+  startInterviewRecording: mockStartRecording,
+}));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplication: mockTransition }));
 
 // Isolate the auto-score: submitInterview schedules it via after(); mock after
@@ -49,7 +61,7 @@ vi.mock("@/lib/data/transitions", () => ({ transitionApplication: mockTransition
 // loads into this test's import graph.
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("./interview-scoring", () => ({ runInterviewScoring: vi.fn() }));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ __brand: "admin-client" }) }));
 
 import {
   loadInterviewContext,
@@ -88,6 +100,9 @@ beforeEach(() => {
     roomName: "interview-app-1-abcd",
     participantToken: "jwt",
   });
+  // Recording is off by default; the recording-specific tests opt in.
+  mockIsRecordingConfigured.mockReturnValue(false);
+  mockStartRecording.mockResolvedValue({ egressId: "EG_1", storageKey: "camp-1/app-1.mp4" });
 });
 
 describe("loadInterviewContext", () => {
@@ -135,6 +150,39 @@ describe("startCandidateInterview", () => {
 
     await expect(startCandidateInterview("tok")).rejects.toThrow();
     expect(mockCreateGrant).not.toHaveBeenCalled();
+  });
+
+  it("records the room to storage when recording is configured", async () => {
+    mockIsRecordingConfigured.mockReturnValue(true);
+
+    const grant = await startCandidateInterview("tok");
+
+    expect(mockStartRecording).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomName: "interview-app-1-abcd",
+        campaignId: "camp-1",
+        applicationId: "app-1",
+      }),
+    );
+    expect(mockSaveRecording).toHaveBeenCalledWith("app-1", "camp-1/app-1.mp4", expect.anything());
+    expect(grant.roomName).toBe("interview-app-1-abcd");
+  });
+
+  it("still returns the grant when recording fails to start (best-effort)", async () => {
+    mockIsRecordingConfigured.mockReturnValue(true);
+    mockStartRecording.mockRejectedValueOnce(new Error("egress down"));
+
+    const grant = await startCandidateInterview("tok");
+
+    expect(grant.roomName).toBe("interview-app-1-abcd");
+    expect(mockSaveRecording).not.toHaveBeenCalled();
+  });
+
+  it("skips recording entirely when it isn't configured", async () => {
+    await startCandidateInterview("tok");
+
+    expect(mockStartRecording).not.toHaveBeenCalled();
+    expect(mockSaveRecording).not.toHaveBeenCalled();
   });
 
   it("rate-limits before doing any work", async () => {

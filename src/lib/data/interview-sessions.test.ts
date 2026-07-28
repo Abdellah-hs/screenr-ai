@@ -24,6 +24,7 @@ import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
   markInterviewStarted,
+  saveInterviewRecording,
   saveInterviewTranscriptDraft,
   finalizeInterviewTranscript,
   markInterviewExpired,
@@ -98,6 +99,23 @@ describe("markInterviewStarted", () => {
     );
     expect(chain.eq).toHaveBeenCalledWith("application_id", "app-1");
     expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+  });
+});
+
+describe("saveInterviewRecording", () => {
+  it("stores the recording key only while the session is still open", async () => {
+    await saveInterviewRecording("app-1", "camp-1/app-1.mp4", db as never);
+
+    expect(chain.update).toHaveBeenCalledWith({ recording_url: "camp-1/app-1.mp4" });
+    expect(chain.eq).toHaveBeenCalledWith("application_id", "app-1");
+    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+  });
+
+  it("throws when the recording write fails", async () => {
+    useResult({ error: new Error("nope") });
+    await expect(
+      saveInterviewRecording("app-1", "k", db as never),
+    ).rejects.toThrow("nope");
   });
 });
 
