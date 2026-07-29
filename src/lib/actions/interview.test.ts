@@ -9,6 +9,7 @@ const {
   mockEnsureSession,
   mockMarkStarted,
   mockSaveRecording,
+  mockSaveProctoring,
   mockFinalize,
   mockCreateGrant,
   mockTransition,
@@ -23,6 +24,7 @@ const {
   mockEnsureSession: vi.fn(),
   mockMarkStarted: vi.fn(),
   mockSaveRecording: vi.fn(),
+  mockSaveProctoring: vi.fn(),
   mockFinalize: vi.fn(),
   mockCreateGrant: vi.fn(),
   mockTransition: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock("@/lib/data/interview-sessions", () => ({
   ensureInterviewSession: mockEnsureSession,
   markInterviewStarted: mockMarkStarted,
   saveInterviewRecording: mockSaveRecording,
+  saveProctoringReport: mockSaveProctoring,
   finalizeInterviewTranscript: mockFinalize,
 }));
 vi.mock("@/lib/services/livekit", () => ({ createInterviewRoomGrant: mockCreateGrant }));
@@ -232,5 +235,93 @@ describe("submitInterview", () => {
 
     expect(result).toEqual({ ok: true });
     expect(mockFinalize).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitInterview proctoring", () => {
+  const SPOKEN = {
+    status: "in_progress",
+    transcript: [
+      { role: "agent", text: "Tell me about Stripe", at: "t1" },
+      { role: "candidate", text: "I led the ledger rewrite", at: "t2" },
+    ],
+  };
+
+  beforeEach(() => {
+    mockFetchSession.mockResolvedValue(SPOKEN);
+  });
+
+  it("classifies reported events server-side rather than trusting the client", async () => {
+    await submitInterview({
+      token: "tok",
+      proctoringEvents: [
+        { type: "tab_blur", at: "2026-07-29T10:00:00.000Z", duration_ms: 45_000 },
+      ],
+    });
+
+    const [applicationId, report] = mockSaveProctoring.mock.calls[0];
+    expect(applicationId).toBe("app-1");
+    expect(report.incidents[0].severity).toBe("critical");
+    expect(report.summary.overall_severity).toBe("critical");
+  });
+
+  it("drops sub-threshold noise before persisting", async () => {
+    await submitInterview({
+      token: "tok",
+      proctoringEvents: [
+        { type: "camera_off", at: "2026-07-29T10:00:00.000Z", duration_ms: 900 },
+      ],
+    });
+
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.incidents).toEqual([]);
+    expect(report.summary.overall_severity).toBe("clean");
+  });
+
+  it("records a clean report when the client observed nothing", async () => {
+    await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.summary.overall_severity).toBe("clean");
+  });
+
+  it("leaves proctoring unwritten when the client reported nothing at all", async () => {
+    await submitInterview({ token: "tok" });
+
+    expect(mockSaveProctoring).not.toHaveBeenCalled();
+    expect(mockFinalize).toHaveBeenCalled();
+  });
+
+  it("discards a malformed report without failing the submit", async () => {
+    const result = await submitInterview({
+      token: "tok",
+      proctoringEvents: [{ type: "keylogger", at: "nope", duration_ms: -5 }],
+    });
+
+    expect(mockSaveProctoring).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true });
+    expect(mockFinalize).toHaveBeenCalled();
+  });
+
+  it("still completes the interview when the proctoring write fails", async () => {
+    mockSaveProctoring.mockRejectedValue(new Error("db down"));
+
+    const result = await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockFinalize).toHaveBeenCalled();
+    expect(mockTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ toState: "interview_completed" }),
+    );
+  });
+
+  it("writes the report before the session is finalized so the open-status guard passes", async () => {
+    const order: string[] = [];
+    mockSaveProctoring.mockImplementation(async () => void order.push("proctoring"));
+    mockFinalize.mockImplementation(async () => void order.push("finalize"));
+
+    await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    expect(order).toEqual(["proctoring", "finalize"]);
   });
 });

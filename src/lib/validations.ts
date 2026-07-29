@@ -382,6 +382,32 @@ export const applyApplicantSchema = z.object({
     }),
 });
 
+// ─── Interview Proctoring ───────────────────────────────────────────────────
+
+// Raw browser observations reported by the candidate's interview client. This is
+// untrusted input from a candidate-facing (token-only) endpoint, so it is bounded
+// hard: a closed set of event types, a parseable timestamp, and a duration that
+// can't exceed the interview itself. Severity is deliberately NOT accepted here —
+// the rule layer (`summarizeProctoring`) decides it server-side.
+
+const proctoringEventTypeValues = ["tab_blur", "camera_off"] as const;
+
+/** No single incident can outlast the 20-minute call cap; allow an hour of slack. */
+const MAX_INCIDENT_DURATION_MS = 60 * 60 * 1000;
+
+/** A misbehaving or malicious client can't flood the row with events. */
+const MAX_PROCTORING_EVENTS = 200;
+
+export const proctoringEventSchema = z.object({
+  type: z.enum(proctoringEventTypeValues),
+  at: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
+  duration_ms: z.number().int().min(0).max(MAX_INCIDENT_DURATION_MS),
+});
+
+export const proctoringEventsSchema = z.array(proctoringEventSchema).max(MAX_PROCTORING_EVENTS);
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 
 // Recruiter approve/reject decision on a screening_review_pending application.
