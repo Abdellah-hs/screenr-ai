@@ -1,10 +1,16 @@
-import type { InterviewSessionRow } from "@/lib/data/interview-sessions";
+import type { InterviewSessionRow, InterviewScore } from "@/lib/data/interview-sessions";
+
+function scoreColor(score: number | null): string {
+  if (score == null) return "text-[#9CA3AF]";
+  if (score >= 80) return "text-[#059669]";
+  if (score >= 60) return "text-[#D97706]";
+  return "text-[#DC2626]";
+}
 
 /**
- * Recruiter-facing review of the AI video interview: the spoken transcript plus
- * a status line. Per-section scoring, the recording, and the proctoring report
- * are later phases — this card is the Phase A window into what the candidate
- * actually said. Renders nothing until there's a session worth showing.
+ * Recruiter-facing review of the AI video interview: the AI score (Phase B),
+ * plus the spoken transcript and a status line. Recording and the proctoring
+ * report are later phases. Renders nothing until there's a session worth showing.
  */
 export default function InterviewTranscript({
   session,
@@ -28,6 +34,8 @@ export default function InterviewTranscript({
           <StatusLine session={session} />
         </div>
       </div>
+
+      {session.scores && <InterviewScoreBlock score={session.scores} />}
 
       {transcript.length > 0 ? (
         <ol className="space-y-2">
@@ -62,6 +70,83 @@ export default function InterviewTranscript({
             ? "Interview in progress…"
             : "No transcript was captured for this interview."}
         </p>
+      )}
+    </div>
+  );
+}
+
+/** The AI interview score: overall + strengths/concerns + per-competency bars.
+ *  Independent stage evidence — richer than the generic score card because it
+ *  carries the interviewer's strengths/concerns (PRD interview outputs). */
+function InterviewScoreBlock({ score }: { score: InterviewScore }) {
+  return (
+    <div className="mb-4 rounded-lg bg-[#F0F9FF] border border-[#BAE6FD] p-3">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-medium text-[#0369A1] uppercase tracking-wider">
+          Interview Score
+        </span>
+        <span className={`text-2xl font-bold ${scoreColor(score.overall_score)}`}>
+          {score.overall_score}
+        </span>
+      </div>
+      {score.overall_rationale && (
+        <p className="text-sm text-[#4B5563] leading-relaxed">{score.overall_rationale}</p>
+      )}
+
+      {score.dimensions.length > 0 && (
+        <div className="mt-3 space-y-2.5">
+          {score.dimensions.map((d, i) => (
+            <div key={`${d.name}-${i}`}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-[#6B7280]" title={d.rationale}>
+                  {d.name}
+                </span>
+                <span className="text-xs font-semibold text-[#0C4A6E]">{d.score}</span>
+              </div>
+              <div className="w-full h-1.5 bg-[#E0F2FE] rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${
+                    d.score >= 80 ? "bg-[#22C55E]" : d.score >= 60 ? "bg-[#D97706]" : "bg-[#DC2626]"
+                  }`}
+                  style={{ width: `${d.score}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(score.strengths.length > 0 || score.concerns.length > 0) && (
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {score.strengths.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-[#059669] mb-1">
+                Strengths
+              </p>
+              <ul className="space-y-0.5">
+                {score.strengths.map((s, i) => (
+                  <li key={i} className="text-xs text-[#4B5563] leading-relaxed">
+                    + {s}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {score.concerns.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-[#DC2626] mb-1">
+                Concerns
+              </p>
+              <ul className="space-y-0.5">
+                {score.concerns.map((c, i) => (
+                  <li key={i} className="text-xs text-[#4B5563] leading-relaxed">
+                    − {c}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
