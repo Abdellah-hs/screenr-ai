@@ -373,16 +373,11 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   // This is the only path out of screening — slot booking now belongs to the
   // final human interview (`final_interview_scheduling`), per the 2026-06-23
   // decision superseding PRD 3.5.6.
-  // TEMPORARY: `manager_review` is a recruiter shortcut for interviews
-  // conducted off-platform while the AI interview isn't built (it can't reach
-  // `interview_completed`/`interview_scored`, which need real artifacts).
-  // Remove this edge when the AI interview ships.
-  interview_invited: [
-    "interview_completed",
-    "manager_review",
-    "interview_expired",
-    "rejected",
-  ],
+  // The interim `manager_review` shortcut (for interviews run off-platform
+  // while the AI interview didn't exist) was removed once the interview
+  // shipped: an invited candidate now reaches `manager_review` only by
+  // actually interviewing, so the state always has a transcript behind it.
+  interview_invited: ["interview_completed", "interview_expired", "rejected"],
 
   // DEPRECATED slot-booking pair — no inbound edges remain, so new applications
   // can't enter. The keys (and their outbound edges) stay until a cleanup

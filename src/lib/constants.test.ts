@@ -72,15 +72,18 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
     expect(APPLICATION_STATE_TRANSITIONS.archived).toEqual([]);
   });
 
-  it("routes the on-demand interview invite to completed or expired (plus the interim off-platform shortcut)", () => {
+  it("routes the on-demand interview invite to completed or expired only", () => {
     expect(APPLICATION_STATE_TRANSITIONS.interview_invited).toEqual([
       "interview_completed",
-      // Interim recruiter shortcut while the AI interview isn't built —
-      // remove alongside the edge in constants.ts when it ships.
-      "manager_review",
       "interview_expired",
       "rejected",
     ]);
+  });
+
+  it("gives an invited candidate no shortcut past the interview into manager review", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.interview_invited).not.toContain(
+      "manager_review",
+    );
   });
 
   it("routes a scored screening only to the AI interview or rejection — never slot booking", () => {
