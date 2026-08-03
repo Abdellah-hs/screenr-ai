@@ -25,6 +25,7 @@ import {
   ensureInterviewSession,
   markInterviewStarted,
   saveInterviewRecording,
+  saveProctoringReport,
   saveInterviewTranscriptDraft,
   finalizeInterviewTranscript,
   markInterviewExpired,
@@ -115,6 +116,44 @@ describe("saveInterviewRecording", () => {
     useResult({ error: new Error("nope") });
     await expect(
       saveInterviewRecording("app-1", "k", db as never),
+    ).rejects.toThrow("nope");
+  });
+});
+
+describe("saveProctoringReport", () => {
+  const report = {
+    incidents: [
+      {
+        type: "tab_blur" as const,
+        at: "2026-07-29T10:00:00.000Z",
+        duration_ms: 4_000,
+        severity: "warning" as const,
+      },
+    ],
+    summary: {
+      tab_blur_count: 1,
+      tab_blur_total_ms: 4_000,
+      camera_off_count: 0,
+      camera_off_total_ms: 0,
+      overall_severity: "warning" as const,
+    },
+    report_version: "proctoring-v1",
+    generated_at: "2026-07-29T10:20:00.000Z",
+  };
+
+  it("writes the report only while the session is still open", async () => {
+    await saveProctoringReport("app-1", report, db as never);
+
+    expect(db.from).toHaveBeenCalledWith("interview_sessions");
+    expect(chain.update).toHaveBeenCalledWith({ proctoring: report });
+    expect(chain.eq).toHaveBeenCalledWith("application_id", "app-1");
+    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+  });
+
+  it("throws when the proctoring write fails", async () => {
+    useResult({ error: new Error("nope") });
+    await expect(
+      saveProctoringReport("app-1", report, db as never),
     ).rejects.toThrow("nope");
   });
 });

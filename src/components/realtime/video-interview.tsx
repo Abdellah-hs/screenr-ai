@@ -8,8 +8,11 @@ import {
   type RemoteTrack,
   type RemoteParticipant,
   type LocalTrackPublication,
+  type TrackPublication,
+  type Participant,
 } from "livekit-client";
 import { startCandidateInterview, submitInterview } from "@/lib/actions/interview";
+import { createProctoringCollector } from "@/lib/proctoring/collector";
 import {
   AGENT_JOIN_TIMEOUT_MS,
   diagnoseAgentSilence,
@@ -127,6 +130,14 @@ export default function VideoInterview({
   const agentPresentRef = useRef(false);
   const agentAudioRef = useRef(false);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Proctoring buffer (Phase C). Browser-only signals — tab focus and the local
+  // camera — accumulated during the call and flushed once on submit. Severity is
+  // decided server-side; this only reports what happened and for how long.
+  const proctoringRef = useRef(createProctoringCollector());
+  // Gates the camera-presence handlers. Ending the call unpublishes the camera
+  // track, which would otherwise open a "camera off" gap that runs until submit
+  // and reads as a critical incident against a candidate who did nothing wrong.
+  const proctoringActiveRef = useRef(false);
 
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
 
@@ -146,6 +157,36 @@ export default function VideoInterview({
       roomRef.current?.disconnect();
     };
   }, []);
+
+  // Proctoring: tab-focus tracking, armed only while the call is live so time
+  // spent on the intro or review screens is never counted against the candidate.
+  // `visibilitychange` catches tab switches and minimising; window blur catches
+  // focus moving to another app or window on top of this one. Both open the same
+  // condition and either one closing ends it — `begin`/`end` are idempotent, so
+  // the pair firing together (as browsers usually do) still yields one interval.
+  useEffect(() => {
+    if (status !== "live") return;
+    const collector = proctoringRef.current;
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") collector.begin("tab_blur", Date.now());
+      else collector.end("tab_blur", Date.now());
+    };
+    const onBlur = () => collector.begin("tab_blur", Date.now());
+    const onFocus = () => collector.end("tab_blur", Date.now());
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      // The call is over — close any interval still open so it isn't left
+      // dangling until drain.
+      collector.end("tab_blur", Date.now());
+    };
+  }, [status]);
 
   function stopTimer() {
     if (timerRef.current) {
@@ -184,6 +225,11 @@ export default function VideoInterview({
   function teardown() {
     stopTimer();
     clearWatchdog();
+    // Close proctoring BEFORE disconnecting, so a genuine gap in progress is
+    // recorded with its real end time and the disconnect's own unpublish event
+    // is ignored.
+    proctoringActiveRef.current = false;
+    proctoringRef.current.end("camera_off", Date.now());
     const room = roomRef.current;
     roomRef.current = null;
     room?.disconnect();
@@ -227,6 +273,9 @@ export default function VideoInterview({
     wasLiveRef.current = false;
     agentPresentRef.current = false;
     agentAudioRef.current = false;
+    // Discard anything buffered by an earlier attempt — each attempt is proctored
+    // on its own, and only the submitted one is reported.
+    proctoringRef.current.drain(Date.now());
     clearWatchdog();
     try {
       const grant = await startCandidateInterview(token);
@@ -251,6 +300,39 @@ export default function VideoInterview({
       room.on(RoomEvent.LocalTrackPublished, (pub: LocalTrackPublication) => {
         if (pub.track?.kind === Track.Kind.Video && selfViewRef.current) {
           pub.track.attach(selfViewRef.current);
+        }
+        // A republished camera closes any open gap (device recovered, or the
+        // candidate re-enabled it).
+        if (proctoringActiveRef.current && pub.kind === Track.Kind.Video) {
+          proctoringRef.current.end("camera_off", Date.now());
+        }
+      });
+
+      // Proctoring presence. V1 measures camera AVAILABILITY, not face
+      // detection: a muted, stopped, or unpublished video track is the reliable,
+      // model-free signal that the interviewer can no longer see the candidate.
+      // True face/gaze analysis is a later slice — the report shape already
+      // accommodates it without a schema change.
+      const isLocalCamera = (pub: TrackPublication, participant: Participant) =>
+        proctoringActiveRef.current &&
+        participant.identity === room.localParticipant.identity &&
+        pub.kind === Track.Kind.Video;
+
+      room.on(RoomEvent.TrackMuted, (pub: TrackPublication, participant: Participant) => {
+        if (isLocalCamera(pub, participant)) {
+          proctoringRef.current.begin("camera_off", Date.now());
+        }
+      });
+
+      room.on(RoomEvent.TrackUnmuted, (pub: TrackPublication, participant: Participant) => {
+        if (isLocalCamera(pub, participant)) {
+          proctoringRef.current.end("camera_off", Date.now());
+        }
+      });
+
+      room.on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
+        if (proctoringActiveRef.current && pub.kind === Track.Kind.Video) {
+          proctoringRef.current.begin("camera_off", Date.now());
         }
       });
 
@@ -335,6 +417,7 @@ export default function VideoInterview({
       }
 
       wasLiveRef.current = true;
+      proctoringActiveRef.current = true;
       setStatus("live");
       startTimer();
     } catch (e) {
@@ -362,6 +445,7 @@ export default function VideoInterview({
     setAudioBlocked(false);
     candidateSegmentsRef.current = new Set();
     wasLiveRef.current = false;
+    proctoringRef.current.drain(Date.now());
     setError(null);
     setStatus("idle");
   }
@@ -380,8 +464,11 @@ export default function VideoInterview({
   async function submit() {
     setStatus("submitting");
     setError(null);
+    // Flush the proctoring buffer alongside the submit — one write, at the end,
+    // rather than chatter during the call. The server bounds and classifies it.
+    const proctoringEvents = proctoringRef.current.drain(Date.now());
     try {
-      await submitInterview({ token });
+      await submitInterview({ token, proctoringEvents });
       setStatus("done");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't save your interview.");
@@ -473,7 +560,9 @@ export default function VideoInterview({
             <p className="text-xs leading-relaxed text-[#92400E]">
               <strong>Find a quiet, well-lit room before you start.</strong> Sit facing a light
               source with your face clearly visible, close other tabs and apps, and use headphones
-              with a mic if you have them.
+              with a mic if you have them. Please stay on this tab and keep your camera on for the
+              whole interview — leaving the tab or turning off your camera is noted for the hiring
+              team.
             </p>
           </div>
         </>

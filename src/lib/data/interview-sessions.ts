@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type { Json } from "@/types/database.types";
+import type { ProctoringReport } from "@/lib/proctoring/incidents";
 
 /**
  * Data layer for AI video-interview sessions (Phase A).
@@ -57,7 +58,7 @@ export interface InterviewSessionRow {
   transcript: InterviewTranscriptTurn[];
   recording_url: string | null;
   scores: InterviewScore | null;
-  proctoring: unknown | null;
+  proctoring: ProctoringReport | null;
   expires_at: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -168,6 +169,34 @@ export async function saveInterviewRecording(
   if (error) {
     throw new Error(
       `Failed to save interview recording: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
+ * Persist the proctoring report for an interview (Phase C). Guarded to the open
+ * statuses like the other candidate-path writes, so a late or replayed report
+ * can't attach itself to an already-finalized session — callers therefore write
+ * this BEFORE `finalizeInterviewTranscript` flips the row to `completed`.
+ *
+ * Observational only: this stores evidence and nothing else. It never changes
+ * session status and never feeds the interview score.
+ */
+export async function saveProctoringReport(
+  applicationId: string,
+  report: ProctoringReport,
+  db: SupabaseDb,
+): Promise<void> {
+  const q = db as AnyDb;
+  const { error } = await q
+    .from("interview_sessions")
+    .update({ proctoring: report })
+    .eq("application_id", applicationId)
+    .in("status", [...OPEN_STATUSES]);
+
+  if (error) {
+    throw new Error(
+      `Failed to save proctoring report: ${error.message ?? JSON.stringify(error)}`,
     );
   }
 }

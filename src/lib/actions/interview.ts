@@ -4,7 +4,8 @@ import { after } from "next/server";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
-import { uuidSchema } from "@/lib/validations";
+import { uuidSchema, proctoringEventsSchema } from "@/lib/validations";
+import { summarizeProctoring } from "@/lib/proctoring/incidents";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
@@ -19,6 +20,7 @@ import {
   ensureInterviewSession,
   markInterviewStarted,
   saveInterviewRecording,
+  saveProctoringReport,
   finalizeInterviewTranscript,
   type InterviewSessionRow,
   type InterviewSessionStatus,
@@ -217,12 +219,19 @@ async function tryStartRecording(
 
 /**
  * Finalize a completed interview: promote the agent-reported transcript draft
- * and advance `interview_invited → interview_completed`. The browser sends only
- * the token — the transcript was captured SERVER-side by the agent worker, so
- * the candidate's machine never supplies evidence. A draft with no candidate
- * speech is rejected (nothing to score; the candidate should retry).
+ * and advance `interview_invited → interview_completed`. The transcript was
+ * captured SERVER-side by the agent worker, so the candidate's machine never
+ * supplies it. A draft with no candidate speech is rejected (nothing to score;
+ * the candidate should retry).
+ *
+ * `proctoringEvents` is the one thing the browser does supply, because tab focus
+ * and the local camera are only observable there (Phase C). It is treated as
+ * untrusted: Zod-bounded, and severity is decided server-side.
  */
-export async function submitInterview(input: { token: string }): Promise<{ ok: true }> {
+export async function submitInterview(input: {
+  token: string;
+  proctoringEvents?: unknown;
+}): Promise<{ ok: true }> {
   const { application_id } = verifyResponseToken(input.token);
 
   const ip = await getClientIp();
@@ -241,6 +250,10 @@ export async function submitInterview(input: { token: string }): Promise<{ ok: t
     );
   }
 
+  // Before finalizing — the proctoring write is guarded to the open statuses,
+  // and finalize is what closes them.
+  await tryRecordProctoring(application_id, input.proctoringEvents);
+
   await finalizeInterviewTranscript(application_id, transcript);
 
   await tryTransition(
@@ -257,6 +270,44 @@ export async function submitInterview(input: { token: string }): Promise<{ ok: t
   after(() => autoScoreInterview(application_id));
 
   return { ok: true };
+}
+
+/**
+ * Persist the browser's proctoring observations for a finished interview
+ * (Phase C). Best-effort by design: proctoring is supporting evidence, so a
+ * malformed or failed report must never cost the candidate their interview.
+ *
+ * Distinguishes "no report" from "clean report" — an absent `proctoringEvents`
+ * leaves the column null (the recruiter UI then says proctoring wasn't captured),
+ * while an empty array records a genuine clean run. Rejecting a malformed payload
+ * would buy nothing: a candidate who wants to hide incidents can just send `[]`.
+ *
+ * Uses the admin client because this runs in the session-less candidate request.
+ */
+async function tryRecordProctoring(
+  applicationId: string,
+  rawEvents: unknown,
+): Promise<void> {
+  if (rawEvents === undefined || rawEvents === null) return;
+
+  const parsed = proctoringEventsSchema.safeParse(rawEvents);
+  if (!parsed.success) {
+    console.warn(
+      `Discarding malformed proctoring report for ${applicationId}:`,
+      parsed.error.message,
+    );
+    return;
+  }
+
+  try {
+    const report = summarizeProctoring(parsed.data);
+    await saveProctoringReport(applicationId, report, createAdminClient());
+  } catch (err) {
+    console.error(
+      `Failed to save proctoring report for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 /**
