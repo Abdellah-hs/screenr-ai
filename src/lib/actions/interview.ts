@@ -10,6 +10,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import {
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
+  getInterviewRecordingSignedUrl,
   type InterviewCandidateContext,
 } from "@/lib/data/candidates";
 import { runInterviewScoring } from "./interview-scoring";
@@ -17,11 +18,16 @@ import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
   markInterviewStarted,
+  saveInterviewRecording,
   finalizeInterviewTranscript,
   type InterviewSessionRow,
   type InterviewSessionStatus,
   type InterviewTranscriptTurn,
 } from "@/lib/data/interview-sessions";
+import {
+  isInterviewRecordingConfigured,
+  startInterviewRecording,
+} from "@/lib/services/livekit-egress";
 import {
   buildInterviewInstructions,
   type InterviewResume,
@@ -170,7 +176,43 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
     resume: toInterviewResume(ctx),
   });
 
-  return createInterviewRoomGrant({ applicationId: application_id, instructions });
+  const grant = await createInterviewRoomGrant({ applicationId: application_id, instructions });
+
+  // Best-effort recording (Phase B2). Started BEFORE the grant is returned so
+  // egress is already capturing when the candidate joins — the room exists, and
+  // a failure here never blocks the interview (recording just doesn't happen).
+  await tryStartRecording(application_id, ctx.campaign_id, grant.roomName);
+
+  return grant;
+}
+
+/**
+ * Start the LiveKit egress recording for this interview room and store its
+ * storage key on the session. Best-effort: skipped cleanly when recording isn't
+ * configured, and any failure is logged, never surfaced — the interview runs
+ * regardless. Uses the admin client because this is a session-less candidate
+ * request. Storage key is `<campaignId>/<applicationId>.mp4` (owner-scoped by
+ * the private bucket's RLS).
+ */
+async function tryStartRecording(
+  applicationId: string,
+  campaignId: string,
+  roomName: string,
+): Promise<void> {
+  if (!isInterviewRecordingConfigured()) return;
+  try {
+    const { storageKey } = await startInterviewRecording({
+      roomName,
+      campaignId,
+      applicationId,
+    });
+    await saveInterviewRecording(applicationId, storageKey, createAdminClient());
+  } catch (err) {
+    console.error(
+      `Failed to start interview recording for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 /**
@@ -250,15 +292,31 @@ async function autoScoreInterview(applicationId: string): Promise<void> {
   }
 }
 
+/** An interview session plus a freshly-minted, short-lived playback URL for its
+ *  recording (null when there's no recording or it isn't ready yet). */
+export interface InterviewSessionView extends InterviewSessionRow {
+  recording_signed_url: string | null;
+}
+
 /**
  * Recruiter-facing read of an application's interview session (transcript +
- * status) for the candidate detail page. Session-guarded; RLS scopes the row to
- * the recruiter's own campaigns. Returns null for a bad id or no session yet.
+ * status + recording) for the candidate detail page. Session-guarded; RLS
+ * scopes the row to the recruiter's own campaigns. The stored `recording_url` is
+ * a private storage KEY — resolve it to a time-limited signed URL here so the
+ * page can play it back. Returns null for a bad id or no session yet.
  */
 export async function getInterviewSession(
   applicationId: string,
-): Promise<InterviewSessionRow | null> {
+): Promise<InterviewSessionView | null> {
   await requireUserId();
   if (!uuidSchema.safeParse(applicationId).success) return null;
-  return fetchInterviewSessionByApplicationId(applicationId);
+
+  const row = await fetchInterviewSessionByApplicationId(applicationId);
+  if (!row) return null;
+
+  const recording_signed_url = row.recording_url
+    ? await getInterviewRecordingSignedUrl(row.recording_url)
+    : null;
+
+  return { ...row, recording_signed_url };
 }

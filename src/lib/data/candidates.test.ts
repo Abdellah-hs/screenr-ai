@@ -7,7 +7,10 @@ const mockApplicationsSelect = vi.fn();
 const mockAuditInsert = vi.fn();
 const mockFrom = vi.fn();
 
-const mockSupabase = { from: mockFrom };
+const mockCreateSignedUrl = vi.fn();
+const mockStorageFrom = vi.fn(() => ({ createSignedUrl: mockCreateSignedUrl }));
+
+const mockSupabase = { from: mockFrom, storage: { from: mockStorageFrom } };
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve(mockSupabase)),
@@ -23,7 +26,7 @@ vi.mock("@/lib/data/duplicate-flags", () => ({
   flagDuplicateCandidate: (...args: unknown[]) => mockFlagDuplicateCandidate(...args),
 }));
 
-import { upsertCandidate, saveResumeScore } from "./candidates";
+import { upsertCandidate, saveResumeScore, getInterviewRecordingSignedUrl } from "./candidates";
 import type { ParsedResumeData } from "@/lib/services/openai";
 
 const baseResume: ParsedResumeData & { email: string } = {
@@ -67,6 +70,11 @@ beforeEach(() => {
   mockFindCandidateByEmail.mockResolvedValue(null);
   mockFindCandidateByPhone.mockResolvedValue(null);
   mockFlagDuplicateCandidate.mockResolvedValue("flag-1");
+
+  mockCreateSignedUrl.mockResolvedValue({
+    data: { signedUrl: "https://signed.example/recording" },
+    error: null,
+  });
 });
 
 afterEach(() => {
@@ -139,6 +147,27 @@ describe("upsertCandidate", () => {
     await expect(upsertCandidate(baseResume)).rejects.toMatchObject({
       message: "unique violation",
     });
+  });
+});
+
+describe("getInterviewRecordingSignedUrl", () => {
+  it("signs the key against the private interview-recordings bucket", async () => {
+    const url = await getInterviewRecordingSignedUrl("camp-1/app-1.mp4");
+
+    expect(mockStorageFrom).toHaveBeenCalledWith("interview-recordings");
+    expect(mockCreateSignedUrl).toHaveBeenCalledWith("camp-1/app-1.mp4", 3600);
+    expect(url).toBe("https://signed.example/recording");
+  });
+
+  it("returns null when the object can't be signed (e.g. still processing)", async () => {
+    mockCreateSignedUrl.mockResolvedValueOnce({ data: null, error: { message: "not found" } });
+
+    expect(await getInterviewRecordingSignedUrl("camp-1/app-1.mp4")).toBeNull();
+  });
+
+  it("returns null without calling storage for an empty key", async () => {
+    expect(await getInterviewRecordingSignedUrl("")).toBeNull();
+    expect(mockStorageFrom).not.toHaveBeenCalled();
   });
 });
 
