@@ -26,11 +26,14 @@ import {
  * `screening_expired` / `interview_no_show`, approve into screening, advance a
  * scored candidate to `interview_invited`, etc. — none assert a machine artifact.
  *
- * `interview_invited` is deliberately NOT in this list yet: until the AI
- * interview ships a real invite artifact (token link + deadline), the state
- * only means "cleared for the AI interview round" — a routing decision the
- * recruiter owns in HITL mode. When the invite flow exists, move it back here
- * so only the system's invite sender can set it (like `screening_sent`).
+ * `interview_invited` stays settable even though the AI interview now ships a
+ * real invite artifact (token link + deadline). It is the HITL advancement
+ * point — a `screening_scored` candidate has no other way forward — and the
+ * manual advance is not a fabrication: transitioning into the state is exactly
+ * what mints the token link and sends the invite
+ * (`sendTransitionNotification`), the same way the Send button produces
+ * `screening_sent`. The evidence-bearing states behind it
+ * (`interview_completed` / `interview_scored`) remain system-only.
  */
 export const SYSTEM_PRODUCED_STATES: readonly ApplicationState[] = [
   "screening_sent",

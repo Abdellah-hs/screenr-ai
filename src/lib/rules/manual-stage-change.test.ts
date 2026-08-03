@@ -20,7 +20,7 @@ describe("isRecruiterSettableTarget", () => {
     expect(isRecruiterSettableTarget("final_interview_scheduling")).toBe(true);
   });
 
-  it("allows interview_invited until the AI-interview invite artifact exists (interim routing decision)", () => {
+  it("allows interview_invited — the HITL advancement point, and the transition itself sends the invite", () => {
     expect(isRecruiterSettableTarget("interview_invited")).toBe(true);
   });
 });
@@ -71,9 +71,8 @@ describe("recruiterStageOptions", () => {
     ]);
   });
 
-  it("offers the off-platform shortcut to manager_review from interview_invited, but never interview_completed", () => {
+  it("leaves an invited candidate only the expire/reject exits — never interview_completed, never a shortcut to manager_review", () => {
     expect(recruiterStageOptions("interview_invited")).toEqual([
-      "manager_review",
       "interview_expired",
       "rejected",
     ]);
