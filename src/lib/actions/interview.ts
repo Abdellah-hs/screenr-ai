@@ -8,6 +8,7 @@ import { uuidSchema, proctoringEventsSchema } from "@/lib/validations";
 import { summarizeProctoring } from "@/lib/proctoring/incidents";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import {
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
@@ -39,8 +40,8 @@ import {
   type InterviewRoomGrant,
 } from "@/lib/services/livekit";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
-import { transitionApplication } from "@/lib/data/transitions";
-import type { CampaignStatus } from "@/lib/constants";
+import { transitionApplicationAsSystem } from "@/lib/data/transitions";
+import type { ApplicationState, CampaignStatus } from "@/lib/constants";
 
 /**
  * Public server actions for the on-demand AI video interview
@@ -52,7 +53,13 @@ import type { CampaignStatus } from "@/lib/constants";
  *
  * State stays rule-driven: the agent produces the transcript (evidence); the
  * candidate's explicit submit is what finalizes it and advances the application
- * (`interview_invited → interview_completed`) via `transitionApplication`.
+ * (`interview_invited → interview_completed`) via the system transition.
+ *
+ * Every DB touch on this path uses the ADMIN client, because there is no
+ * candidate account: `applications`, `candidates`, and `interview_sessions` are
+ * all owner-only RLS, so the cookie client sees an empty database here and the
+ * page would report a dead link for a perfectly valid one. The signed token IS
+ * the authorization — it is verified before the client is ever built.
  */
 
 const INTERVIEW_RATE_LIMIT = {
@@ -75,14 +82,19 @@ async function getClientIp(): Promise<string> {
   return h.get("x-real-ip") ?? "unknown";
 }
 
-/** Best-effort transition — the candidate has already left; never surface it. */
+/**
+ * Best-effort transition — the candidate has already left; never surface it.
+ * Uses the SYSTEM transition: the owner-checked `transitionApplication` reads
+ * the application through the cookie client, which finds nothing in a
+ * session-less candidate request.
+ */
 async function tryTransition(
   applicationId: string,
-  toState: Parameters<typeof transitionApplication>[0]["toState"],
+  toState: ApplicationState,
   rationale: string,
 ): Promise<void> {
   try {
-    await transitionApplication({ applicationId, toState, actor: "system", rationale });
+    await transitionApplicationAsSystem(applicationId, toState, rationale);
   } catch (err) {
     console.error(
       `Failed to transition ${applicationId} → ${toState}:`,
@@ -134,10 +146,12 @@ export interface InterviewPageContext {
 export async function loadInterviewContext(token: string): Promise<InterviewPageContext> {
   const { application_id, expires_at } = verifyResponseToken(token);
 
-  const ctx = await fetchInterviewContextByApplicationId(application_id);
+  const db = createAdminClient();
+
+  const ctx = await fetchInterviewContextByApplicationId(application_id, db);
   if (!ctx) throw new Error(LINK_DEAD_MESSAGE);
 
-  const session = await fetchInterviewSessionByApplicationId(application_id);
+  const session = await fetchInterviewSessionByApplicationId(application_id, db);
 
   return {
     application_id,
@@ -160,18 +174,20 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "interview-start", ...INTERVIEW_RATE_LIMIT });
 
-  const ctx = await fetchInterviewContextByApplicationId(application_id);
+  const db = createAdminClient();
+
+  const ctx = await fetchInterviewContextByApplicationId(application_id, db);
   if (!ctx) throw new Error(LINK_DEAD_MESSAGE);
 
   assertCampaignAcceptingInterview(ctx.campaign_status);
 
-  const session = await fetchInterviewSessionByApplicationId(application_id);
+  const session = await fetchInterviewSessionByApplicationId(application_id, db);
   if (session?.status === "completed") {
     throw new Error("You've already completed this interview. The hiring team will be in touch.");
   }
 
-  await ensureInterviewSession(application_id, expires_at);
-  await markInterviewStarted(application_id);
+  await ensureInterviewSession(application_id, expires_at, db);
+  await markInterviewStarted(application_id, db);
 
   const instructions = buildInterviewInstructions({
     jobTitle: ctx.campaign_title,
@@ -183,7 +199,7 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
   // Best-effort recording (Phase B2). Started BEFORE the grant is returned so
   // egress is already capturing when the candidate joins — the room exists, and
   // a failure here never blocks the interview (recording just doesn't happen).
-  await tryStartRecording(application_id, ctx.campaign_id, grant.roomName);
+  await tryStartRecording(application_id, ctx.campaign_id, grant.roomName, db);
 
   return grant;
 }
@@ -200,6 +216,7 @@ async function tryStartRecording(
   applicationId: string,
   campaignId: string,
   roomName: string,
+  db: SupabaseDb,
 ): Promise<void> {
   if (!isInterviewRecordingConfigured()) return;
   try {
@@ -208,7 +225,7 @@ async function tryStartRecording(
       campaignId,
       applicationId,
     });
-    await saveInterviewRecording(applicationId, storageKey, createAdminClient());
+    await saveInterviewRecording(applicationId, storageKey, db);
   } catch (err) {
     console.error(
       `Failed to start interview recording for ${applicationId}:`,
@@ -237,7 +254,9 @@ export async function submitInterview(input: {
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "interview-submit", ...INTERVIEW_RATE_LIMIT });
 
-  const session = await fetchInterviewSessionByApplicationId(application_id);
+  const db = createAdminClient();
+
+  const session = await fetchInterviewSessionByApplicationId(application_id, db);
   if (!session) throw new Error(LINK_DEAD_MESSAGE);
 
   // Idempotent: a double-submit (two tabs, a retry) is not an error.
@@ -252,9 +271,9 @@ export async function submitInterview(input: {
 
   // Before finalizing — the proctoring write is guarded to the open statuses,
   // and finalize is what closes them.
-  await tryRecordProctoring(application_id, input.proctoringEvents);
+  await tryRecordProctoring(application_id, input.proctoringEvents, db);
 
-  await finalizeInterviewTranscript(application_id, transcript);
+  await finalizeInterviewTranscript(application_id, transcript, db);
 
   await tryTransition(
     application_id,
@@ -287,6 +306,7 @@ export async function submitInterview(input: {
 async function tryRecordProctoring(
   applicationId: string,
   rawEvents: unknown,
+  db: SupabaseDb,
 ): Promise<void> {
   if (rawEvents === undefined || rawEvents === null) return;
 
@@ -301,7 +321,7 @@ async function tryRecordProctoring(
 
   try {
     const report = summarizeProctoring(parsed.data);
-    await saveProctoringReport(applicationId, report, createAdminClient());
+    await saveProctoringReport(applicationId, report, db);
   } catch (err) {
     console.error(
       `Failed to save proctoring report for ${applicationId}:`,

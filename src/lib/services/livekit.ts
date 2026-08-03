@@ -1,5 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import {
+  AccessToken,
+  RoomAgentDispatch,
+  RoomConfiguration,
+  RoomServiceClient,
+} from "livekit-server-sdk";
 
 /**
  * LiveKit room service for the candidate voice screening.
@@ -53,6 +58,24 @@ const TOKEN_TTL = "15m";
 /** An interview runs longer than a screening; give the join token more room. */
 const INTERVIEW_TOKEN_TTL = "45m";
 
+/**
+ * Registered names of the two agent workers under `agents/`, which are
+ * dispatched EXPLICITLY — each room summons exactly the worker it needs.
+ *
+ * Both workers were previously unnamed, which in LiveKit means *automatic*
+ * dispatch: every worker in that pool is a candidate for every room in the
+ * project. With two different agents sharing one pool, LiveKit handed each new
+ * room to whichever it picked, so roughly half of all interviews went to the
+ * screening worker — which saw the `interview-` prefix, left, and stranded the
+ * candidate with "the interviewer didn't join". Naming both removes the pool
+ * entirely; it also stops the other worker from consuming one of the room's two
+ * participant slots before it realises the room isn't its own.
+ *
+ * Changing a name requires restarting that worker, or its flow gets no agent.
+ */
+export const INTERVIEW_AGENT_NAME = "screenr-interview";
+export const SCREENING_AGENT_NAME = "screenr-screening";
+
 function requireEnv(name: "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRET"): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not configured`);
@@ -102,6 +125,12 @@ export async function createScreeningRoomGrant(args: {
     // Text/data is how live captions reach the candidate; publishing data is
     // harmless (the agent ignores candidate data), but room admin is not granted.
     canPublishData: true,
+  });
+
+  // Summon the screening worker by name on the candidate's join (see
+  // SCREENING_AGENT_NAME) — never the interview worker.
+  token.roomConfig = new RoomConfiguration({
+    agents: [new RoomAgentDispatch({ agentName: SCREENING_AGENT_NAME })],
   });
 
   return {
@@ -155,6 +184,13 @@ export async function createInterviewRoomGrant(args: {
     canPublish: true,
     canSubscribe: true,
     canPublishData: true,
+  });
+
+  // Summon the interview worker by name when the candidate joins. Tying dispatch
+  // to the join (rather than to room creation) means an abandoned link never
+  // leaves an agent — and a paid Realtime session — sitting in an empty room.
+  token.roomConfig = new RoomConfiguration({
+    agents: [new RoomAgentDispatch({ agentName: INTERVIEW_AGENT_NAME })],
   });
 
   return {

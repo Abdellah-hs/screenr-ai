@@ -21,6 +21,19 @@ pnpm dev               # connects to LiveKit Cloud and waits for rooms
 Keep it running in its own terminal next to `pnpm dev` of the app. Without a
 running worker, candidates join a silent room — the interviewer never shows up.
 
+## Dispatch
+
+This worker registers under the **agent name `screenr-screening`** and is
+dispatched *explicitly*: the app names it on the candidate's join token
+(`SCREENING_AGENT_NAME` in `src/lib/services/livekit.ts`), so it is summoned only
+into screening rooms.
+
+It previously ran unnamed, which in LiveKit means *automatic* dispatch into every
+room in the project — including the video-interview rooms, where it took one of
+the room's two participant slots from the real interviewer before noticing the
+prefix and leaving. If you change the name here, change `SCREENING_AGENT_NAME` to
+match and restart the worker — a name mismatch means no agent is ever dispatched.
+
 ## Deploy
 
 LiveKit Cloud can host this worker (Agents deployment) so nothing needs to run

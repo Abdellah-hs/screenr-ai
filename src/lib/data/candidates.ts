@@ -416,9 +416,13 @@ export async function fetchApplicationForResponse(
 /**
  * Session-less read for the AI interview flow: campaign framing + the
  * candidate's parsed résumé, so the interview agent's instructions can be
- * grounded in the candidate's real background. Like `fetchApplicationForResponse`
- * it does no user scoping — the caller has already verified a signed interview
- * token.
+ * grounded in the candidate's real background. Does no user scoping — the
+ * caller has already verified a signed interview token.
+ *
+ * Takes an injected `db` because the candidate has no account: `applications`
+ * and `candidates` are owner-only RLS, so the cookie client reads NOTHING on a
+ * real candidate request. The interview actions pass the admin client after the
+ * token check (see `createAdminClient`).
  */
 export interface InterviewCandidateContext {
   application_id: string;
@@ -433,17 +437,25 @@ export interface InterviewCandidateContext {
 
 export async function fetchInterviewContextByApplicationId(
   applicationId: string,
+  db?: SupabaseDb,
 ): Promise<InterviewCandidateContext | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
+  // The parsed résumé lives on the APPLICATION — `candidates` holds identity
+  // only (CLAUDE.md → Entities). Selecting `parsed_data` off the candidate join
+  // makes PostgREST reject the whole query, which reads as "no such application".
   const select =
-    "id, campaign_id, campaigns!inner(id, title, status), candidates!inner(first_name, last_name, parsed_data)";
-  const { data } = await supabase
+    "id, campaign_id, parsed_data, campaigns!inner(id, title, status), candidates!inner(first_name, last_name)";
+  const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .select(select as any)
     .eq("id", applicationId)
     .single();
 
+  if (error) {
+    console.error("Error fetching interview context:", JSON.stringify(error, null, 2));
+    return null;
+  }
   if (!data) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const row = data as any;
@@ -455,7 +467,7 @@ export async function fetchInterviewContextByApplicationId(
     campaign_status: row.campaigns?.status,
     candidate_first_name: row.candidates?.first_name ?? null,
     candidate_last_name: row.candidates?.last_name ?? null,
-    resume: (row.candidates?.parsed_data ?? null) as ParsedResumeData | null,
+    resume: (row.parsed_data ?? null) as ParsedResumeData | null,
   };
 }
 
@@ -479,8 +491,9 @@ export async function fetchInterviewScoringContext(
   db?: SupabaseDb,
 ): Promise<InterviewScoringContext | null> {
   const supabase = db ?? (await createClient());
+  // `parsed_data` is an APPLICATION column (see above) — not a candidate one.
   const select =
-    "candidate_id, campaign_id, campaigns!inner(user_id, description), candidates!inner(parsed_data)";
+    "candidate_id, campaign_id, parsed_data, campaigns!inner(user_id, description)";
   const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -499,7 +512,7 @@ export async function fetchInterviewScoringContext(
     candidate_id: row.candidate_id,
     owner_user_id: campaign.user_id,
     description: campaign.description ?? null,
-    resume_summary: buildResumeSummary(row.candidates?.parsed_data ?? null),
+    resume_summary: buildResumeSummary(row.parsed_data ?? null),
   };
 }
 

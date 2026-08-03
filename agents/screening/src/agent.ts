@@ -175,4 +175,23 @@ export default defineAgent({
   },
 });
 
-cli.runApp(new WorkerOptions({ agent: fileURLToPath(import.meta.url) }));
+/**
+ * Named worker => EXPLICIT dispatch: this worker is summoned by name from
+ * `createScreeningRoomGrant`, and only into screening rooms.
+ *
+ * An unnamed worker is dispatched automatically into EVERY room in the LiveKit
+ * project, including the video-interview rooms — where it would take one of the
+ * two participant slots away from the real interviewer before noticing the room
+ * prefix and leaving. Naming both workers makes each flow summon exactly its own
+ * agent. Restart this worker after changing the name, or screenings get no agent.
+ *
+ * Must stay in sync with SCREENING_AGENT_NAME in src/lib/services/livekit.ts.
+ */
+export const SCREENING_AGENT_NAME = "screenr-screening";
+
+cli.runApp(
+  new WorkerOptions({
+    agent: fileURLToPath(import.meta.url),
+    agentName: SCREENING_AGENT_NAME,
+  }),
+);

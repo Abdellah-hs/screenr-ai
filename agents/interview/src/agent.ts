@@ -178,4 +178,22 @@ export default defineAgent({
   },
 });
 
-cli.runApp(new WorkerOptions({ agent: fileURLToPath(import.meta.url) }));
+/**
+ * Named worker => EXPLICIT dispatch: LiveKit only sends this worker jobs that
+ * ask for it by name (the app's `createInterviewRoomGrant` requests it on the
+ * candidate's join token). Without a name, this worker and the screening worker
+ * both sit in the same automatic-dispatch pool, and LiveKit hands each new room
+ * to whichever it picks — so roughly half of all interviews went to the
+ * screening worker, which saw the `interview-` prefix, left, and stranded the
+ * candidate with "the interviewer didn't join".
+ *
+ * Must stay in sync with INTERVIEW_AGENT_NAME in src/lib/services/livekit.ts.
+ */
+export const INTERVIEW_AGENT_NAME = "screenr-interview";
+
+cli.runApp(
+  new WorkerOptions({
+    agent: fileURLToPath(import.meta.url),
+    agentName: INTERVIEW_AGENT_NAME,
+  }),
+);
