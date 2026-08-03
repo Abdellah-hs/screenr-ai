@@ -5,7 +5,11 @@ import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { uuidSchema, proctoringEventsSchema } from "@/lib/validations";
-import { summarizeProctoring } from "@/lib/proctoring/incidents";
+import {
+  summarizeProctoring,
+  type ProctoringEvent,
+  type VisionObservation,
+} from "@/lib/proctoring/incidents";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
@@ -270,8 +274,14 @@ export async function submitInterview(input: {
   }
 
   // Before finalizing — the proctoring write is guarded to the open statuses,
-  // and finalize is what closes them.
-  await tryRecordProctoring(application_id, input.proctoringEvents, db);
+  // and finalize is what closes them. The worker's vision samples were reported
+  // during the call and are folded in here alongside the browser's events.
+  await tryRecordProctoring(
+    application_id,
+    input.proctoringEvents,
+    session.proctoring_observations ?? [],
+    db,
+  );
 
   await finalizeInterviewTranscript(application_id, transcript, db);
 
@@ -292,35 +302,53 @@ export async function submitInterview(input: {
 }
 
 /**
- * Persist the browser's proctoring observations for a finished interview
- * (Phase C). Best-effort by design: proctoring is supporting evidence, so a
- * malformed or failed report must never cost the candidate their interview.
+ * Persist the proctoring report for a finished interview (Phases C + C2).
+ * Best-effort by design: proctoring is supporting evidence, so a malformed or
+ * failed report must never cost the candidate their interview.
  *
- * Distinguishes "no report" from "clean report" — an absent `proctoringEvents`
- * leaves the column null (the recruiter UI then says proctoring wasn't captured),
- * while an empty array records a genuine clean run. Rejecting a malformed payload
- * would buy nothing: a candidate who wants to hide incidents can just send `[]`.
+ * Two independent evidence streams meet here. `rawEvents` come from the
+ * candidate's browser and are untrusted — a malformed payload is discarded
+ * rather than rejected, because a candidate who wants to hide incidents can just
+ * send `[]`, so failing the submit would punish only the honest. `observations`
+ * were captured server-side by the agent worker during the call and are already
+ * schema-bounded at the reporting route; they are folded in whether or not the
+ * browser reported anything, which is precisely why they are the harder signal
+ * to defeat.
+ *
+ * Distinguishes "no report" from "clean report": with neither stream present the
+ * column stays null and the recruiter UI says proctoring wasn't captured, while
+ * an empty browser array with vision samples records a genuine watched run.
  *
  * Uses the admin client because this runs in the session-less candidate request.
  */
 async function tryRecordProctoring(
   applicationId: string,
   rawEvents: unknown,
+  observations: VisionObservation[],
   db: SupabaseDb,
 ): Promise<void> {
-  if (rawEvents === undefined || rawEvents === null) return;
+  const noBrowserReport = rawEvents === undefined || rawEvents === null;
+  if (noBrowserReport && observations.length === 0) return;
 
-  const parsed = proctoringEventsSchema.safeParse(rawEvents);
-  if (!parsed.success) {
-    console.warn(
-      `Discarding malformed proctoring report for ${applicationId}:`,
-      parsed.error.message,
-    );
-    return;
+  let events: ProctoringEvent[] = [];
+  if (!noBrowserReport) {
+    const parsed = proctoringEventsSchema.safeParse(rawEvents);
+    if (parsed.success) {
+      events = parsed.data;
+    } else {
+      // Keep going: the worker's vision evidence stands on its own, and dropping
+      // it because the browser sent junk would hand a candidate an easy way to
+      // erase the one signal their machine doesn't control.
+      console.warn(
+        `Discarding malformed browser proctoring report for ${applicationId}:`,
+        parsed.error.message,
+      );
+      if (observations.length === 0) return;
+    }
   }
 
   try {
-    const report = summarizeProctoring(parsed.data);
+    const report = summarizeProctoring(events, observations);
     await saveProctoringReport(applicationId, report, db);
   } catch (err) {
     console.error(

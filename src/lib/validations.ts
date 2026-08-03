@@ -408,6 +408,31 @@ export const proctoringEventSchema = z.object({
 
 export const proctoringEventsSchema = z.array(proctoringEventSchema).max(MAX_PROCTORING_EVENTS);
 
+// Vision observations reported by the interview agent worker (Phase C2). Unlike
+// the browser events above these arrive from our own server-side worker over an
+// AGENT_API_SECRET-guarded route, but they are still bounded: the worker runs a
+// model, and a malformed or runaway report must not be able to poison the row.
+// Note what is absent here too — no severity and no incident type. The worker
+// reports what it counted; `summarizeProctoring` alone decides what that means.
+
+/** A ~10s sampling cadence over a 20-minute cap leaves generous headroom. */
+const MAX_VISION_OBSERVATIONS = 500;
+
+/** Beyond a few faces the exact count stops mattering; cap it to bound the input. */
+const MAX_FACE_COUNT = 20;
+
+export const visionObservationSchema = z.object({
+  at: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
+  face_count: z.number().int().min(0).max(MAX_FACE_COUNT),
+  confidence: z.number().min(0).max(1),
+});
+
+export const visionObservationsSchema = z
+  .array(visionObservationSchema)
+  .max(MAX_VISION_OBSERVATIONS);
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 
 // Recruiter approve/reject decision on a screening_review_pending application.

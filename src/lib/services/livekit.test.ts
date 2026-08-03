@@ -13,7 +13,7 @@ const { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken, issuedTokens }
     const mockCreateRoom = vi.fn();
     const mockToJwt = vi.fn(async () => "jwt-abc");
     const mockAddGrant = vi.fn();
-    const issuedTokens: { roomConfig?: { agents: { agentName: string }[] } }[] = [];
+    const issuedTokens: Record<string, unknown>[] = [];
     const mockAccessToken = vi.fn(function () {
       const token = { addGrant: mockAddGrant, toJwt: mockToJwt };
       issuedTokens.push(token);
@@ -39,7 +39,7 @@ vi.mock("livekit-server-sdk", () => ({
 
 /** The token minted by the most recent grant call. */
 function lastToken(): FakeToken {
-  return issuedTokens[issuedTokens.length - 1] as FakeToken;
+  return issuedTokens[issuedTokens.length - 1] as unknown as FakeToken;
 }
 
 import {

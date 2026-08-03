@@ -345,6 +345,58 @@ describe("submitInterview proctoring", () => {
     expect(mockFinalize).toHaveBeenCalled();
   });
 
+  // Phase C2: the worker's camera readings are stored on the session during the
+  // call, so they are folded in at submit regardless of what the browser sends.
+  it("folds the worker's vision samples into the report", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [
+        { at: "2026-07-29T10:00:00.000Z", face_count: 2, confidence: 0.9 },
+        { at: "2026-07-29T10:00:10.000Z", face_count: 2, confidence: 0.9 },
+        { at: "2026-07-29T10:00:20.000Z", face_count: 2, confidence: 0.9 },
+      ],
+    });
+
+    await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.summary.multiple_faces_count).toBe(1);
+    expect(report.summary.vision_sampled).toBe(true);
+    expect(report.incidents[0].source).toBe("vision");
+  });
+
+  // The browser payload is the half a candidate controls. Letting junk there
+  // discard the worker's evidence would hand them a one-line way to erase it.
+  it("keeps vision evidence even when the browser sends a malformed report", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [
+        { at: "2026-07-29T10:00:00.000Z", face_count: 0, confidence: 0.9 },
+        { at: "2026-07-29T10:00:10.000Z", face_count: 0, confidence: 0.9 },
+        { at: "2026-07-29T10:00:20.000Z", face_count: 0, confidence: 0.9 },
+      ],
+    });
+
+    await submitInterview({
+      token: "tok",
+      proctoringEvents: [{ type: "keylogger", at: "nope", duration_ms: -5 }],
+    });
+
+    expect(mockSaveProctoring).toHaveBeenCalled();
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.summary.face_absent_count).toBe(1);
+    expect(report.summary.tab_blur_count).toBe(0);
+  });
+
+  it("writes nothing when neither the browser nor the worker reported anything", async () => {
+    mockFetchSession.mockResolvedValue({ ...SPOKEN, proctoring_observations: [] });
+
+    await submitInterview({ token: "tok" });
+
+    expect(mockSaveProctoring).not.toHaveBeenCalled();
+    expect(mockFinalize).toHaveBeenCalled();
+  });
+
   it("still completes the interview when the proctoring write fails", async () => {
     mockSaveProctoring.mockRejectedValue(new Error("db down"));
 

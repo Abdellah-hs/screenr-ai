@@ -2,6 +2,7 @@ import type { InterviewSessionRow, InterviewScore } from "@/lib/data/interview-s
 import type {
   ProctoringIncident,
   ProctoringIncidentType,
+  ProctoringSource,
 } from "@/lib/proctoring/incidents";
 
 /** The row plus a resolved playback URL for the recording (Phase B2). */
@@ -148,6 +149,20 @@ function formatTime(iso: string): string {
 const INCIDENT_LABEL: Record<ProctoringIncidentType, string> = {
   tab_blur: "Left the interview tab",
   camera_off: "Camera off",
+  face_absent: "Nobody visible on camera",
+  multiple_faces: "More than one person on camera",
+};
+
+/**
+ * Where a finding came from. Surfaced per incident because the two carry very
+ * different weight: browser signals are self-reported by the candidate's machine,
+ * while camera findings are a model's reading of the video and can be wrong. A
+ * recruiter acting on "more than one person" deserves to know which they are
+ * looking at.
+ */
+const SOURCE_LABEL: Record<ProctoringSource, string> = {
+  client: "browser",
+  vision: "camera",
 };
 
 /** Severity styling. Every level also carries a word and an icon, so severity is
@@ -190,10 +205,12 @@ function AlertIcon() {
 }
 
 /**
- * The proctoring report (Phase C): what the candidate's browser observed during
- * the call. Deliberately presented as *evidence beside* the score, never folded
- * into it — V1 proctoring never terminates an interview or moves an application,
- * so the recruiter reads it and decides.
+ * The proctoring report (Phases C + C2): what the candidate's browser observed
+ * during the call, plus what a vision model read off their camera. Deliberately
+ * presented as *evidence beside* the score, never folded into it — proctoring
+ * never terminates an interview or moves an application, so the recruiter reads
+ * it and decides. Camera findings are labelled as such and carry an explicit
+ * fallibility note, because acting on a wrong one is the expensive mistake here.
  */
 function ProctoringBlock({ session }: { session: InterviewSessionView }) {
   const report = session.proctoring;
@@ -235,6 +252,9 @@ function ProctoringBlock({ session }: { session: InterviewSessionView }) {
       {clean ? (
         <p className="text-sm text-[#4B5563] leading-relaxed">
           The candidate stayed on the interview tab with their camera on throughout.
+          {report.summary.vision_sampled
+            ? " Camera checks found one person present."
+            : " The camera itself was not analysed for this interview."}
         </p>
       ) : (
         <>
@@ -248,6 +268,16 @@ function ProctoringBlock({ session }: { session: InterviewSessionView }) {
               label={INCIDENT_LABEL.camera_off}
               count={report.summary.camera_off_count}
               totalMs={report.summary.camera_off_total_ms}
+            />
+            <IncidentRow
+              label={INCIDENT_LABEL.face_absent}
+              count={report.summary.face_absent_count}
+              totalMs={report.summary.face_absent_total_ms}
+            />
+            <IncidentRow
+              label={INCIDENT_LABEL.multiple_faces}
+              count={report.summary.multiple_faces_count}
+              totalMs={report.summary.multiple_faces_total_ms}
             />
           </dl>
 
@@ -268,7 +298,8 @@ function ProctoringBlock({ session }: { session: InterviewSessionView }) {
 
       <p className="mt-2 text-[11px] text-[#6B7280] leading-relaxed">
         Recorded for context only — proctoring does not affect the interview score or the
-        candidate&apos;s stage.
+        candidate&apos;s stage. Camera findings are automated estimates and can be wrong;
+        review the recording before acting on one.
       </p>
     </div>
   );
@@ -300,7 +331,10 @@ function IncidentTimelineRow({ incident }: { incident: ProctoringIncident }) {
   return (
     <li className="flex items-baseline justify-between gap-3 text-xs text-[#6B7280]">
       <span className="tabular-nums shrink-0">{formatTime(incident.at)}</span>
-      <span className="flex-1 truncate">{INCIDENT_LABEL[incident.type]}</span>
+      <span className="flex-1 truncate">
+        {INCIDENT_LABEL[incident.type]}
+        <span className="ml-1.5 text-[#9CA3AF]">({SOURCE_LABEL[incident.source]})</span>
+      </span>
       <span className="tabular-nums shrink-0">
         {formatDuration(incident.duration_ms)}
         {incident.severity === "critical" && (

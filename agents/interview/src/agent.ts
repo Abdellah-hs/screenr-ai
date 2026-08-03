@@ -31,6 +31,7 @@ import {
 import * as openai from "@livekit/agents-plugin-openai";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
+import { startVisionProctoring, type VisionObservation } from "./vision.js";
 
 /** Mirrors `InterviewTranscriptTurn` in the app (src/lib/data/interview-sessions.ts). */
 interface TranscriptTurn {
@@ -97,6 +98,36 @@ async function reportTranscript(applicationId: string, turns: TranscriptTurn[]):
   }
 }
 
+/**
+ * Report the vision-proctoring samples so far (Phase C2), same idempotent
+ * overwrite as the transcript. Best-effort: a failed report costs a proctoring
+ * sample, never the interview.
+ */
+async function reportVisionObservations(
+  applicationId: string,
+  observations: VisionObservation[],
+): Promise<void> {
+  const origin = process.env.SCREENR_APP_ORIGIN;
+  const secret = process.env.AGENT_API_SECRET;
+  if (!origin || !secret || observations.length === 0) return;
+
+  try {
+    const res = await fetch(`${origin}/api/agent/interview/proctoring`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify({ application_id: applicationId, observations }),
+    });
+    if (!res.ok) {
+      console.error(`proctoring report failed (${res.status}) for ${applicationId}`);
+    }
+  } catch (err) {
+    console.error("proctoring report failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 export default defineAgent({
   entry: async (ctx: JobContext) => {
     await ctx.connect();
@@ -148,10 +179,24 @@ export default defineAgent({
       queueReport();
     });
 
+    // Watch the camera for proctoring evidence (Phase C2). Entirely separate
+    // from the conversation above: the interviewer never sees these readings, so
+    // it can't react to them mid-interview. Serialized like the transcript so
+    // two reports can't overwrite each other out of order.
+    let visionReporting: Promise<void> = Promise.resolve();
+    const vision = startVisionProctoring(ctx, (observations) => {
+      visionReporting = visionReporting.then(() =>
+        reportVisionObservations(meta.application_id, observations),
+      );
+    });
+
     // Final flush when the job winds down (candidate left / room closed).
     ctx.addShutdownCallback(async () => {
+      vision.stop();
       await reporting;
       await reportTranscript(meta.application_id, [...turns]);
+      await visionReporting;
+      await reportVisionObservations(meta.application_id, vision.observations());
     });
 
     const agent = new voice.Agent({ instructions: meta.instructions });

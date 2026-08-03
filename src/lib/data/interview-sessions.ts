@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type { Json } from "@/types/database.types";
-import type { ProctoringReport } from "@/lib/proctoring/incidents";
+import type { ProctoringReport, VisionObservation } from "@/lib/proctoring/incidents";
 
 /**
  * Data layer for AI video-interview sessions (Phase A).
@@ -59,6 +59,12 @@ export interface InterviewSessionRow {
   recording_url: string | null;
   scores: InterviewScore | null;
   proctoring: ProctoringReport | null;
+  /**
+   * Draft vision-proctoring samples reported by the worker during the call
+   * (Phase C2). Raw evidence — `summarizeProctoring` folds these into
+   * `proctoring` at submit.
+   */
+  proctoring_observations: VisionObservation[] | null;
   expires_at: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -197,6 +203,35 @@ export async function saveProctoringReport(
   if (error) {
     throw new Error(
       `Failed to save proctoring report: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
+ * Persist the worker's vision-proctoring samples as a DRAFT (Phase C2). The
+ * worker reports the full set so far after each new sample, so this is an
+ * idempotent overwrite — a retry or a duplicate report can't double-count, and a
+ * crashed worker loses at most the final sample.
+ *
+ * Guarded to the open statuses like the transcript draft, so a late-arriving
+ * report can never attach evidence to an interview that was already finalized.
+ * Called from the agent API route with the admin client (no user session).
+ */
+export async function saveVisionObservationsDraft(
+  applicationId: string,
+  observations: VisionObservation[],
+  db: SupabaseDb,
+): Promise<void> {
+  const q = db as AnyDb;
+  const { error } = await q
+    .from("interview_sessions")
+    .update({ proctoring_observations: observations })
+    .eq("application_id", applicationId)
+    .in("status", [...OPEN_STATUSES]);
+
+  if (error) {
+    throw new Error(
+      `Failed to save vision observations: ${error.message ?? JSON.stringify(error)}`,
     );
   }
 }

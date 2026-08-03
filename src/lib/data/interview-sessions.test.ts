@@ -27,6 +27,7 @@ import {
   saveInterviewRecording,
   saveProctoringReport,
   saveInterviewTranscriptDraft,
+  saveVisionObservationsDraft,
   finalizeInterviewTranscript,
   markInterviewExpired,
   markInterviewFailed,
@@ -128,6 +129,7 @@ describe("saveProctoringReport", () => {
         at: "2026-07-29T10:00:00.000Z",
         duration_ms: 4_000,
         severity: "warning" as const,
+        source: "client" as const,
       },
     ],
     summary: {
@@ -135,9 +137,14 @@ describe("saveProctoringReport", () => {
       tab_blur_total_ms: 4_000,
       camera_off_count: 0,
       camera_off_total_ms: 0,
+      face_absent_count: 0,
+      face_absent_total_ms: 0,
+      multiple_faces_count: 0,
+      multiple_faces_total_ms: 0,
+      vision_sampled: false,
       overall_severity: "warning" as const,
     },
-    report_version: "proctoring-v1",
+    report_version: "proctoring-v2",
     generated_at: "2026-07-29T10:20:00.000Z",
   };
 
@@ -268,5 +275,30 @@ describe("saveInterviewScore", () => {
         db as never,
       ),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("saveVisionObservationsDraft", () => {
+  const observations = [
+    { at: "2026-08-03T10:00:00.000Z", face_count: 1, confidence: 0.95 },
+    { at: "2026-08-03T10:00:10.000Z", face_count: 0, confidence: 0.72 },
+  ];
+
+  it("writes the samples only while the session is still open", async () => {
+    await saveVisionObservationsDraft("app-1", observations, db as never);
+
+    expect(db.from).toHaveBeenCalledWith("interview_sessions");
+    expect(chain.update).toHaveBeenCalledWith({ proctoring_observations: observations });
+    expect(chain.eq).toHaveBeenCalledWith("application_id", "app-1");
+    // The guard: a late report can't attach evidence to a finalized interview.
+    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+  });
+
+  it("throws when the write fails", async () => {
+    useResult({ error: new Error("nope") });
+
+    await expect(
+      saveVisionObservationsDraft("app-1", observations, db as never),
+    ).rejects.toThrow("nope");
   });
 });
