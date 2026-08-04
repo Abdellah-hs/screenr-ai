@@ -40,12 +40,34 @@ Three things about this are deliberate:
   function call. The app only ever receives integers.
 - **The interviewer never sees them.** Feeding frames into the Realtime session
   would make it react to what it sees mid-call ("is someone there with you?"),
-  tipping off the candidate and turning monitoring into a live accusation. The
+  turning monitoring into a live accusation delivered by the interviewer. The
   interviewer is audio-only and stays that way.
 - **No verdicts here.** This worker reports what it counted and how usable the
   frame was. Severity, durations, and incidents are decided by the app's rule
   layer (`summarizeProctoring`), which is versioned and unit-tested, so the
   judgement is identical for every candidate and can't drift with the worker.
+
+### Live overlay
+
+Boxes are also published to the candidate's browser over the room data channel
+(topic `proctoring.boxes`) and drawn on their self-view. **On by default** —
+`VISION_OVERLAY=0` turns it off.
+
+This is a deliberate reversal of the "don't tip them off" property above, chosen
+knowingly: the candidate can now see what was detected and when, so they can time
+around it. What it does *not* affect is the record. Boxes travel worker → browser
+only; the reporting route accepts no incident types from a browser at all, and
+the report is assembled server-side from the worker's own readings. A candidate
+who blocks, forges, or replays these packets changes what they see and nothing
+about what is stored.
+
+The overlay runs its own faster cadence (`VISION_OVERLAY_INTERVAL_MS`, default
+1s) because a box drawn on the report's 10s cadence sits over where the candidate
+*used to be*. The report is still recorded every `VISION_SAMPLE_INTERVAL_MS`, so
+stored evidence — and every threshold expressed against it — is unchanged by how
+smooth the overlay looks.
+
+### Tuning
 
 The pure decision maths lives in `src/postprocess.ts` and is unit-tested
 (`pnpm test`). To check the thresholds against your own camera:

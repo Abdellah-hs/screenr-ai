@@ -31,6 +31,9 @@ import {
   luminanceStats,
   nms,
   observationConfidence,
+  selectSignals,
+  toOverlayBoxes,
+  type OverlayBox,
 } from "./postprocess.js";
 
 // onnxruntime-node ships CommonJS with native bindings; `createRequire` loads it
@@ -50,6 +53,13 @@ export interface DetectorReading {
   person_count: number;
   phone_count: number;
   confidence: number;
+  /**
+   * Normalised boxes for the live overlay only. These are NOT part of the
+   * proctoring evidence: they are published to the candidate's browser over the
+   * room's data channel and then discarded. Nothing persists them, and the
+   * reporting route would reject them if they were sent.
+   */
+  boxes: OverlayBox[];
 }
 
 function modelPath(): string {
@@ -180,16 +190,19 @@ export async function detectFrame(
     const detections = nms(
       decodeYoloxOutput(raw, { ratio: letterboxRatio(width, height) }),
     );
-    const signals = countSignals(
-      detections,
-      { width, height },
-      { personMinScore: minScore, phoneMinScore: minScore },
-    );
+    const frame = { width, height };
+    const thresholds = { personMinScore: minScore, phoneMinScore: minScore };
+
+    // One pass over the thresholds, reused for both the counts and the boxes,
+    // so the overlay can only ever show what the report actually counted.
+    const kept = selectSignals(detections, frame, thresholds);
+    const signals = countSignals(detections, frame, thresholds);
 
     return {
       person_count: signals.personCount,
       phone_count: signals.phoneCount,
       confidence: observationConfidence(prepared.usability, signals),
+      boxes: toOverlayBoxes(kept, frame),
     };
   } catch (err) {
     console.error(

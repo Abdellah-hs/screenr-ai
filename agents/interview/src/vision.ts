@@ -35,6 +35,7 @@ import {
 } from "@livekit/rtc-node";
 import type { JobContext } from "@livekit/agents";
 import { detectFrame, preloadDetector } from "./detector.js";
+import type { OverlayBox } from "./postprocess.js";
 
 /** One sampled frame's reading. Mirrors `VisionObservation` in the app. */
 export interface VisionObservation {
@@ -45,14 +46,41 @@ export interface VisionObservation {
 }
 
 /**
- * How often to sample. Detection is local and costs nothing per frame now, so
- * this is a CPU dial rather than a billing one — but it is still the resolution
- * of the evidence. The rule thresholds are expressed in milliseconds, not sample
- * counts, so they stay correct at any cadence; intervals above ~15s start losing
- * the shorter incidents entirely, and on a 10-minute call there is little room
- * to widen it before ~60 samples becomes too few to say anything.
+ * How often an observation is RECORDED for the proctoring report. The rule
+ * thresholds are expressed in milliseconds, not sample counts, so they stay
+ * correct at any cadence; intervals above ~15s start losing the shorter
+ * incidents entirely, and on a 10-minute call there is little room to widen it
+ * before ~60 samples becomes too few to say anything.
+ *
+ * Deliberately NOT the same knob as the overlay cadence below. The app bounds a
+ * report at 500 observations, so driving this at overlay speed would blow the
+ * schema on a long call — and would quietly change what every stored report
+ * means.
  */
 const SAMPLE_INTERVAL_MS = Number(process.env.VISION_SAMPLE_INTERVAL_MS) || 10_000;
+
+/** Set `VISION_OVERLAY=0` to stop publishing boxes to the candidate's browser. */
+const OVERLAY_ENABLED = (process.env.VISION_OVERLAY ?? "1") !== "0";
+
+/**
+ * How often frames are scored while the overlay is on.
+ *
+ * The overlay is why this exists: at the report's 10s cadence a drawn box is up
+ * to ten seconds stale, so it sits over where the candidate *used to be* and
+ * reads as broken. ~1s tracks a person well enough to look live. The cost is
+ * real — ~75ms of CPU per frame, so roughly 7% of a core per concurrent
+ * interview instead of 0.7%.
+ */
+const OVERLAY_INTERVAL_MS = Number(process.env.VISION_OVERLAY_INTERVAL_MS) || 1_000;
+
+/** Data-channel topic the candidate's browser listens on for overlay boxes. */
+export const VISION_OVERLAY_TOPIC = "proctoring.boxes";
+
+/** The overlay packet. Ephemeral: published, drawn, and never stored anywhere. */
+interface OverlayPacket {
+  at: string;
+  boxes: OverlayBox[];
+}
 
 /** A single frame lifted off the live track, in RGBA. */
 interface RawFrame {
@@ -91,6 +119,28 @@ async function captureFrame(track: RemoteTrack): Promise<RawFrame | null> {
   }
 }
 
+/**
+ * Push the latest boxes to the candidate's browser over the room data channel.
+ *
+ * Lossy on purpose: this is a live overlay, so a dropped packet should be
+ * replaced by the next one a second later rather than queued and delivered late.
+ * Best-effort like everything else here — a publish failure must never disturb
+ * sampling or the call.
+ */
+async function publishOverlay(ctx: JobContext, packet: OverlayPacket): Promise<void> {
+  try {
+    await ctx.room.localParticipant?.publishData(
+      new TextEncoder().encode(JSON.stringify(packet)),
+      { reliable: false, topic: VISION_OVERLAY_TOPIC },
+    );
+  } catch (err) {
+    console.error(
+      "vision overlay publish failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 export interface VisionProctor {
   /** Every usable reading so far, oldest first. */
   observations: () => VisionObservation[];
@@ -118,6 +168,7 @@ export function startVisionProctoring(
   let videoTrack: RemoteTrack | null = null;
   let stopped = false;
   let busy = false;
+  let lastRecordedMs = 0;
 
   // Warm the model while the candidate is still being greeted, so the first
   // sample isn't also paying the load cost.
@@ -133,6 +184,10 @@ export function startVisionProctoring(
   ctx.room.on(RoomEvent.TrackSubscribed, onSubscribed);
   ctx.room.on(RoomEvent.TrackUnsubscribed, onUnsubscribed);
 
+  const tickMs = OVERLAY_ENABLED
+    ? Math.min(OVERLAY_INTERVAL_MS, SAMPLE_INTERVAL_MS)
+    : SAMPLE_INTERVAL_MS;
+
   const timer = setInterval(async () => {
     // `busy` serialises the ticks: a slow capture or inference must skip the
     // next sample rather than overlap it, or two runs end up competing for the
@@ -146,10 +201,24 @@ export function startVisionProctoring(
       // Stamped at CAPTURE, not after inference: the reading describes the
       // moment the shutter closed, and the rule layer measures durations
       // between these timestamps.
-      const at = new Date().toISOString();
+      const capturedMs = Date.now();
+      const at = new Date(capturedMs).toISOString();
 
       const reading = await detectFrame(frame.data, frame.width, frame.height);
+
+      if (OVERLAY_ENABLED) {
+        // An unreadable frame publishes an empty list rather than nothing, so a
+        // stale box doesn't sit frozen on screen after detection stops working.
+        await publishOverlay(ctx, { at, boxes: reading?.boxes ?? [] });
+      }
+
       if (!reading) return;
+
+      // The overlay may run far faster than the report needs. Record on the
+      // report's own cadence so the stored evidence — and every threshold
+      // expressed against it — is unchanged by how smooth the overlay looks.
+      if (capturedMs - lastRecordedMs < SAMPLE_INTERVAL_MS) return;
+      lastRecordedMs = capturedMs;
 
       observations.push({
         at,
@@ -167,7 +236,7 @@ export function startVisionProctoring(
     } finally {
       busy = false;
     }
-  }, SAMPLE_INTERVAL_MS);
+  }, tickMs);
 
   return {
     observations: () => [...observations],

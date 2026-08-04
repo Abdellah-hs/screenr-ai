@@ -236,51 +236,121 @@ export interface FrameSignals {
   weakestPersonScore: number;
 }
 
+/** What a kept box means to the app. COCO classes collapse into these two. */
+export type SignalLabel = "person" | "phone";
+
+/** A detection that survived every threshold, clipped to the frame. */
+export interface CountedDetection {
+  label: SignalLabel;
+  score: number;
+  /** [x1, y1, x2, y2] in source pixels, clipped to the frame. */
+  box: [number, number, number, number];
+}
+
 /**
- * Reduce a frame's surviving boxes to the two counts the app understands.
+ * The detections a frame actually counts — one source of truth for the
+ * thresholds, so the counts sent to the app and the boxes drawn on screen can
+ * never disagree about what was seen.
  *
  * Boxes are clipped to the frame before their area is measured, so a person
  * half out of shot is judged on the part actually visible rather than on an
  * extrapolated box that drifts off-screen.
  */
-export function countSignals(
+export function selectSignals(
   detections: Detection[],
   frame: { width: number; height: number },
   opts: { personMinScore?: number; phoneMinScore?: number } = {},
-): FrameSignals {
+): CountedDetection[] {
   const personMinScore = opts.personMinScore ?? PERSON_MIN_SCORE;
   const phoneMinScore = opts.phoneMinScore ?? PHONE_MIN_SCORE;
   const frameArea = Math.max(0, frame.width) * Math.max(0, frame.height);
+  if (frameArea === 0) return [];
 
-  let personCount = 0;
-  let phoneCount = 0;
-  let weakestPersonScore = 1;
-
-  if (frameArea === 0) return { personCount, phoneCount, weakestPersonScore };
+  const kept: CountedDetection[] = [];
 
   for (const det of detections) {
+    const isPerson = det.classId === PERSON_CLASS_ID;
+    const isPhone = PHONE_CLASS_IDS.has(det.classId);
+    if (!isPerson && !isPhone) continue;
+
     const x1 = Math.max(0, Math.min(det.box[0], frame.width));
     const y1 = Math.max(0, Math.min(det.box[1], frame.height));
     const x2 = Math.max(0, Math.min(det.box[2], frame.width));
     const y2 = Math.max(0, Math.min(det.box[3], frame.height));
     const areaRatio = (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea;
 
-    if (det.classId === PERSON_CLASS_ID) {
-      if (det.score < personMinScore) continue;
-      if (areaRatio < PERSON_MIN_AREA_RATIO) continue;
+    const minScore = isPerson ? personMinScore : phoneMinScore;
+    const minArea = isPerson ? PERSON_MIN_AREA_RATIO : PHONE_MIN_AREA_RATIO;
+    if (det.score < minScore || areaRatio < minArea) continue;
+
+    kept.push({
+      label: isPerson ? "person" : "phone",
+      score: det.score,
+      box: [x1, y1, x2, y2],
+    });
+  }
+
+  return kept;
+}
+
+/** Reduce a frame's surviving boxes to the two counts the app understands. */
+export function countSignals(
+  detections: Detection[],
+  frame: { width: number; height: number },
+  opts: { personMinScore?: number; phoneMinScore?: number } = {},
+): FrameSignals {
+  const kept = selectSignals(detections, frame, opts);
+
+  let personCount = 0;
+  let phoneCount = 0;
+  let weakestPersonScore = 1;
+
+  for (const det of kept) {
+    if (det.label === "person") {
       personCount++;
       weakestPersonScore = Math.min(weakestPersonScore, det.score);
-      continue;
-    }
-
-    if (PHONE_CLASS_IDS.has(det.classId)) {
-      if (det.score < phoneMinScore) continue;
-      if (areaRatio < PHONE_MIN_AREA_RATIO) continue;
+    } else {
       phoneCount++;
     }
   }
 
   return { personCount, phoneCount, weakestPersonScore };
+}
+
+/** A box as it travels to the browser: fractions of the frame, not pixels. */
+export interface OverlayBox {
+  label: SignalLabel;
+  /** 0–1, rounded to 4dp to keep the data packet small. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  score: number;
+}
+
+/**
+ * Normalise counted boxes to frame fractions for the live overlay.
+ *
+ * Fractions rather than pixels because the browser draws them over a video
+ * element whose displayed size has nothing to do with the frame the worker
+ * scored — different resolution, different CSS box, and `object-fit: cover`
+ * cropping in between. Only the receiver knows those, so it does that maths.
+ */
+export function toOverlayBoxes(
+  counted: CountedDetection[],
+  frame: { width: number; height: number },
+): OverlayBox[] {
+  if (frame.width <= 0 || frame.height <= 0) return [];
+  const round = (v: number) => Math.round(v * 10_000) / 10_000;
+
+  return counted.map((det) => ({
+    label: det.label,
+    x: round(det.box[0] / frame.width),
+    y: round(det.box[1] / frame.height),
+    w: round((det.box[2] - det.box[0]) / frame.width),
+    h: round((det.box[3] - det.box[1]) / frame.height),
+    score: Math.round(det.score * 100) / 100,
+  }));
 }
 
 /** Rec. 601 luma, sampled — full-frame precision buys nothing at this scale. */

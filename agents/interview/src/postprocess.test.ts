@@ -9,6 +9,8 @@ import {
   luminanceStats,
   nms,
   observationConfidence,
+  selectSignals,
+  toOverlayBoxes,
   type Detection,
 } from "./postprocess.js";
 
@@ -300,6 +302,63 @@ describe("countSignals", () => {
     );
 
     expect(signals.personCount).toBe(0);
+  });
+});
+
+describe("selectSignals / toOverlayBoxes", () => {
+  const frame = { width: 1280, height: 720 };
+
+  // The overlay must show exactly what the report counted — one set of
+  // thresholds, so a candidate can never see a box for something that wasn't
+  // recorded (or miss one that was).
+  it("returns only the detections that pass the counting thresholds", () => {
+    const kept = selectSignals(
+      [
+        detection(PERSON_CLASS_ID, 0.9, [400, 100, 800, 700]), // counted
+        detection(PERSON_CLASS_ID, 0.95, [10, 10, 60, 110]), // too small
+        detection(CELL_PHONE, 0.4, [500, 300, 560, 420]), // below phone floor
+        detection(LAPTOP, 0.99, [0, 300, 500, 700]), // not a tracked class
+      ],
+      frame,
+    );
+
+    expect(kept).toHaveLength(1);
+    expect(kept[0].label).toBe("person");
+  });
+
+  it("labels a remote as a phone, matching the count", () => {
+    const kept = selectSignals([detection(REMOTE, 0.7, [500, 300, 560, 420])], frame);
+
+    expect(kept[0].label).toBe("phone");
+  });
+
+  it("normalises boxes to frame fractions", () => {
+    const kept = selectSignals(
+      [detection(PERSON_CLASS_ID, 0.9, [320, 180, 960, 540])],
+      frame,
+    );
+
+    const [overlay] = toOverlayBoxes(kept, frame);
+
+    expect(overlay).toMatchObject({ label: "person", x: 0.25, y: 0.25, w: 0.5, h: 0.5 });
+  });
+
+  it("clips a box that runs off the edge into the 0–1 range", () => {
+    const kept = selectSignals(
+      [detection(PERSON_CLASS_ID, 0.9, [-500, -500, 900, 700])],
+      frame,
+    );
+
+    const [overlay] = toOverlayBoxes(kept, frame);
+
+    expect(overlay.x).toBe(0);
+    expect(overlay.y).toBe(0);
+    expect(overlay.x + overlay.w).toBeLessThanOrEqual(1);
+    expect(overlay.y + overlay.h).toBeLessThanOrEqual(1);
+  });
+
+  it("returns nothing for a degenerate frame", () => {
+    expect(toOverlayBoxes([], { width: 0, height: 0 })).toEqual([]);
   });
 });
 
