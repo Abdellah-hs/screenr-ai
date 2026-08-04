@@ -88,14 +88,19 @@ export function ProctoringReportPanel({
               totalMs={report.summary.camera_off_total_ms}
             />
             <IncidentRow
-              label={INCIDENT_LABEL.face_absent}
-              count={report.summary.face_absent_count}
-              totalMs={report.summary.face_absent_total_ms}
+              label={INCIDENT_LABEL.person_absent}
+              count={report.summary.person_absent_count}
+              totalMs={report.summary.person_absent_total_ms}
             />
             <IncidentRow
-              label={INCIDENT_LABEL.multiple_faces}
-              count={report.summary.multiple_faces_count}
-              totalMs={report.summary.multiple_faces_total_ms}
+              label={INCIDENT_LABEL.multiple_people}
+              count={report.summary.multiple_people_count}
+              totalMs={report.summary.multiple_people_total_ms}
+            />
+            <IncidentRow
+              label={INCIDENT_LABEL.phone_visible}
+              count={report.summary.phone_visible_count}
+              totalMs={report.summary.phone_visible_total_ms}
             />
           </dl>
 
@@ -138,7 +143,7 @@ function CleanSummary({
     <p className="text-sm text-[#4B5563] leading-relaxed">
       The candidate stayed on the interview tab with their camera on throughout.
       {report.summary.vision_sampled
-        ? " Camera checks found one person present."
+        ? " Camera checks found one person present and no phone in shot."
         : " The camera itself was not analysed for this interview."}
     </p>
   );
@@ -164,8 +169,9 @@ function Caveat({ stage }: { stage: ProctoringStage }) {
   return (
     <p className="mt-2 text-[11px] text-[#6B7280] leading-relaxed">
       Recorded for context only — proctoring does not affect the interview score or the
-      candidate&apos;s stage. Camera findings are automated estimates and can be wrong;
-      review the recording before acting on one.
+      candidate&apos;s stage. Camera findings are automated estimates and can be wrong. The
+      interview is not recorded, so there is no footage to check them against — treat a
+      finding as a reason to ask the candidate, never as a conclusion on its own.
     </p>
   );
 }
@@ -173,8 +179,9 @@ function Caveat({ stage }: { stage: ProctoringStage }) {
 const INCIDENT_LABEL: Record<ProctoringIncidentType, string> = {
   tab_blur: "Left the interview tab",
   camera_off: "Camera off",
-  face_absent: "Nobody visible on camera",
-  multiple_faces: "More than one person on camera",
+  person_absent: "Nobody visible on camera",
+  multiple_people: "More than one person on camera",
+  phone_visible: "Phone visible on camera",
 };
 
 /**
@@ -229,23 +236,29 @@ function formatTime(iso: string): string {
   });
 }
 
-/** One "Camera off — 2 times · 45s" summary row. Hidden when it never happened. */
+/**
+ * One "Camera off — 2 times · 45s" summary row. Hidden when it never happened.
+ *
+ * The counts are optional because a report stored under an older
+ * `report_version` predates some of these keys — reading one back must render a
+ * missing row as absent, not as the string "undefined".
+ */
 function IncidentRow({
   label,
   count,
   totalMs,
 }: {
   label: string;
-  count: number;
-  totalMs: number;
+  count?: number;
+  totalMs?: number;
 }) {
-  if (count === 0) return null;
+  if (!count) return null;
   return (
     <div className="flex items-baseline justify-between gap-3">
       <dt className="text-sm text-[#4B5563]">{label}</dt>
       <dd className="text-sm text-[#4B5563] tabular-nums shrink-0">
         <span className="font-semibold">{count}</span> {count === 1 ? "time" : "times"} ·{" "}
-        {formatDuration(totalMs)}
+        {formatDuration(totalMs ?? 0)}
       </dd>
     </div>
   );
@@ -256,7 +269,9 @@ function IncidentTimelineRow({ incident }: { incident: ProctoringIncident }) {
     <li className="flex items-baseline justify-between gap-3 text-xs text-[#6B7280]">
       <span className="tabular-nums shrink-0">{formatTime(incident.at)}</span>
       <span className="flex-1 truncate">
-        {INCIDENT_LABEL[incident.type]}
+        {/* Fall back to the raw type so an incident stored under an older
+            report_version still names itself rather than rendering blank. */}
+        {INCIDENT_LABEL[incident.type] ?? incident.type}
         <span className="ml-1.5 text-[#9CA3AF]">({SOURCE_LABEL[incident.source]})</span>
       </span>
       <span className="tabular-nums shrink-0">

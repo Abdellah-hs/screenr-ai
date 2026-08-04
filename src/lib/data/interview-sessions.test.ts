@@ -24,7 +24,6 @@ import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
   markInterviewStarted,
-  saveInterviewRecording,
   saveProctoringReport,
   saveInterviewTranscriptDraft,
   saveVisionObservationsDraft,
@@ -104,23 +103,6 @@ describe("markInterviewStarted", () => {
   });
 });
 
-describe("saveInterviewRecording", () => {
-  it("stores the recording key only while the session is still open", async () => {
-    await saveInterviewRecording("app-1", "camp-1/app-1.mp4", db as never);
-
-    expect(chain.update).toHaveBeenCalledWith({ recording_url: "camp-1/app-1.mp4" });
-    expect(chain.eq).toHaveBeenCalledWith("application_id", "app-1");
-    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
-  });
-
-  it("throws when the recording write fails", async () => {
-    useResult({ error: new Error("nope") });
-    await expect(
-      saveInterviewRecording("app-1", "k", db as never),
-    ).rejects.toThrow("nope");
-  });
-});
-
 describe("saveProctoringReport", () => {
   const report = {
     incidents: [
@@ -137,14 +119,16 @@ describe("saveProctoringReport", () => {
       tab_blur_total_ms: 4_000,
       camera_off_count: 0,
       camera_off_total_ms: 0,
-      face_absent_count: 0,
-      face_absent_total_ms: 0,
-      multiple_faces_count: 0,
-      multiple_faces_total_ms: 0,
+      person_absent_count: 0,
+      person_absent_total_ms: 0,
+      multiple_people_count: 0,
+      multiple_people_total_ms: 0,
+      phone_visible_count: 0,
+      phone_visible_total_ms: 0,
       vision_sampled: false,
       overall_severity: "warning" as const,
     },
-    report_version: "proctoring-v2",
+    report_version: "proctoring-v3",
     generated_at: "2026-07-29T10:20:00.000Z",
   };
 
@@ -280,8 +264,8 @@ describe("saveInterviewScore", () => {
 
 describe("saveVisionObservationsDraft", () => {
   const observations = [
-    { at: "2026-08-03T10:00:00.000Z", face_count: 1, confidence: 0.95 },
-    { at: "2026-08-03T10:00:10.000Z", face_count: 0, confidence: 0.72 },
+    { at: "2026-08-03T10:00:00.000Z", person_count: 1, confidence: 0.95, phone_count: 0 },
+    { at: "2026-08-03T10:00:10.000Z", person_count: 0, confidence: 0.72, phone_count: 0 },
   ];
 
   it("writes the samples only while the session is still open", async () => {

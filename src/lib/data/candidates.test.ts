@@ -29,7 +29,6 @@ vi.mock("@/lib/data/duplicate-flags", () => ({
 import {
   upsertCandidate,
   saveResumeScore,
-  getInterviewRecordingSignedUrl,
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
 } from "./candidates";
@@ -78,7 +77,7 @@ beforeEach(() => {
   mockFlagDuplicateCandidate.mockResolvedValue("flag-1");
 
   mockCreateSignedUrl.mockResolvedValue({
-    data: { signedUrl: "https://signed.example/recording" },
+    data: { signedUrl: "https://signed.example/resume" },
     error: null,
   });
 });
@@ -153,27 +152,6 @@ describe("upsertCandidate", () => {
     await expect(upsertCandidate(baseResume)).rejects.toMatchObject({
       message: "unique violation",
     });
-  });
-});
-
-describe("getInterviewRecordingSignedUrl", () => {
-  it("signs the key against the private interview-recordings bucket", async () => {
-    const url = await getInterviewRecordingSignedUrl("camp-1/app-1.mp4");
-
-    expect(mockStorageFrom).toHaveBeenCalledWith("interview-recordings");
-    expect(mockCreateSignedUrl).toHaveBeenCalledWith("camp-1/app-1.mp4", 3600);
-    expect(url).toBe("https://signed.example/recording");
-  });
-
-  it("returns null when the object can't be signed (e.g. still processing)", async () => {
-    mockCreateSignedUrl.mockResolvedValueOnce({ data: null, error: { message: "not found" } });
-
-    expect(await getInterviewRecordingSignedUrl("camp-1/app-1.mp4")).toBeNull();
-  });
-
-  it("returns null without calling storage for an empty key", async () => {
-    expect(await getInterviewRecordingSignedUrl("")).toBeNull();
-    expect(mockStorageFrom).not.toHaveBeenCalled();
   });
 });
 

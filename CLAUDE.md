@@ -218,7 +218,8 @@ Each stage (resume, screening answers, interview) produces its own score. There 
 
 - Target is a real-time conversational interview on a **desktop-only** client.
 - Configurable formats: system design, technical Q&A, behavioral, code reading.
-- Output must include transcript, recording, per-section scores, overall score, strengths/concerns, and proctoring report.
+- Output must include transcript, per-section scores, overall score, strengths/concerns, and proctoring report.
+- **Decision 2026-08-04:** the interview is **not recorded**. This retires PRD 3.5.5 and supersedes the earlier "recording" output requirement — do not rebuild it. The camera is live-only: the agent worker samples frames in memory for proctoring and discards them, so no interview video is ever written to storage. The durable record is the transcript + score + proctoring report. The cost is explicit: a proctoring finding can't be checked against footage, which is why the detection rules are biased toward missing incidents and the report carries a fallibility note.
 
 ### AI Interview Invitation (On-Demand)
 
@@ -410,12 +411,7 @@ CRON_SECRET                   # Shared secret guarding the scheduled-job endpoin
 LIVEKIT_URL                   # LiveKit Cloud project URL (wss://...) — voice-screening rooms
 LIVEKIT_API_KEY               # LiveKit API key (room creation + join-token minting)
 LIVEKIT_API_SECRET            # LiveKit API secret — NEVER exposed to the browser
-AGENT_API_SECRET              # Shared secret the agent worker presents to /api/agent/* routes (transcript reporting)
-SUPABASE_S3_ENDPOINT          # Supabase Storage S3-compatible endpoint (https://<ref>.supabase.co/storage/v1/s3) — LiveKit Egress upload target for interview recordings
-SUPABASE_S3_REGION            # Supabase project region for the S3 endpoint (e.g. us-east-1)
-SUPABASE_S3_ACCESS_KEY_ID     # Supabase Storage S3 access key id (Storage → S3 access keys)
-SUPABASE_S3_SECRET_ACCESS_KEY # Supabase Storage S3 secret — NEVER exposed to the browser
-INTERVIEW_RECORDING_BUCKET    # Storage bucket for interview recordings (default: interview-recordings)
+AGENT_API_SECRET              # Shared secret the agent worker presents to /api/agent/* routes (transcript + proctoring reporting)
 LINKEDIN_CLIENT_ID            # LinkedIn OAuth app client id — social publishing ("Share on LinkedIn")
 LINKEDIN_CLIENT_SECRET        # LinkedIn OAuth app client secret — NEVER exposed to the browser
 ```
@@ -424,7 +420,7 @@ Social publishing (`src/lib/services/linkedin.ts`) lets a recruiter publish a "w
 
 The voice screening runs on **LiveKit**: after token verification, the server opens a per-attempt room and mints the candidate's join grant (`src/lib/services/livekit.ts`); a standalone agent worker (`agents/screening/` — its own package with its own `pnpm install` / `pnpm dev`, deployable to LiveKit Cloud) is dispatched into the room, runs the OpenAI Realtime conversation (instructions come from room metadata, set server-side), and reports the transcript to `POST /api/agent/screening/transcript` (guarded by `AGENT_API_SECRET`, admin-client write, draft-only while the response is `sent`). The candidate's browser never supplies transcript content — its submit sends only the token and the server finalizes from the agent-reported draft. The worker must be running (see `agents/screening/README.md`) or candidates join a silent room.
 
-**AI interview recording (Phase B2)** — `src/lib/services/livekit-egress.ts`. When a candidate starts their AI video interview, the server best-effort starts a LiveKit **Room Composite Egress** that records the room (candidate camera + agent audio, composited) as MP4 and uploads it straight to a **private** Supabase Storage bucket over the S3-compatible endpoint (`SUPABASE_S3_*` env). The app never handles the media bytes — it only stores the object **key** (`<campaign_id>/<application_id>.mp4`) on `interview_sessions.recording_url`, then mints a short-lived signed URL for the owning recruiter at read time (`getInterviewRecordingSignedUrl`, mirroring the `resumes` bucket + `getResumeSignedUrl`). Recording is fully decoupled and fails closed: if the S3 env isn't set, `isInterviewRecordingConfigured()` is false and the interview runs normally with nothing recorded. Egress uploads with the project S3 keys (which bypass storage RLS); the bucket's owner-scoped RLS (first path segment = campaign id) governs the recruiter read path. **Setup:** create the `interview-recordings` bucket via the migration, then in the Supabase dashboard generate an S3 access key (Storage → S3 access keys) and set the five `SUPABASE_S3_*` / `INTERVIEW_RECORDING_BUCKET` env vars. Requires egress to be enabled on the LiveKit project.
+**The AI interview is not recorded.** LiveKit Egress, the `interview-recordings` bucket, `interview_sessions.recording_url` and the `SUPABASE_S3_*` env vars were all removed on 2026-08-04 (migration `20260804140000_drop_interview_recordings.sql`). The candidate's camera exists only as a live track: the agent worker samples frames in memory for proctoring and discards them. **Do not reintroduce recording** without revisiting the decision recorded in "AI Interview" above — the absence of stored video is a deliberate privacy posture, not missing work.
 
 **Proctoring (Phases C + C2)** — `src/lib/proctoring/`. Runs on **both** candidate-facing live stages, but they can carry different evidence:
 

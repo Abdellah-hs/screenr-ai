@@ -116,31 +116,45 @@ describe("summarizeProctoring", () => {
 
 /**
  * Vision proctoring (Phase C2). The worker samples a frame every ~10s and reports
- * a face count per frame; these rules turn that series into durations.
+ * how many people and how many phones it counted; these rules turn that series
+ * into durations.
  *
  * The bias here is deliberate and asymmetric: wrongly accusing a real candidate
  * of having someone else in the room is far more costly than missing a genuine
  * incident, so every test below that pins down a *non*-detection is protecting
- * that property, not describing an incidental behaviour.
+ * that property, not describing an incidental behaviour. That asymmetry matters
+ * more since the interview stopped being recorded — there is no footage anyone
+ * can go check a finding against.
  */
 describe("summarizeProctoring — vision observations", () => {
   const T0 = Date.parse("2026-07-29T10:00:00.000Z");
 
-  /** A run of samples 10s apart, all reading the same face count. */
+  /** A run of samples 10s apart, all reading the same counts. */
   function samples(
-    faceCount: number,
+    personCount: number,
     count: number,
-    opts: { confidence?: number; startMs?: number; stepMs?: number } = {},
+    opts: {
+      confidence?: number;
+      startMs?: number;
+      stepMs?: number;
+      phoneCount?: number;
+    } = {},
   ): VisionObservation[] {
-    const { confidence = 0.95, startMs = 0, stepMs = 10_000 } = opts;
+    const {
+      confidence = 0.95,
+      startMs = 0,
+      stepMs = 10_000,
+      phoneCount = 0,
+    } = opts;
     return Array.from({ length: count }, (_, i) => ({
       at: new Date(T0 + startMs + i * stepMs).toISOString(),
-      face_count: faceCount,
+      person_count: personCount,
       confidence,
+      phone_count: phoneCount,
     }));
   }
 
-  it("raises nothing when exactly one face is present throughout", () => {
+  it("raises nothing when exactly one person is present throughout", () => {
     const report = summarizeProctoring([], samples(1, 20));
 
     expect(report.incidents).toEqual([]);
@@ -148,12 +162,12 @@ describe("summarizeProctoring — vision observations", () => {
   });
 
   it("flags a sustained absence from frame", () => {
-    // 4 samples * 10s spacing = 30s span, past FACE_ABSENT_MIN_MS (15s).
+    // 4 samples * 10s spacing = 30s span, past PERSON_ABSENT_MIN_MS (15s).
     const report = summarizeProctoring([], samples(0, 4));
 
     expect(report.incidents).toHaveLength(1);
     expect(report.incidents[0]).toMatchObject({
-      type: "face_absent",
+      type: "person_absent",
       severity: "warning",
       source: "vision",
     });
@@ -176,7 +190,7 @@ describe("summarizeProctoring — vision observations", () => {
   });
 
   it("ignores a brief glimpse of a second person passing behind", () => {
-    // Two samples = 10s span, below MULTIPLE_FACES_MIN_MS.
+    // Two samples = 10s span, below MULTIPLE_PEOPLE_MIN_MS.
     const observations = [
       ...samples(1, 2),
       ...samples(2, 2, { startMs: 20_000 }),
@@ -192,14 +206,72 @@ describe("summarizeProctoring — vision observations", () => {
     const report = summarizeProctoring([], samples(2, 5, { startMs: 0 })); // 40s
 
     expect(report.incidents[0]).toMatchObject({
-      type: "multiple_faces",
+      type: "multiple_people",
       severity: "critical",
       source: "vision",
     });
   });
 
+  it("flags a phone that stays in shot", () => {
+    // 3 samples = 20s span, past PHONE_VISIBLE_MIN_MS (15s).
+    const report = summarizeProctoring([], samples(1, 3, { phoneCount: 1 }));
+
+    expect(report.incidents).toHaveLength(1);
+    expect(report.incidents[0]).toMatchObject({
+      type: "phone_visible",
+      severity: "warning",
+      source: "vision",
+    });
+  });
+
+  it("ignores a phone glimpsed in a single frame", () => {
+    // Picking up a phone to silence it, or a stray reflection off one on the
+    // desk. One frame spans zero time and can never clear a threshold.
+    const observations = [
+      ...samples(1, 2),
+      ...samples(1, 1, { startMs: 20_000, phoneCount: 1 }),
+      ...samples(1, 2, { startMs: 30_000 }),
+    ];
+
+    const report = summarizeProctoring([], observations);
+
+    expect(report.incidents).toEqual([]);
+  });
+
+  // The regression guard for per-condition run tracking: before this, one run
+  // was shared across all vision conditions, so whichever condition a frame was
+  // attributed to first silently swallowed the other.
+  it("reports two conditions present in the same frames independently", () => {
+    const report = summarizeProctoring(
+      [],
+      samples(2, 4, { phoneCount: 1 }), // two people AND a phone, for 30s
+    );
+
+    expect(report.incidents.map((i) => i.type).sort()).toEqual([
+      "multiple_people",
+      "phone_visible",
+    ]);
+    expect(report.summary.multiple_people_count).toBe(1);
+    expect(report.summary.phone_visible_count).toBe(1);
+  });
+
+  it("keeps an ongoing condition open while an overlapping one ends", () => {
+    // The phone is in shot the whole time; the second person leaves halfway.
+    const observations = [
+      ...samples(2, 3, { phoneCount: 1 }), // 0–20s: both
+      ...samples(1, 3, { startMs: 30_000, phoneCount: 1 }), // 30–50s: phone only
+    ];
+
+    const report = summarizeProctoring([], observations);
+
+    const phone = report.incidents.filter((i) => i.type === "phone_visible");
+    expect(phone).toHaveLength(1);
+    expect(phone[0].duration_ms).toBe(50_000);
+    expect(report.summary.multiple_people_count).toBe(1);
+  });
+
   it("discards low-confidence samples instead of believing them", () => {
-    // A dark or blurred room reading "no face" must not become an absence.
+    // A dark or blurred room reading "nobody there" must not become an absence.
     const report = summarizeProctoring([], samples(0, 8, { confidence: 0.3 }));
 
     expect(report.incidents).toEqual([]);
@@ -239,7 +311,7 @@ describe("summarizeProctoring — vision observations", () => {
     const report = summarizeProctoring(events, samples(0, 4));
 
     expect(report.incidents.map((i) => i.source)).toEqual(["vision", "client"]);
-    expect(report.summary.face_absent_count).toBe(1);
+    expect(report.summary.person_absent_count).toBe(1);
     expect(report.summary.tab_blur_count).toBe(1);
   });
 
@@ -247,6 +319,6 @@ describe("summarizeProctoring — vision observations", () => {
     const report = summarizeProctoring([event({ duration_ms: 20_000 })], samples(0, 4));
 
     const bySource = Object.fromEntries(report.incidents.map((i) => [i.type, i.source]));
-    expect(bySource).toEqual({ tab_blur: "client", face_absent: "vision" });
+    expect(bySource).toEqual({ tab_blur: "client", person_absent: "vision" });
   });
 });

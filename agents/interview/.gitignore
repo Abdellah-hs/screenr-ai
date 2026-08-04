@@ -3,3 +3,9 @@ node_modules/
 .env
 dist/
 *.tsbuildinfo
+
+# scratch space for manual detector checks (sample images, probes)
+.tmp/
+
+# models/*.onnx is deliberately NOT ignored — the detector weights are committed
+# so a deploy is one hermetic artifact with no runtime download. See models/README.md.

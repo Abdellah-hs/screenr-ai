@@ -418,15 +418,19 @@ export const proctoringEventsSchema = z.array(proctoringEventSchema).max(MAX_PRO
 /** A ~10s cadence over the call cap needs ~60; this leaves generous headroom. */
 const MAX_VISION_OBSERVATIONS = 500;
 
-/** Beyond a few faces the exact count stops mattering; cap it to bound the input. */
-const MAX_FACE_COUNT = 20;
+/** Beyond a few people the exact count stops mattering; cap it to bound the input. */
+const MAX_PERSON_COUNT = 20;
+
+/** Same idea for devices — "several phones in shot" needs no more precision. */
+const MAX_PHONE_COUNT = 10;
 
 export const visionObservationSchema = z.object({
   at: z
     .string()
     .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
-  face_count: z.number().int().min(0).max(MAX_FACE_COUNT),
+  person_count: z.number().int().min(0).max(MAX_PERSON_COUNT),
   confidence: z.number().min(0).max(1),
+  phone_count: z.number().int().min(0).max(MAX_PHONE_COUNT),
 });
 
 export const visionObservationsSchema = z

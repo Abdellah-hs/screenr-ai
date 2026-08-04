@@ -56,7 +56,6 @@ export interface InterviewSessionRow {
   application_id: string;
   status: InterviewSessionStatus;
   transcript: InterviewTranscriptTurn[];
-  recording_url: string | null;
   scores: InterviewScore | null;
   proctoring: ProctoringReport | null;
   /**
@@ -148,33 +147,6 @@ export async function markInterviewStarted(
   if (error) {
     throw new Error(
       `Failed to mark interview started: ${error.message ?? JSON.stringify(error)}`,
-    );
-  }
-}
-
-/**
- * Record the storage key of the interview's egress recording (Phase B2). The
- * key (`<campaign>/<application>.mp4`) points at a private Supabase Storage
- * object that LiveKit Egress uploads; playback resolves it to a signed URL.
- * Guarded to the open statuses so a late write can't attach a recording to an
- * already-finalized/expired session. Best-effort: called with the admin client
- * from the session-less candidate flow when recording is configured.
- */
-export async function saveInterviewRecording(
-  applicationId: string,
-  storageKey: string,
-  db: SupabaseDb,
-): Promise<void> {
-  const q = db as AnyDb;
-  const { error } = await q
-    .from("interview_sessions")
-    .update({ recording_url: storageKey })
-    .eq("application_id", applicationId)
-    .in("status", [...OPEN_STATUSES]);
-
-  if (error) {
-    throw new Error(
-      `Failed to save interview recording: ${error.message ?? JSON.stringify(error)}`,
     );
   }
 }

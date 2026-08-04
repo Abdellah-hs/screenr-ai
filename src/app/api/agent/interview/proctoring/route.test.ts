@@ -27,8 +27,8 @@ function request(body: unknown, secret?: string): Request {
 
 function observations() {
   return [
-    { at: "2026-08-03T10:00:00.000Z", face_count: 1, confidence: 0.95 },
-    { at: "2026-08-03T10:00:10.000Z", face_count: 2, confidence: 0.81 },
+    { at: "2026-08-03T10:00:00.000Z", person_count: 1, confidence: 0.95, phone_count: 0 },
+    { at: "2026-08-03T10:00:10.000Z", person_count: 2, confidence: 0.81, phone_count: 1 },
   ];
 }
 
@@ -84,10 +84,11 @@ describe("POST /api/agent/interview/proctoring", () => {
           observations: [
             {
               at: "2026-08-03T10:00:00.000Z",
-              face_count: 2,
+              person_count: 2,
               confidence: 0.9,
+              phone_count: 0,
               severity: "critical",
-              type: "multiple_faces",
+              type: "multiple_people",
             },
           ],
         },
@@ -99,8 +100,9 @@ describe("POST /api/agent/interview/proctoring", () => {
     const [, saved] = mockSaveDraft.mock.calls[0];
     expect(saved[0]).toEqual({
       at: "2026-08-03T10:00:00.000Z",
-      face_count: 2,
+      person_count: 2,
       confidence: 0.9,
+      phone_count: 0,
     });
   });
 
@@ -112,7 +114,9 @@ describe("POST /api/agent/interview/proctoring", () => {
       request(
         {
           application_id: APP_ID,
-          observations: [{ at: "2026-08-03T10:00:00.000Z", face_count: 1, confidence: 7 }],
+          observations: [
+            { at: "2026-08-03T10:00:00.000Z", person_count: 1, confidence: 7, phone_count: 0 },
+          ],
         },
         "agent-secret",
       ),
@@ -121,13 +125,27 @@ describe("POST /api/agent/interview/proctoring", () => {
       request(
         {
           application_id: APP_ID,
-          observations: [{ at: "not-a-date", face_count: 1, confidence: 0.9 }],
+          observations: [{ at: "not-a-date", person_count: 1, confidence: 0.9, phone_count: 0 }],
+        },
+        "agent-secret",
+      ),
+    );
+    const missingPhoneCount = await POST(
+      request(
+        {
+          application_id: APP_ID,
+          observations: [{ at: "2026-08-03T10:00:00.000Z", person_count: 1, confidence: 0.9 }],
         },
         "agent-secret",
       ),
     );
 
-    expect([badId.status, badConfidence.status, badTimestamp.status]).toEqual([400, 400, 400]);
+    expect([
+      badId.status,
+      badConfidence.status,
+      badTimestamp.status,
+      missingPhoneCount.status,
+    ]).toEqual([400, 400, 400, 400]);
     expect(mockSaveDraft).not.toHaveBeenCalled();
   });
 

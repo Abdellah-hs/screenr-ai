@@ -316,11 +316,11 @@ describe("submitVoiceScreening", () => {
     await expect(
       submitVoiceScreening({
         token: TOKEN,
-        proctoringEvents: [{ type: "face_absent", at: "nope", duration_ms: -1 }],
+        proctoringEvents: [{ type: "person_absent", at: "nope", duration_ms: -1 }],
       }),
     ).resolves.toEqual({ ok: true });
 
-    // `face_absent` is a vision type the browser must not be able to claim.
+    // `person_absent` is a vision type the browser must not be able to claim.
     expect(mockSaveScreeningProctoring).not.toHaveBeenCalled();
     expect(mockSaveTranscript).toHaveBeenCalled();
   });
