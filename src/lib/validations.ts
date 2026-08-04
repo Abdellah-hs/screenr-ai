@@ -392,7 +392,7 @@ export const applyApplicantSchema = z.object({
 
 const proctoringEventTypeValues = ["tab_blur", "camera_off"] as const;
 
-/** No single incident can outlast the 20-minute call cap; allow an hour of slack. */
+/** No single incident can outlast the call cap; an hour is slack, not a target. */
 const MAX_INCIDENT_DURATION_MS = 60 * 60 * 1000;
 
 /** A misbehaving or malicious client can't flood the row with events. */
@@ -415,7 +415,7 @@ export const proctoringEventsSchema = z.array(proctoringEventSchema).max(MAX_PRO
 // Note what is absent here too — no severity and no incident type. The worker
 // reports what it counted; `summarizeProctoring` alone decides what that means.
 
-/** A ~10s sampling cadence over a 20-minute cap leaves generous headroom. */
+/** A ~10s cadence over the call cap needs ~60; this leaves generous headroom. */
 const MAX_VISION_OBSERVATIONS = 500;
 
 /** Beyond a few faces the exact count stops mattering; cap it to bound the input. */

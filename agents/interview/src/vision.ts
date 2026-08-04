@@ -38,10 +38,11 @@ export interface VisionObservation {
  * How often to sample. Every frame is a billed vision call, so this is the cost
  * dial: measured at ~2,980 prompt tokens per frame on gpt-4o-mini (its image
  * token multiplier is far higher than gpt-4o's, even at `detail: "low"`), a
- * 20-minute interview at 10s ≈ 120 frames ≈ 360k tokens ≈ $0.05. Raise the
+ * 10-minute interview at 10s ≈ 60 frames ≈ 180k tokens ≈ $0.03. Raise the
  * interval to cut that; the rule thresholds are expressed in milliseconds, not
  * sample counts, so they stay correct at any cadence — though intervals above
- * ~15s start losing the shorter incidents entirely.
+ * ~15s start losing the shorter incidents entirely, and on a call this short
+ * there is little room to widen it before the evidence thins out.
  */
 const SAMPLE_INTERVAL_MS = Number(process.env.VISION_SAMPLE_INTERVAL_MS) || 10_000;
 

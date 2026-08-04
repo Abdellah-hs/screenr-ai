@@ -18,6 +18,7 @@ import {
   diagnoseAgentSilence,
   realtimeTrace,
 } from "@/lib/realtime/interview-diagnostics";
+import { INTERVIEW_DURATION_MINUTES } from "@/lib/constants";
 
 interface VideoInterviewProps {
   token: string;
@@ -56,8 +57,10 @@ const STATUS_DOT: Record<Status, string> = {
 };
 
 /** Hard cap on the live interview. When it hits 0 the call ends and the
- *  candidate is taken to the review step to submit. */
-const CALL_SECONDS = 20 * 60;
+ *  candidate is taken to the review step to submit. Derived from the shared
+ *  constant so the cap, the copy below, and the interviewer's own pacing
+ *  instructions can never disagree about how long this is. */
+const CALL_SECONDS = INTERVIEW_DURATION_MINUTES * 60;
 
 /** LiveKit publishes live transcription segments on this text-stream topic. */
 const TRANSCRIPTION_TOPIC = "lk.transcription";
@@ -548,7 +551,7 @@ export default function VideoInterview({
         <>
           <p className="text-sm text-[#6B7280]">
             This is an AI-led video interview for <strong>{campaignTitle}</strong> — about{" "}
-            <strong>20 minutes</strong>. When you start, allow camera and microphone access, and
+            <strong>{INTERVIEW_DURATION_MINUTES} minutes</strong>. When you start, allow camera and microphone access, and
             the interviewer will greet you and ask questions based on your background. Speak
             naturally — you&apos;ll be able to review before submitting.
           </p>
@@ -636,7 +639,9 @@ export default function VideoInterview({
       {review && (
         <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
           {timedOut && (
-            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">Your 20 minutes are up.</p>
+            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">
+              Your {INTERVIEW_DURATION_MINUTES} minutes are up.
+            </p>
           )}
           {hasResponses ? (
             <p className="text-sm text-[#0C4A6E]">

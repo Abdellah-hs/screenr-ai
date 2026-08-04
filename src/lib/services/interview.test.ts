@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildInterviewInstructions,
   summarizeResumeForInterview,
   type InterviewResume,
 } from "./interview";
+import {
+  INTERVIEW_DURATION_MINUTES,
+  INTERVIEW_TARGET_QUESTIONS,
+} from "@/lib/constants";
 
 const FULL_RESUME: InterviewResume = {
   fullName: "Ada Lovelace",
@@ -94,5 +100,55 @@ describe("buildInterviewInstructions", () => {
     }).toLowerCase();
 
     expect(out).toContain("behavioral");
+  });
+});
+
+/**
+ * The interview length is one number that three places must agree on: the
+ * client's hard cap, the copy the candidate reads, and the pacing the
+ * interviewer is told to keep. They previously drifted — a 20-minute cap against
+ * a "10–15 minutes" instruction — which either cuts a candidate off mid-answer
+ * or leaves them sitting in silence after the agent has said goodbye.
+ */
+describe("interview pacing", () => {
+  it("tells the interviewer the real length of the call", () => {
+    const out = buildInterviewInstructions({ resume: FULL_RESUME });
+
+    expect(out).toContain(`${INTERVIEW_DURATION_MINUTES} minutes`);
+  });
+
+  it("gives a question budget, since a realtime model cannot watch a clock", () => {
+    const out = buildInterviewInstructions({ resume: FULL_RESUME });
+
+    expect(out).toContain(`about ${INTERVIEW_TARGET_QUESTIONS} main questions`);
+  });
+
+  it("orders an immediate wrap-up rather than padding to fill the time", () => {
+    const out = buildInterviewInstructions({ resume: FULL_RESUME }).toLowerCase();
+
+    expect(out).toContain("do not pad the interview to fill time");
+  });
+
+  it("never states a duration the client would not actually allow", () => {
+    // Guards the drift directly: any minute figure in the instructions must be
+    // the shared constant, not a second hard-coded number.
+    const out = buildInterviewInstructions({ resume: FULL_RESUME });
+
+    const minuteFigures = [...out.matchAll(/(\d+)(?:\s*[–-]\s*\d+)?\s*minutes?/g)];
+    expect(minuteFigures.length).toBeGreaterThan(0);
+    for (const [, figure] of minuteFigures) {
+      expect(Number(figure)).toBe(INTERVIEW_DURATION_MINUTES);
+    }
+  });
+
+  it("caps the client call at exactly the shared duration", () => {
+    // The component owns the hard cut; if it stops deriving from the constant,
+    // the candidate's clock and the interviewer's plan part company again.
+    const component = readFileSync(
+      join(process.cwd(), "src/components/realtime/video-interview.tsx"),
+      "utf8",
+    );
+
+    expect(component).toContain("const CALL_SECONDS = INTERVIEW_DURATION_MINUTES * 60;");
   });
 });

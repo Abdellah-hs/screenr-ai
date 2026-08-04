@@ -12,9 +12,20 @@
  * Pure + deterministic: given the same résumé + job title + format it returns
  * the same instruction string, so it's fully unit-testable.
  */
+import {
+  INTERVIEW_DURATION_MINUTES,
+  INTERVIEW_TARGET_QUESTIONS,
+} from "@/lib/constants";
 
-/** Bump when the instruction wording changes materially — persisted as evidence. */
-export const INTERVIEW_PROMPT_VERSION = "iv-v1";
+/**
+ * Bump when the instruction wording changes materially — persisted as evidence.
+ *
+ * v2: interview shortened to a hard 10-minute cap, with explicit pacing (a
+ * question budget rather than a time budget, since a realtime model has no
+ * clock). Transcripts scored under v1 came from a longer, looser conversation
+ * and aren't directly comparable.
+ */
+export const INTERVIEW_PROMPT_VERSION = "iv-v2";
 
 /**
  * Configurable interview shapes (PRD 3.5). Phase A ships `general` as the
@@ -176,7 +187,12 @@ export function buildInterviewInstructions(
     "- If an answer is vague, generic, or sounds rehearsed or AI-generated, probe deeper with a pointed, specific question before moving on.",
     "- One question at a time. Let them finish. If they go silent or ask you to repeat, briefly rephrase.",
     "- Stay strictly neutral: do not reveal scores, do not say whether an answer is right or wrong, and do not give feedback, hints, or coaching.",
-    "- Keep the whole interview focused (about 10–15 minutes). When you've covered enough ground, thank them warmly and tell them the hiring team will follow up by email. Then end.",
+    "",
+    "Pacing — this interview is SHORT, so budget deliberately:",
+    `- The call ends automatically after ${INTERVIEW_DURATION_MINUTES} minutes. Anything unasked by then is lost, so do not save your best question for the end.`,
+    `- Plan for about ${INTERVIEW_TARGET_QUESTIONS} main questions total, each with its 1–2 follow-ups. Count them as you go — that is your budget, not the clock.`,
+    "- Keep your own turns brief. Ask the question and stop talking; do not preface it with a summary of their answer or a paragraph of context. Their talking time is the point of this interview.",
+    `- Once you have asked your ${INTERVIEW_TARGET_QUESTIONS} questions, wrap up immediately even if time seems to remain: thank them warmly, tell them the hiring team will follow up by email, and end. Do not pad the interview to fill time.`,
     "",
     "Begin by briefly greeting the candidate by name, confirming you can see and hear each other, and asking your first résumé-grounded question.",
   ].join("\n");
