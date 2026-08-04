@@ -2,45 +2,26 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-interface FakeToken {
-  addGrant: typeof mockAddGrant;
-  toJwt: typeof mockToJwt;
-  roomConfig?: { agents: { agentName: string }[] };
-}
-
-const { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken, issuedTokens } = vi.hoisted(
-  () => {
-    const mockCreateRoom = vi.fn();
-    const mockToJwt = vi.fn(async () => "jwt-abc");
-    const mockAddGrant = vi.fn();
-    const issuedTokens: Record<string, unknown>[] = [];
-    const mockAccessToken = vi.fn(function () {
-      const token = { addGrant: mockAddGrant, toJwt: mockToJwt };
-      issuedTokens.push(token);
-      return token;
-    });
-    return { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken, issuedTokens };
-  },
-);
+const { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken, mockCreateDispatch } =
+  vi.hoisted(() => ({
+    mockCreateRoom: vi.fn(),
+    mockToJwt: vi.fn(async () => "jwt-abc"),
+    mockAddGrant: vi.fn(),
+    mockCreateDispatch: vi.fn(),
+    mockAccessToken: vi.fn(function () {
+      return { addGrant: mockAddGrant, toJwt: mockToJwt };
+    }),
+  }));
 
 vi.mock("livekit-server-sdk", () => ({
   RoomServiceClient: vi.fn(function () {
     return { createRoom: mockCreateRoom };
   }),
+  AgentDispatchClient: vi.fn(function () {
+    return { createDispatch: mockCreateDispatch };
+  }),
   AccessToken: mockAccessToken,
-  // Plain carriers — the real protobuf classes add nothing this test needs.
-  RoomConfiguration: vi.fn(function (this: Record<string, unknown>, init: object) {
-    Object.assign(this, init);
-  }),
-  RoomAgentDispatch: vi.fn(function (this: Record<string, unknown>, init: object) {
-    Object.assign(this, init);
-  }),
 }));
-
-/** The token minted by the most recent grant call. */
-function lastToken(): FakeToken {
-  return issuedTokens[issuedTokens.length - 1] as unknown as FakeToken;
-}
 
 import {
   createScreeningRoomGrant,
@@ -122,11 +103,9 @@ describe("createScreeningRoomGrant", () => {
   // Each flow summons exactly its own worker; a screening room must never pull
   // in the video interviewer.
   it("summons the screening agent by name, not the interview agent", async () => {
-    await createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" });
+    const grant = await createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" });
 
-    expect(lastToken().roomConfig?.agents).toEqual([
-      expect.objectContaining({ agentName: SCREENING_AGENT_NAME }),
-    ]);
+    expect(mockCreateDispatch).toHaveBeenCalledWith(grant.roomName, SCREENING_AGENT_NAME);
   });
 });
 
@@ -184,11 +163,24 @@ describe("createInterviewRoomGrant", () => {
   // as the screening worker and LiveKit gives interview rooms to whichever it
   // picks — the "the interviewer didn't join" failure.
   it("summons the interview agent by name so the screening worker can't take the job", async () => {
-    await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
 
-    expect(lastToken().roomConfig?.agents).toEqual([
-      expect.objectContaining({ agentName: INTERVIEW_AGENT_NAME }),
-    ]);
+    expect(mockCreateDispatch).toHaveBeenCalledWith(grant.roomName, INTERVIEW_AGENT_NAME);
+  });
+
+  // Regression: a RoomConfiguration on the join token is silently ignored when
+  // the room already exists, and we always createRoom first for the metadata.
+  // Measured against a live LiveKit project: dispatch list empty, no agent ever
+  // joined. The dispatch must be an explicit call against the created room.
+  it("dispatches against the room it just created, not via the join token", async () => {
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
+
+    const createdRoom = mockCreateRoom.mock.calls[0][0].name;
+    expect(createdRoom).toBe(grant.roomName);
+    expect(mockCreateDispatch).toHaveBeenCalledWith(createdRoom, INTERVIEW_AGENT_NAME);
+    expect(mockCreateRoom.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateDispatch.mock.invocationCallOrder[0],
+    );
   });
 
   // A name only dispatches if the worker registered under the SAME string; the

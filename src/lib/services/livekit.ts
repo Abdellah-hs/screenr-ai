@@ -1,10 +1,5 @@
 import { randomBytes } from "node:crypto";
-import {
-  AccessToken,
-  RoomAgentDispatch,
-  RoomConfiguration,
-  RoomServiceClient,
-} from "livekit-server-sdk";
+import { AccessToken, AgentDispatchClient, RoomServiceClient } from "livekit-server-sdk";
 
 /**
  * LiveKit room service for the candidate voice screening.
@@ -76,6 +71,32 @@ const INTERVIEW_TOKEN_TTL = "45m";
 export const INTERVIEW_AGENT_NAME = "screenr-interview";
 export const SCREENING_AGENT_NAME = "screenr-screening";
 
+/**
+ * Summon a named worker into a room that already exists.
+ *
+ * It must be an explicit dispatch call. A `RoomConfiguration` attached to the
+ * candidate's join token does NOT work here: that only takes effect when the
+ * join itself creates the room, and we always `createRoom` first to attach the
+ * instructions metadata. Measured — with the token carrying a valid dispatch
+ * request, the room's dispatch list came back empty and no agent ever joined.
+ *
+ * Throws rather than failing quietly: a room with no interviewer in it is
+ * useless, and surfacing it now beats leaving the candidate watching a silent
+ * screen until the client's join timeout gives up.
+ */
+async function dispatchAgent(
+  args: { serverUrl: string; apiKey: string; apiSecret: string },
+  roomName: string,
+  agentName: string,
+): Promise<void> {
+  const dispatchClient = new AgentDispatchClient(
+    args.serverUrl,
+    args.apiKey,
+    args.apiSecret,
+  );
+  await dispatchClient.createDispatch(roomName, agentName);
+}
+
 function requireEnv(name: "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRET"): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not configured`);
@@ -127,11 +148,8 @@ export async function createScreeningRoomGrant(args: {
     canPublishData: true,
   });
 
-  // Summon the screening worker by name on the candidate's join (see
-  // SCREENING_AGENT_NAME) — never the interview worker.
-  token.roomConfig = new RoomConfiguration({
-    agents: [new RoomAgentDispatch({ agentName: SCREENING_AGENT_NAME })],
-  });
+  // Summon the screening worker by name — never the interview worker.
+  await dispatchAgent({ serverUrl, apiKey, apiSecret }, roomName, SCREENING_AGENT_NAME);
 
   return {
     serverUrl,
@@ -186,12 +204,10 @@ export async function createInterviewRoomGrant(args: {
     canPublishData: true,
   });
 
-  // Summon the interview worker by name when the candidate joins. Tying dispatch
-  // to the join (rather than to room creation) means an abandoned link never
-  // leaves an agent — and a paid Realtime session — sitting in an empty room.
-  token.roomConfig = new RoomConfiguration({
-    agents: [new RoomAgentDispatch({ agentName: INTERVIEW_AGENT_NAME })],
-  });
+  // Summon the interview worker by name. This fires as the grant is minted, so
+  // the agent is already joining while the browser connects; an abandoned link
+  // leaves it briefly alone in the room until `emptyTimeout` closes it.
+  await dispatchAgent({ serverUrl, apiKey, apiSecret }, roomName, INTERVIEW_AGENT_NAME);
 
   return {
     serverUrl,
