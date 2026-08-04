@@ -32,6 +32,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the templates are documentation, not secrets. `.env*` was swallowing
+# them, so `agents/*/README.md` told you to `cp .env.example .env` for a file
+# that had never been committed — a fresh clone could not set up either worker.
+# These hold placeholder URLs and empty values only; real secrets stay ignored.
+!.env.example
 
 # vercel
 .vercel
