@@ -451,11 +451,7 @@ export async function saveScreeningProctoringReport(
   report: ProctoringReport,
   db: SupabaseDb
 ): Promise<void> {
-  // `proctoring` is newer than the generated types; the same escape hatch the
-  // rest of this file uses for query chains. Drops out after `gen types`.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const q = db as any;
-  const { error } = await q
+  const { error } = await db
     .from("screening_question_responses")
     .update({ proctoring: report as unknown as Json })
     .eq("application_id", applicationId)
