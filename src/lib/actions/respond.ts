@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import { z } from "zod/v4";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import { screeningAnswerSubmissionSchema } from "@/lib/validations";
+import { screeningAnswerSubmissionSchema, proctoringEventsSchema } from "@/lib/validations";
 import { fetchApplicationForResponse } from "@/lib/data/candidates";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import type { CampaignStatus } from "@/lib/constants";
@@ -18,6 +18,7 @@ import {
   markScreeningResponseExpired,
   type ScreeningQuestionRow,
   type VoiceTranscriptTurn,
+  saveScreeningProctoringReport,
 } from "@/lib/data/screening-questions";
 import { runScreeningScoring } from "./score-screening-response";
 import {
@@ -33,6 +34,8 @@ import {
   type ScreeningRoomGrant,
 } from "@/lib/services/livekit";
 import { transitionApplication } from "@/lib/data/transitions";
+import { summarizeProctoring } from "@/lib/proctoring/incidents";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 const VOICE_RATE_LIMIT = {
   maxRequests: 10,
@@ -378,6 +381,7 @@ async function expireScreeningResponse(applicationId: string): Promise<void> {
  */
 export async function submitVoiceScreening(input: {
   token: string;
+  proctoringEvents?: unknown;
 }): Promise<{ ok: true }> {
   const { application_id } = verifyResponseToken(input.token);
 
@@ -409,6 +413,10 @@ export async function submitVoiceScreening(input: {
   const app = await fetchApplicationForResponse(application_id);
   if (app) assertCampaignAcceptingResponses(app.campaign_status);
 
+  // Before saveVoiceTranscript — the proctoring write is guarded to `sent`, and
+  // saving the transcript is what flips the row to `responded`.
+  await tryRecordScreeningProctoring(application_id, input.proctoringEvents);
+
   await saveVoiceTranscript(application_id, transcript);
 
   await tryTransition(
@@ -424,6 +432,49 @@ export async function submitVoiceScreening(input: {
   after(() => autoScoreScreening(application_id));
 
   return { ok: true };
+}
+
+/**
+ * Persist the browser's proctoring observations for a finished voice screening.
+ *
+ * Screening is the stage a candidate has the most reason to game — the question
+ * is asked before the answer is given, and "hold on a second" costs nothing — so
+ * tab-focus evidence is worth capturing here even though this stage can only
+ * ever have the browser half of it. There is no camera in a voice call, so
+ * nothing corroborates what the client reports: a candidate who edits the
+ * payload produces a clean report. That is a real limit of the signal, not a bug
+ * to fix here, and the recruiter UI states it rather than implying certainty.
+ *
+ * Best-effort throughout, mirroring the interview: an absent report leaves the
+ * column null (rendered as "not captured", never as "clean"), a malformed one is
+ * logged and discarded, and neither can cost the candidate their screening.
+ * Rejecting bad input would buy nothing — `[]` is always available to anyone
+ * who wants a clean report.
+ */
+async function tryRecordScreeningProctoring(
+  applicationId: string,
+  rawEvents: unknown,
+): Promise<void> {
+  if (rawEvents === undefined || rawEvents === null) return;
+
+  const parsed = proctoringEventsSchema.safeParse(rawEvents);
+  if (!parsed.success) {
+    console.warn(
+      `Discarding malformed screening proctoring report for ${applicationId}:`,
+      parsed.error.message,
+    );
+    return;
+  }
+
+  try {
+    const report = summarizeProctoring(parsed.data);
+    await saveScreeningProctoringReport(applicationId, report, createAdminClient());
+  } catch (err) {
+    console.error(
+      `Failed to save screening proctoring report for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 }
 
 /**

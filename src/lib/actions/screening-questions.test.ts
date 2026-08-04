@@ -94,6 +94,7 @@ function responseRow(over: Partial<ScreeningResponseRow> = {}): ScreeningRespons
     status: "responded",
     answers: [{ question_id: "q1", prompt: question.prompt, answer_text: "", score: null, rationale: null }],
     transcript: [],
+    proctoring: null,
     audio_url: null,
     overall_score: null,
     overall_rationale: null,
