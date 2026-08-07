@@ -213,6 +213,7 @@ The AI interviewer supports these interview formats (configurable per campaign):
 
 - The system generates a **full transcript** of the interview, captured server-side
 - Managers review the transcript alongside the score and the proctoring report as independent evidence
+- **Evidence snapshots (2026-08-04):** a proctoring finding stores the single frame that triggered it, annotated with what the detector saw, so a manager can check an automated claim instead of taking it on trust. Only flagged frames are kept, and any still not tied to a confirmed incident is deleted when the report is finalized — a clean interview stores no image at all
 
 #### 3.5.6 Interview Invitation (On-Demand)
 

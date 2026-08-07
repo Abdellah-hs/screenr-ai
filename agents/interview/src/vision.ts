@@ -36,6 +36,7 @@ import {
 import type { JobContext } from "@livekit/agents";
 import { detectFrame, preloadDetector } from "./detector.js";
 import type { OverlayBox } from "./postprocess.js";
+import { encodeSnapshot, snapshotCondition, type SnapshotCondition } from "./snapshot.js";
 
 /** One sampled frame's reading. Mirrors `VisionObservation` in the app. */
 export interface VisionObservation {
@@ -81,6 +82,20 @@ interface OverlayPacket {
   at: string;
   boxes: OverlayBox[];
 }
+
+/** Set `VISION_SNAPSHOTS=0` to stop capturing evidence stills entirely. */
+const SNAPSHOTS_ENABLED = (process.env.VISION_SNAPSHOTS ?? "1") !== "0";
+
+/**
+ * Minimum gap between stored snapshots of the SAME condition.
+ *
+ * A phone left on the desk for five minutes is one finding, not three hundred
+ * photographs of a candidate. One still every 30s is enough to show a recruiter
+ * that the condition persisted, and bounds a pathological interview to a couple
+ * of dozen small images.
+ */
+const SNAPSHOT_MIN_INTERVAL_MS =
+  Number(process.env.VISION_SNAPSHOT_INTERVAL_MS) || 30_000;
 
 /** A single frame lifted off the live track, in RGBA. */
 interface RawFrame {
@@ -141,6 +156,14 @@ async function publishOverlay(ctx: JobContext, packet: OverlayPacket): Promise<v
   }
 }
 
+/** One flagged frame, encoded for upload. The bytes are handed off and dropped. */
+export interface VisionSnapshot {
+  /** ISO timestamp of the frame — how the app matches it to an incident. */
+  at: string;
+  condition: SnapshotCondition;
+  jpeg: Buffer;
+}
+
 export interface VisionProctor {
   /** Every usable reading so far, oldest first. */
   observations: () => VisionObservation[];
@@ -163,12 +186,14 @@ export interface VisionProctor {
 export function startVisionProctoring(
   ctx: JobContext,
   onSample: (observations: VisionObservation[]) => void,
+  onSnapshot?: (snapshot: VisionSnapshot) => void,
 ): VisionProctor {
   const observations: VisionObservation[] = [];
   let videoTrack: RemoteTrack | null = null;
   let stopped = false;
   let busy = false;
   let lastRecordedMs = 0;
+  const lastSnapshotMs = new Map<SnapshotCondition, number>();
 
   // Warm the model while the candidate is still being greeted, so the first
   // sample isn't also paying the load cost.
@@ -227,6 +252,26 @@ export function startVisionProctoring(
         phone_count: reading.phone_count,
       });
       onSample([...observations]);
+
+      // Evidence still, only for a frame that actually carries a finding, and
+      // only if this condition hasn't been photographed recently. Deliberately
+      // hung off the RECORDED observation rather than the overlay tick: it must
+      // depict a frame that is in the report, and it inherits the confidence
+      // filtering that goes with it.
+      if (SNAPSHOTS_ENABLED && onSnapshot) {
+        const condition = snapshotCondition(reading);
+        const since = condition ? capturedMs - (lastSnapshotMs.get(condition) ?? 0) : 0;
+        if (condition && since >= SNAPSHOT_MIN_INTERVAL_MS) {
+          lastSnapshotMs.set(condition, capturedMs);
+          const jpeg = await encodeSnapshot(
+            frame.data,
+            frame.width,
+            frame.height,
+            reading.boxes,
+          );
+          if (jpeg) onSnapshot({ at, condition, jpeg });
+        }
+      }
     } catch (err) {
       // Never let a sampling failure surface into the interview.
       console.error(

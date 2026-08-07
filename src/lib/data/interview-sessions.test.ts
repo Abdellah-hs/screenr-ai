@@ -24,6 +24,8 @@ import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
   markInterviewStarted,
+  appendProctoringSnapshot,
+  saveProctoringSnapshots,
   saveProctoringReport,
   saveInterviewTranscriptDraft,
   saveVisionObservationsDraft,
@@ -259,6 +261,89 @@ describe("saveInterviewScore", () => {
         db as never,
       ),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("appendProctoringSnapshot", () => {
+  const snapshot = {
+    at: "2026-08-04T12:00:00.000Z",
+    condition: "multiple_people" as const,
+    key: "camp/app/1.jpg",
+  };
+
+  // Append, not overwrite: each image is uploaded once and the row only carries
+  // its key, so re-sending the whole set would mean re-uploading every image.
+  it("appends to the existing draft rather than replacing it", async () => {
+    useResult({
+      data: {
+        status: "in_progress",
+        proctoring_snapshots: [
+          { at: "2026-08-04T11:59:00.000Z", condition: "phone_visible", key: "camp/app/0.jpg" },
+        ],
+      },
+      error: null,
+    });
+
+    const ok = await appendProctoringSnapshot("app-1", snapshot, db as never);
+
+    expect(ok).toBe(true);
+    expect(chain.update).toHaveBeenCalledWith({
+      proctoring_snapshots: [
+        { at: "2026-08-04T11:59:00.000Z", condition: "phone_visible", key: "camp/app/0.jpg" },
+        snapshot,
+      ],
+    });
+    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+  });
+
+  it("starts a draft when the session has none yet", async () => {
+    useResult({ data: { status: "invited", proctoring_snapshots: null }, error: null });
+
+    await appendProctoringSnapshot("app-1", snapshot, db as never);
+
+    expect(chain.update).toHaveBeenCalledWith({ proctoring_snapshots: [snapshot] });
+  });
+
+  // The caller deletes the object it just uploaded when this returns false, so
+  // a finished interview never accumulates images nothing references.
+  it("reports failure without writing when the session is closed", async () => {
+    useResult({ data: { status: "completed", proctoring_snapshots: [] }, error: null });
+
+    const ok = await appendProctoringSnapshot("app-1", snapshot, db as never);
+
+    expect(ok).toBe(false);
+    expect(chain.update).not.toHaveBeenCalled();
+  });
+
+  it("reports failure when there is no session at all", async () => {
+    useResult({ data: null, error: null });
+
+    expect(await appendProctoringSnapshot("app-1", snapshot, db as never)).toBe(false);
+  });
+
+  it("throws when the read fails", async () => {
+    useResult({ data: null, error: new Error("boom") });
+
+    await expect(
+      appendProctoringSnapshot("app-1", snapshot, db as never),
+    ).rejects.toThrow("boom");
+  });
+});
+
+describe("saveProctoringSnapshots", () => {
+  it("replaces the draft index only while the session is still open", async () => {
+    await saveProctoringSnapshots("app-1", [], db as never);
+
+    expect(chain.update).toHaveBeenCalledWith({ proctoring_snapshots: [] });
+    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+  });
+
+  it("throws when the write fails", async () => {
+    useResult({ error: new Error("nope") });
+
+    await expect(
+      saveProctoringSnapshots("app-1", [], db as never),
+    ).rejects.toThrow("nope");
   });
 });
 

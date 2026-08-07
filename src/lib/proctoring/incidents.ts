@@ -152,6 +152,19 @@ export interface VisionObservation {
   phone_count: number;
 }
 
+/**
+ * One annotated still captured while a condition held, as reported by the
+ * worker. `key` is an object key in the private `proctoring-snapshots` bucket —
+ * never a URL, so the image is only ever reachable through a short-lived signed
+ * URL minted for the owning recruiter.
+ */
+export interface ProctoringSnapshot {
+  /** ISO timestamp of the frame — how a snapshot is matched to an incident. */
+  at: string;
+  condition: VisionIncidentType;
+  key: string;
+}
+
 /** An event that cleared the noise threshold, with its severity decided here. */
 export interface ProctoringIncident {
   type: ProctoringIncidentType;
@@ -161,6 +174,13 @@ export interface ProctoringIncident {
   duration_ms: number;
   severity: ProctoringSeverity;
   source: ProctoringSource;
+  /**
+   * Object key of a still captured while this incident was running, when one
+   * exists. Optional on purpose: browser-signal incidents have no image, older
+   * reports predate snapshots, and snapshotting is best-effort — an incident
+   * without a picture is still a valid incident.
+   */
+  snapshot_key?: string;
 }
 
 export interface ProctoringSummary {
@@ -334,6 +354,58 @@ function totalFor(
  * `summary.vision_sampled` records which, so absent evidence is never rendered
  * as clean evidence.
  */
+/**
+ * Attach one evidence still to each vision incident, and report which stills
+ * belong to nothing.
+ *
+ * The worker captures while a condition holds, but only the rule layer knows
+ * which of those conditions survived the thresholds. A stray frame that never
+ * became an incident leaves an orphaned image — and since that frame is, by
+ * definition, one the system was wrong about, keeping a photograph of the
+ * candidate for it is the worst possible outcome. The caller deletes every key
+ * returned in `orphanedKeys`.
+ *
+ * One still per incident, the earliest inside its window: the onset is the
+ * informative frame, and the incident's own duration already says how long it
+ * went on. Keeping fewer images of a candidate is the better default.
+ *
+ * Pure: matching only, no I/O. Deleting the orphans is the action's job.
+ */
+export function attachSnapshots(
+  report: ProctoringReport,
+  snapshots: ProctoringSnapshot[],
+): { report: ProctoringReport; orphanedKeys: string[] } {
+  const claimed = new Set<string>();
+
+  const incidents = report.incidents.map((incident) => {
+    if (incident.source !== "vision") return incident;
+
+    const startTs = Date.parse(incident.at);
+    if (Number.isNaN(startTs)) return incident;
+    const endTs = startTs + incident.duration_ms;
+
+    const match = snapshots
+      .filter(
+        (s) =>
+          !claimed.has(s.key) &&
+          s.condition === incident.type &&
+          !Number.isNaN(Date.parse(s.at)) &&
+          Date.parse(s.at) >= startTs &&
+          Date.parse(s.at) <= endTs,
+      )
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
+
+    if (!match) return incident;
+    claimed.add(match.key);
+    return { ...incident, snapshot_key: match.key };
+  });
+
+  return {
+    report: { ...report, incidents },
+    orphanedKeys: snapshots.filter((s) => !claimed.has(s.key)).map((s) => s.key),
+  };
+}
+
 export function summarizeProctoring(
   events: ProctoringEvent[],
   observations: VisionObservation[] = [],

@@ -686,6 +686,7 @@ export type Database = {
           id: string
           proctoring: Json | null
           proctoring_observations: Json | null
+          proctoring_snapshots: Json | null
           scores: Json | null
           started_at: string | null
           status: Database["public"]["Enums"]["interview_session_status_enum"]
@@ -700,6 +701,7 @@ export type Database = {
           id?: string
           proctoring?: Json | null
           proctoring_observations?: Json | null
+          proctoring_snapshots?: Json | null
           scores?: Json | null
           started_at?: string | null
           status?: Database["public"]["Enums"]["interview_session_status_enum"]
@@ -714,6 +716,7 @@ export type Database = {
           id?: string
           proctoring?: Json | null
           proctoring_observations?: Json | null
+          proctoring_snapshots?: Json | null
           scores?: Json | null
           started_at?: string | null
           status?: Database["public"]["Enums"]["interview_session_status_enum"]

@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  attachSnapshots,
   summarizeProctoring,
   CAMERA_OFF_MIN_MS,
   TAB_BLUR_MIN_MS,
   type ProctoringEvent,
+  type VisionIncidentType,
   type VisionObservation,
 } from "./incidents";
 
@@ -313,6 +315,103 @@ describe("summarizeProctoring — vision observations", () => {
     expect(report.incidents.map((i) => i.source)).toEqual(["vision", "client"]);
     expect(report.summary.person_absent_count).toBe(1);
     expect(report.summary.tab_blur_count).toBe(1);
+  });
+
+  /**
+   * Evidence stills. The load-bearing property is the prune: the worker captures
+   * while a condition holds, but only the rules know which conditions survived —
+   * so a still for a frame that never became an incident is a photograph of a
+   * candidate the system was WRONG about, and must not be kept.
+   */
+  describe("attachSnapshots", () => {
+    function snapshot(atMs: number, condition: VisionIncidentType, key: string) {
+      return { at: new Date(T0 + atMs).toISOString(), condition, key };
+    }
+
+    it("attaches a still captured inside a confirmed incident", () => {
+      const report = summarizeProctoring([], samples(0, 4)); // 0–30s absence
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(10_000, "person_absent", "camp/app/1.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBe("camp/app/1.jpg");
+      expect(orphanedKeys).toEqual([]);
+    });
+
+    it("orphans a still whose condition never cleared the threshold", () => {
+      // One stray frame — never an incident, so its picture is evidence of
+      // nothing and gets deleted.
+      const report = summarizeProctoring([], [
+        ...samples(1, 2),
+        ...samples(0, 1, { startMs: 20_000 }),
+      ]);
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(20_000, "person_absent", "camp/app/stray.jpg"),
+      ]);
+
+      expect(withSnaps.incidents).toEqual([]);
+      expect(orphanedKeys).toEqual(["camp/app/stray.jpg"]);
+    });
+
+    it("does not attach a still of a different condition", () => {
+      const report = summarizeProctoring([], samples(0, 4));
+      const { orphanedKeys } = attachSnapshots(report, [
+        snapshot(10_000, "phone_visible", "camp/app/phone.jpg"),
+      ]);
+
+      expect(orphanedKeys).toEqual(["camp/app/phone.jpg"]);
+    });
+
+    it("does not attach a still taken outside the incident's window", () => {
+      const report = summarizeProctoring([], samples(0, 4)); // spans 0–30s
+      const { orphanedKeys } = attachSnapshots(report, [
+        snapshot(120_000, "person_absent", "camp/app/late.jpg"),
+      ]);
+
+      expect(orphanedKeys).toEqual(["camp/app/late.jpg"]);
+    });
+
+    it("keeps the earliest still and orphans the rest of the same incident", () => {
+      const report = summarizeProctoring([], samples(0, 8)); // 0–70s absence
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(40_000, "person_absent", "camp/app/late.jpg"),
+        snapshot(10_000, "person_absent", "camp/app/early.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBe("camp/app/early.jpg");
+      expect(orphanedKeys).toEqual(["camp/app/late.jpg"]);
+    });
+
+    it("never attaches a still to a browser-signal incident", () => {
+      const report = summarizeProctoring([event({ duration_ms: 20_000 })], []);
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(0, "person_absent", "camp/app/1.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBeUndefined();
+      expect(orphanedKeys).toEqual(["camp/app/1.jpg"]);
+    });
+
+    it("gives two incidents two different stills", () => {
+      // Two people AND a phone throughout: two incidents, one picture each.
+      const report = summarizeProctoring([], samples(2, 4, { phoneCount: 1 }));
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(10_000, "multiple_people", "camp/app/people.jpg"),
+        snapshot(10_000, "phone_visible", "camp/app/phone.jpg"),
+      ]);
+
+      const keys = withSnaps.incidents.map((i) => i.snapshot_key).sort();
+      expect(keys).toEqual(["camp/app/people.jpg", "camp/app/phone.jpg"]);
+      expect(orphanedKeys).toEqual([]);
+    });
+
+    it("leaves a report untouched when nothing was captured", () => {
+      const report = summarizeProctoring([], samples(0, 4));
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, []);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBeUndefined();
+      expect(orphanedKeys).toEqual([]);
+    });
   });
 
   it("labels every incident with the evidence it came from", () => {

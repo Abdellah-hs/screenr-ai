@@ -1,4 +1,5 @@
-import type { InterviewSessionRow, InterviewScore } from "@/lib/data/interview-sessions";
+import type { InterviewScore } from "@/lib/data/interview-sessions";
+import type { InterviewSessionView } from "@/lib/actions/interview";
 import { ProctoringReportPanel } from "./proctoring-report";
 
 function scoreColor(score: number | null): string {
@@ -14,14 +15,14 @@ function scoreColor(score: number | null): string {
  * independent evidence shown side by side — per CLAUDE.md there is no rollup.
  * Renders nothing until there's a session worth showing.
  *
- * The interview is never recorded, so the transcript and the proctoring report
- * are the entire record of the call — which is exactly why the proctoring panel
- * carries a fallibility note rather than pointing at footage to check.
+ * The interview is never recorded, so the transcript, the proctoring report, and
+ * the single frames captured for each camera finding are the entire record of
+ * the call.
  */
 export default function InterviewTranscript({
   session,
 }: {
-  session: InterviewSessionRow | null;
+  session: InterviewSessionView | null;
 }) {
   // Nothing to review until the candidate has at least started. An `invited`
   // session with an empty transcript is just a pending link — the pipeline
@@ -47,6 +48,7 @@ export default function InterviewTranscript({
         report={session.proctoring}
         stage="interview"
         showWhenAbsent={session.status === "completed"}
+        snapshotUrls={session.snapshot_urls}
       />
 
       {transcript.length > 0 ? (
@@ -175,7 +177,7 @@ function formatDate(iso: string | null): string {
   });
 }
 
-function StatusLine({ session }: { session: InterviewSessionRow }) {
+function StatusLine({ session }: { session: InterviewSessionView }) {
   switch (session.status) {
     case "invited":
       return <p className="text-xs text-[#6B7280] mt-1">Invited · Awaiting the candidate</p>;

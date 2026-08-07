@@ -1,7 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type { Json } from "@/types/database.types";
-import type { ProctoringReport, VisionObservation } from "@/lib/proctoring/incidents";
+import type {
+  ProctoringReport,
+  ProctoringSnapshot,
+  VisionObservation,
+} from "@/lib/proctoring/incidents";
 
 /**
  * Data layer for AI video-interview sessions (Phase A).
@@ -64,6 +68,11 @@ export interface InterviewSessionRow {
    * `proctoring` at submit.
    */
   proctoring_observations: VisionObservation[] | null;
+  /**
+   * Draft index of evidence stills captured during the call. Pruned to the
+   * confirmed incidents at submit — see `attachSnapshots`.
+   */
+  proctoring_snapshots: ProctoringSnapshot[] | null;
   expires_at: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -204,6 +213,81 @@ export async function saveVisionObservationsDraft(
   if (error) {
     throw new Error(
       `Failed to save vision observations: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+}
+
+/**
+ * Upload one evidence still and append it to the session's draft index.
+ *
+ * Append rather than overwrite (unlike the observation draft, which the worker
+ * re-sends whole): each image is uploaded once and the row only carries its key,
+ * so re-sending the whole set would mean re-uploading every image. The read
+ * → append → write is not atomic, but the only writer is a single serialized
+ * chain in one worker, so there is nothing to race with.
+ *
+ * Guarded to the open statuses like every other candidate-path write: a late
+ * report can't attach evidence to a finalized interview.
+ *
+ * Returns false when the session isn't open — the caller then deletes the object
+ * it just uploaded rather than leaving it orphaned in the bucket.
+ */
+export async function appendProctoringSnapshot(
+  applicationId: string,
+  snapshot: ProctoringSnapshot,
+  db: SupabaseDb,
+): Promise<boolean> {
+  const q = db as AnyDb;
+
+  const { data: existing, error: readError } = await q
+    .from("interview_sessions")
+    .select("proctoring_snapshots,status")
+    .eq("application_id", applicationId)
+    .maybeSingle();
+
+  if (readError) {
+    throw new Error(
+      `Failed to read snapshot draft: ${readError.message ?? JSON.stringify(readError)}`,
+    );
+  }
+  if (!existing || !OPEN_STATUSES.includes(existing.status)) return false;
+
+  const next = [...(existing.proctoring_snapshots ?? []), snapshot];
+
+  const { error } = await q
+    .from("interview_sessions")
+    .update({ proctoring_snapshots: next })
+    .eq("application_id", applicationId)
+    .in("status", [...OPEN_STATUSES]);
+
+  if (error) {
+    throw new Error(
+      `Failed to save proctoring snapshot: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+  return true;
+}
+
+/**
+ * Replace the draft snapshot index with the stills that survived pruning. Called
+ * at submit alongside the finalized report, so the row never points at an object
+ * that was just deleted from the bucket.
+ */
+export async function saveProctoringSnapshots(
+  applicationId: string,
+  snapshots: ProctoringSnapshot[],
+  db: SupabaseDb,
+): Promise<void> {
+  const q = db as AnyDb;
+  const { error } = await q
+    .from("interview_sessions")
+    .update({ proctoring_snapshots: snapshots })
+    .eq("application_id", applicationId)
+    .in("status", [...OPEN_STATUSES]);
+
+  if (error) {
+    throw new Error(
+      `Failed to save proctoring snapshots: ${error.message ?? JSON.stringify(error)}`,
     );
   }
 }

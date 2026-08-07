@@ -31,7 +31,11 @@ import {
 import * as openai from "@livekit/agents-plugin-openai";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
-import { startVisionProctoring, type VisionObservation } from "./vision.js";
+import {
+  startVisionProctoring,
+  type VisionObservation,
+  type VisionSnapshot,
+} from "./vision.js";
 
 /** Mirrors `InterviewTranscriptTurn` in the app (src/lib/data/interview-sessions.ts). */
 interface TranscriptTurn {
@@ -95,6 +99,47 @@ async function reportTranscript(applicationId: string, turns: TranscriptTurn[]):
     }
   } catch (err) {
     console.error("transcript report failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Upload one evidence still for a flagged frame.
+ *
+ * The image goes through the app rather than straight to storage on purpose:
+ * the worker already holds `AGENT_API_SECRET` and nothing more, so it never
+ * needs storage credentials, and the app stays the single place that decides
+ * where a candidate's image may be written.
+ *
+ * Best-effort, like every other report here — losing one costs a recruiter a
+ * thumbnail, never the interview.
+ */
+async function reportSnapshot(
+  applicationId: string,
+  snapshot: VisionSnapshot,
+): Promise<void> {
+  const origin = process.env.SCREENR_APP_ORIGIN;
+  const secret = process.env.AGENT_API_SECRET;
+  if (!origin || !secret) return;
+
+  try {
+    const res = await fetch(`${origin}/api/agent/interview/snapshot`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${secret}`,
+      },
+      body: JSON.stringify({
+        application_id: applicationId,
+        at: snapshot.at,
+        condition: snapshot.condition,
+        image_base64: snapshot.jpeg.toString("base64"),
+      }),
+    });
+    if (!res.ok) {
+      console.error(`snapshot upload failed (${res.status}) for ${applicationId}`);
+    }
+  } catch (err) {
+    console.error("snapshot upload failed:", err instanceof Error ? err.message : err);
   }
 }
 
@@ -184,11 +229,21 @@ export default defineAgent({
     // it can't react to them mid-interview. Serialized like the transcript so
     // two reports can't overwrite each other out of order.
     let visionReporting: Promise<void> = Promise.resolve();
-    const vision = startVisionProctoring(ctx, (observations) => {
-      visionReporting = visionReporting.then(() =>
-        reportVisionObservations(meta.application_id, observations),
-      );
-    });
+    const vision = startVisionProctoring(
+      ctx,
+      (observations) => {
+        visionReporting = visionReporting.then(() =>
+          reportVisionObservations(meta.application_id, observations),
+        );
+      },
+      (snapshot) => {
+        // Evidence stills ride the same serialized chain, so an upload can't
+        // race the observation report that gives it meaning.
+        visionReporting = visionReporting.then(() =>
+          reportSnapshot(meta.application_id, snapshot),
+        );
+      },
+    );
 
     // Final flush when the job winds down (candidate left / room closed).
     ctx.addShutdownCallback(async () => {

@@ -437,6 +437,31 @@ export const visionObservationsSchema = z
   .array(visionObservationSchema)
   .max(MAX_VISION_OBSERVATIONS);
 
+// Evidence snapshots: one annotated still per flagged frame, uploaded by the
+// worker over the same AGENT_API_SECRET-guarded boundary. Bounded hard because
+// this is the one agent report that carries bytes rather than numbers.
+
+/**
+ * ~50KB JPEG at the worker's 640px/q72 settings; base64 inflates by a third.
+ * 512KB leaves generous headroom for a busy frame while making it impossible to
+ * use this route to push anything of consequence into storage.
+ */
+const MAX_SNAPSHOT_BASE64_LENGTH = 512 * 1024;
+
+const snapshotConditionValues = [
+  "person_absent",
+  "multiple_people",
+  "phone_visible",
+] as const;
+
+export const proctoringSnapshotSchema = z.object({
+  at: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
+  condition: z.enum(snapshotConditionValues),
+  image_base64: z.string().min(1).max(MAX_SNAPSHOT_BASE64_LENGTH),
+});
+
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 
 // Recruiter approve/reject decision on a screening_review_pending application.

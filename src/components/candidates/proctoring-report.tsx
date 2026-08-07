@@ -31,10 +31,13 @@ export function ProctoringReportPanel({
   stage,
   /** Show the "nothing captured" note. Pass false while the stage is unfinished. */
   showWhenAbsent,
+  /** Snapshot key → signed URL, for camera findings that captured a still. */
+  snapshotUrls,
 }: {
   report: ProctoringReport | null;
   stage: ProctoringStage;
   showWhenAbsent: boolean;
+  snapshotUrls?: Record<string, string>;
 }) {
   const noun = stage === "interview" ? "interview" : "screening";
 
@@ -111,7 +114,15 @@ export function ProctoringReportPanel({
               </summary>
               <ol className="mt-1.5 space-y-1">
                 {report.incidents.map((incident, i) => (
-                  <IncidentTimelineRow key={`${incident.at}-${i}`} incident={incident} />
+                  <IncidentTimelineRow
+                    key={`${incident.at}-${i}`}
+                    incident={incident}
+                    snapshotUrl={
+                      incident.snapshot_key
+                        ? snapshotUrls?.[incident.snapshot_key]
+                        : undefined
+                    }
+                  />
                 ))}
               </ol>
             </details>
@@ -169,9 +180,10 @@ function Caveat({ stage }: { stage: ProctoringStage }) {
   return (
     <p className="mt-2 text-[11px] text-[#6B7280] leading-relaxed">
       Recorded for context only — proctoring does not affect the interview score or the
-      candidate&apos;s stage. Camera findings are automated estimates and can be wrong. The
-      interview is not recorded, so there is no footage to check them against — treat a
-      finding as a reason to ask the candidate, never as a conclusion on its own.
+      candidate&apos;s stage. Camera findings are automated estimates and can be wrong, so
+      check the captured frame before acting on one: the boxes show what the detector
+      claimed, not what is necessarily true. The interview itself is not recorded — only
+      these single frames are kept.
     </p>
   );
 }
@@ -264,22 +276,53 @@ function IncidentRow({
   );
 }
 
-function IncidentTimelineRow({ incident }: { incident: ProctoringIncident }) {
+function IncidentTimelineRow({
+  incident,
+  snapshotUrl,
+}: {
+  incident: ProctoringIncident;
+  snapshotUrl?: string;
+}) {
   return (
-    <li className="flex items-baseline justify-between gap-3 text-xs text-[#6B7280]">
-      <span className="tabular-nums shrink-0">{formatTime(incident.at)}</span>
-      <span className="flex-1 truncate">
-        {/* Fall back to the raw type so an incident stored under an older
-            report_version still names itself rather than rendering blank. */}
-        {INCIDENT_LABEL[incident.type] ?? incident.type}
-        <span className="ml-1.5 text-[#9CA3AF]">({SOURCE_LABEL[incident.source]})</span>
-      </span>
-      <span className="tabular-nums shrink-0">
-        {formatDuration(incident.duration_ms)}
-        {incident.severity === "critical" && (
-          <span className="ml-1.5 font-semibold text-[#DC2626]">Critical</span>
-        )}
-      </span>
+    <li className="text-xs text-[#6B7280]">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="tabular-nums shrink-0">{formatTime(incident.at)}</span>
+        <span className="flex-1 truncate">
+          {/* Fall back to the raw type so an incident stored under an older
+              report_version still names itself rather than rendering blank. */}
+          {INCIDENT_LABEL[incident.type] ?? incident.type}
+          <span className="ml-1.5 text-[#9CA3AF]">({SOURCE_LABEL[incident.source]})</span>
+        </span>
+        <span className="tabular-nums shrink-0">
+          {formatDuration(incident.duration_ms)}
+          {incident.severity === "critical" && (
+            <span className="ml-1.5 font-semibold text-[#DC2626]">Critical</span>
+          )}
+        </span>
+      </div>
+
+      {/* The frame the detector flagged, with its own boxes drawn on. This is
+          the only thing a recruiter can check an automated finding against —
+          there is no recording — so it opens full-size rather than making them
+          squint at a thumbnail. */}
+      {snapshotUrl && (
+        <a
+          href={snapshotUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1.5 mb-2 block w-fit rounded-md border border-[#E5E7EB] p-0.5 hover:border-[#0369A1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-colors duration-200"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- signed
+              storage URL with a short TTL; next/image would need the host
+              allow-listed and would proxy candidate images through the CDN. */}
+          <img
+            src={snapshotUrl}
+            alt={`Camera frame captured during: ${INCIDENT_LABEL[incident.type] ?? incident.type}`}
+            className="h-24 w-auto rounded"
+            loading="lazy"
+          />
+        </a>
+      )}
     </li>
   );
 }

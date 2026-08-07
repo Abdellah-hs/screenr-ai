@@ -45,6 +45,72 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
   return data.signedUrl;
 }
 
+/** The private bucket holding proctoring evidence stills. */
+const SNAPSHOT_BUCKET = "proctoring-snapshots";
+
+/**
+ * Upload one proctoring evidence still and return its object key.
+ *
+ * Key layout `<campaign>/<application>/<epoch>.jpg` puts the campaign id in the
+ * first path segment, which is what the bucket's owner-scoped RLS keys off —
+ * the same convention as `resumes`. Uploaded with the admin client from the
+ * agent route, so it bypasses RLS on write; the recruiter read path is what the
+ * policies govern.
+ */
+export async function uploadProctoringSnapshot(
+  args: {
+    campaignId: string;
+    applicationId: string;
+    at: string;
+    image: Buffer;
+  },
+  db: SupabaseDb,
+): Promise<string> {
+  const stamp = Number.isNaN(Date.parse(args.at)) ? Date.now() : Date.parse(args.at);
+  const key = `${args.campaignId}/${args.applicationId}/${stamp}.jpg`;
+
+  const { error } = await db.storage
+    .from(SNAPSHOT_BUCKET)
+    .upload(key, args.image, { contentType: "image/jpeg", upsert: true });
+
+  if (error) throw error;
+  return key;
+}
+
+/**
+ * Delete evidence stills by key. Used to prune snapshots that didn't land inside
+ * a confirmed incident — the images behind the detector's own false positives.
+ * Best-effort at the call site; a failure here leaves an unreferenced object,
+ * never a broken report.
+ */
+export async function deleteProctoringSnapshots(
+  keys: string[],
+  db: SupabaseDb,
+): Promise<void> {
+  if (keys.length === 0) return;
+  const { error } = await db.storage.from(SNAPSHOT_BUCKET).remove(keys);
+  if (error) throw error;
+}
+
+/**
+ * Time-limited signed URL for one evidence still, for the recruiter's report.
+ * Mirrors `getResumeSignedUrl`: the stored value is a private object KEY, never
+ * a URL, so an image is only ever reachable through a fresh short-lived link.
+ */
+export async function getProctoringSnapshotSignedUrl(
+  key: string,
+): Promise<string | null> {
+  if (!key) return null;
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.storage
+    .from(SNAPSHOT_BUCKET)
+    .createSignedUrl(key, 3600);
+
+  if (error || !data) return null;
+  return data.signedUrl;
+}
+
 /**
  * Insert a candidate from parsed resume data, flagging duplicates instead of
  * auto-merging.

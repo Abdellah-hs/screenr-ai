@@ -67,6 +67,36 @@ The overlay runs its own faster cadence (`VISION_OVERLAY_INTERVAL_MS`, default
 stored evidence — and every threshold expressed against it — is unchanged by how
 smooth the overlay looks.
 
+### Evidence snapshots
+
+When a frame is flagged, the worker encodes **that one frame** as a small
+annotated JPEG (`src/snapshot.ts`) and posts it to
+`/api/agent/interview/snapshot`, which stores it in a private bucket and keeps
+only the object key on the session.
+
+This restores something removing the recording took away: a recruiter reading
+"more than one person on camera" had no way to check it, and an automated
+finding nobody can verify is a bad thing to put in front of a hiring decision.
+
+It is scoped so it can't drift back into surveillance:
+
+- **Only flagged frames are encoded.** A clean interview stores no image at all.
+- **One still per condition per 30s** (`VISION_SNAPSHOT_INTERVAL_MS`) — a phone
+  on the desk for five minutes is one finding, not 300 photographs.
+- **Unconfirmed stills are deleted.** The worker captures while a condition
+  holds; only the app's rule layer knows which conditions survived the
+  thresholds. At submit, anything outside a confirmed incident is removed — so
+  the frames behind the detector's *own false positives* are exactly the ones
+  thrown away.
+- **The image never becomes a verdict.** The route accepts no severity and no
+  incident type, same as the counts.
+
+Boxes are drawn on the stored image on purpose: a bare photo of a candidate says
+nothing, while one labelled `person 0.91 / phone 0.63` shows the reader what was
+actually claimed and lets them disagree with it.
+
+`VISION_SNAPSHOTS=0` turns capture off entirely.
+
 ### Tuning
 
 The pure decision maths lives in `src/postprocess.ts` and is unit-tested

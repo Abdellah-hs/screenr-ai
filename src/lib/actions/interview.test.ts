@@ -10,6 +10,8 @@ const {
   mockEnsureSession,
   mockMarkStarted,
   mockSaveProctoring,
+  mockSaveSnapshots,
+  mockDeleteSnapshots,
   mockFinalize,
   mockCreateGrant,
   mockTransition,
@@ -25,6 +27,8 @@ const {
   mockEnsureSession: vi.fn(),
   mockMarkStarted: vi.fn(),
   mockSaveProctoring: vi.fn(),
+  mockSaveSnapshots: vi.fn(),
+  mockDeleteSnapshots: vi.fn(),
   mockFinalize: vi.fn(),
   mockCreateGrant: vi.fn(),
   mockTransition: vi.fn(),
@@ -40,12 +44,15 @@ vi.mock("next/headers", () => ({ headers: mockHeaders }));
 vi.mock("@/lib/data/candidates", () => ({
   fetchInterviewContextByApplicationId: mockFetchInterviewContext,
   fetchInterviewScoringContext: vi.fn(),
+  deleteProctoringSnapshots: mockDeleteSnapshots,
+  getProctoringSnapshotSignedUrl: vi.fn(),
 }));
 vi.mock("@/lib/data/interview-sessions", () => ({
   fetchInterviewSessionByApplicationId: mockFetchSession,
   ensureInterviewSession: mockEnsureSession,
   markInterviewStarted: mockMarkStarted,
   saveProctoringReport: mockSaveProctoring,
+  saveProctoringSnapshots: mockSaveSnapshots,
   finalizeInterviewTranscript: mockFinalize,
 }));
 vi.mock("@/lib/services/livekit", () => ({ createInterviewRoomGrant: mockCreateGrant }));
@@ -355,6 +362,80 @@ describe("submitInterview proctoring", () => {
     const [, report] = mockSaveProctoring.mock.calls[0];
     expect(report.summary.person_absent_count).toBe(1);
     expect(report.summary.tab_blur_count).toBe(0);
+  });
+
+  // Evidence stills. The worker captures while a condition holds, but only the
+  // rules know which conditions survived — so a still for a frame that never
+  // became an incident is a picture of a candidate the system was WRONG about.
+  it("keeps the still that belongs to a confirmed incident", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [
+        { at: "2026-07-29T10:00:00.000Z", person_count: 2, confidence: 0.9, phone_count: 0 },
+        { at: "2026-07-29T10:00:10.000Z", person_count: 2, confidence: 0.9, phone_count: 0 },
+        { at: "2026-07-29T10:00:20.000Z", person_count: 2, confidence: 0.9, phone_count: 0 },
+      ],
+      proctoring_snapshots: [
+        { at: "2026-07-29T10:00:10.000Z", condition: "multiple_people", key: "c/a/1.jpg" },
+      ],
+    });
+
+    await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.incidents[0].snapshot_key).toBe("c/a/1.jpg");
+    expect(mockDeleteSnapshots).toHaveBeenCalledWith([], expect.anything());
+  });
+
+  it("deletes the still for a sighting that never became an incident", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      // A single stray frame — never an incident.
+      proctoring_observations: [
+        { at: "2026-07-29T10:00:00.000Z", person_count: 1, confidence: 0.9, phone_count: 0 },
+        { at: "2026-07-29T10:00:10.000Z", person_count: 1, confidence: 0.9, phone_count: 1 },
+        { at: "2026-07-29T10:00:20.000Z", person_count: 1, confidence: 0.9, phone_count: 0 },
+      ],
+      proctoring_snapshots: [
+        { at: "2026-07-29T10:00:10.000Z", condition: "phone_visible", key: "c/a/stray.jpg" },
+      ],
+    });
+
+    await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    expect(mockDeleteSnapshots).toHaveBeenCalledWith(["c/a/stray.jpg"], expect.anything());
+    expect(mockSaveSnapshots).toHaveBeenCalledWith("app-1", [], expect.anything());
+  });
+
+  it("cleans up stills even when there is no report to write at all", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [],
+      proctoring_snapshots: [
+        { at: "2026-07-29T10:00:10.000Z", condition: "phone_visible", key: "c/a/orphan.jpg" },
+      ],
+    });
+
+    await submitInterview({ token: "tok" });
+
+    expect(mockSaveProctoring).not.toHaveBeenCalled();
+    expect(mockDeleteSnapshots).toHaveBeenCalledWith(["c/a/orphan.jpg"], expect.anything());
+  });
+
+  it("still completes the interview when pruning stills fails", async () => {
+    mockDeleteSnapshots.mockRejectedValueOnce(new Error("storage down"));
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [],
+      proctoring_snapshots: [
+        { at: "2026-07-29T10:00:10.000Z", condition: "phone_visible", key: "c/a/orphan.jpg" },
+      ],
+    });
+
+    const result = await submitInterview({ token: "tok" });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockFinalize).toHaveBeenCalled();
   });
 
   it("writes nothing when neither the browser nor the worker reported anything", async () => {
