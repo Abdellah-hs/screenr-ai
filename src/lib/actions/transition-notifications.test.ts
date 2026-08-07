@@ -119,6 +119,16 @@ describe("sendTransitionNotification", () => {
     expect(mockSendEmail.mock.calls[0][1].text).toContain("not to move forward");
   });
 
+  it("emails the candidate a congratulations note on transition to hired", async () => {
+    await sendTransitionNotification("app-1", "hired", USER_ID);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    const sent = mockSendEmail.mock.calls[0][1];
+    expect(sent.to).toBe("jane@example.com");
+    expect(sent.subject).toContain("Senior Engineer");
+    expect(sent.text).toContain("Congratulations");
+  });
+
   it("sends nothing for a state with no candidate-facing notification", async () => {
     await sendTransitionNotification("app-1", "screening_scored", USER_ID);
 

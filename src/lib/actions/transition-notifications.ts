@@ -14,6 +14,7 @@ import { buildInterviewAdvanceEmail } from "@/lib/services/email-templates/inter
 import { buildInterviewInviteEmail } from "@/lib/services/email-templates/interview-invite";
 import { buildInterviewSchedulingEmail } from "@/lib/services/email-templates/interview-scheduling";
 import { buildRejectScreeningEmail } from "@/lib/services/email-templates/reject-screening";
+import { buildHiredEmail } from "@/lib/services/email-templates/hired";
 import type { BuiltEmail } from "@/lib/services/email-templates/shared";
 
 interface TransitionEmailContext {
@@ -35,6 +36,8 @@ interface TransitionEmailContext {
  *     link — replaced by the real AI-interview invite when that flow ships)
  *   - final_interview_scheduling → self-scheduling invite for the final human
  *     interview (carries the booking link)
+ *   - hired                      → congratulations email (the formal offer
+ *     follows from a human — this states no terms)
  *   - rejected                   → rejection email
  *
  * The interview-confirmation and reminder templates also exist; confirmation
@@ -71,6 +74,8 @@ function buildTransitionEmail(
         campaignTitle: ctx.campaignTitle,
         scheduleUrl: ctx.scheduleUrl,
       });
+    case "hired":
+      return buildHiredEmail(ctx);
     case "rejected":
       return buildRejectScreeningEmail(ctx);
     default:
