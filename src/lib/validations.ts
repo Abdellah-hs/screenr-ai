@@ -447,3 +447,22 @@ export const hitlReviewDecisionSchema = z.object({
     .min(10, "Please give a short rationale (10+ characters)")
     .max(2000, "Rationale is too long"),
 });
+
+/**
+ * The manager's closing decision on an application.
+ *
+ * The rationale floor is higher than the HITL screening review's 10 characters
+ * on purpose: this is the last human judgement before an offer or a rejection,
+ * and it is the only record of *why* — the transition log keeps it forever and
+ * a future reviewer has nothing else to read. "ok" clears ten characters and
+ * explains nothing.
+ */
+export const managerReviewDecisionSchema = z.object({
+  applicationId: uuidSchema,
+  decision: z.enum(["advance", "hire", "reject"]),
+  rationale: z
+    .string()
+    .trim()
+    .min(20, "Please explain the decision (20+ characters) — this is the permanent record")
+    .max(2000, "Rationale is too long"),
+});
