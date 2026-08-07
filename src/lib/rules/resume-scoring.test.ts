@@ -126,7 +126,9 @@ describe("evaluateResumeScoringOutcome", () => {
 
       expect(decision.toState).toBe("rejected");
       expect(decision.rationale).toContain("React");
-      expect(decision.rationale).toContain("LOW_SCORE");
+      // The code is a structured field now, not a tag spliced into the prose.
+      expect(decision.disposition?.code).toBe("LOW_SCORE");
+      expect(decision.disposition?.description).toContain("React");
     });
 
     it("approves when every mandatory criterion clears the fail line and overall passes", () => {

@@ -126,7 +126,12 @@ describe("ingestResumeDocument", () => {
       expect.objectContaining({ email: "alice@example.com" }),
       DB,
     );
-    expect(mockTransition).toHaveBeenCalledWith("app-1", "screening_approved", "passed");
+    expect(mockTransition).toHaveBeenCalledWith(
+      "app-1",
+      "screening_approved",
+      "passed",
+      undefined,
+    );
   });
 
   it("rejects an unreadable document without uploading or creating anything", async () => {

@@ -5,7 +5,7 @@ import type { Database, Json } from "@/types/database.types";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
-import type { ApplicationState, CampaignStatus } from "@/lib/constants";
+import type { ApplicationState, CampaignStatus, Disposition } from "@/lib/constants";
 import {
   findCandidateByEmail,
   findCandidateByPhone,
@@ -597,12 +597,14 @@ export async function advanceApplicationStatus(
   applicationId: string,
   newStatus: CandidateStageEnum,
   rationale?: string,
+  disposition?: Disposition,
 ) {
   await transitionApplication({
     applicationId,
     toState: newStatus as ApplicationState,
     actor: "system",
     rationale,
+    disposition,
   });
 }
 
@@ -616,12 +618,14 @@ export async function updateApplicationStage(
   applicationId: string,
   toState: ApplicationState,
   rationale: string,
+  disposition?: Disposition,
 ) {
   await transitionApplication({
     applicationId,
     toState,
     actor: "recruiter",
     rationale,
+    disposition,
   });
 }
 

@@ -155,6 +155,7 @@ export async function runScreeningScoring(
         toState: decision.toState,
         actor: "system",
         rationale: decision.rationale,
+        disposition: decision.disposition,
       });
       await sendTransitionNotification(applicationId, decision.toState, ownerUserId);
     } catch (err) {

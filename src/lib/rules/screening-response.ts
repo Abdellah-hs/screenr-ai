@@ -1,4 +1,4 @@
-import type { ApplicationState } from "@/lib/constants";
+import type { ApplicationState, Disposition } from "@/lib/constants";
 
 export type ScreeningResponseStatus =
   | "pending"
@@ -16,6 +16,7 @@ export type ScreeningResponseStatus =
 export interface TransitionDescriptor {
   toState: ApplicationState;
   rationale: string;
+  disposition?: Disposition;
 }
 
 /**
@@ -204,6 +205,10 @@ export function evaluateScreeningScoringOutcome(
     {
       toState: "rejected",
       rationale: `${scoreLine} — below threshold`,
+      disposition: {
+        code: "LOW_SCORE",
+        description: `Screening scored ${result.overall_score}, threshold ${config.screening_threshold}`,
+      },
     },
   ];
 }

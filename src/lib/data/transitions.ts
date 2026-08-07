@@ -2,7 +2,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   APPLICATION_STATE_TRANSITIONS,
+  requiresDisposition,
   type ApplicationState,
+  type Disposition,
   type TransitionActor,
 } from "@/lib/constants";
 
@@ -11,6 +13,34 @@ export interface TransitionParams {
   toState: ApplicationState;
   actor: TransitionActor;
   rationale?: string;
+  /**
+   * Why the application closed. Required when `toState` closes it —
+   * see `requiresDisposition`.
+   */
+  disposition?: Disposition;
+}
+
+/**
+ * Shared by both transition variants: a closing state must carry a structured
+ * reason, not just prose.
+ *
+ * Enforced here rather than left to each caller for the same reason the
+ * recruiter-rationale rule is — this function is the only door, so a check at
+ * the door cannot be forgotten by the next caller someone writes. The RPC and
+ * a table constraint repeat it, because an app-layer rule protects only the
+ * paths that go through the app.
+ */
+function assertDisposition(
+  toState: ApplicationState,
+  disposition: Disposition | undefined,
+): void {
+  if (!requiresDisposition(toState)) return;
+
+  if (!disposition || disposition.description.trim().length === 0) {
+    throw new Error(
+      `Transition to ${toState} requires a disposition { code, description }`,
+    );
+  }
 }
 
 /**
@@ -26,11 +56,13 @@ export interface TransitionParams {
  * Never call `.update({ status: ... })` on applications outside this function.
  */
 export async function transitionApplication(params: TransitionParams): Promise<void> {
-  const { applicationId, toState, actor, rationale } = params;
+  const { applicationId, toState, actor, rationale, disposition } = params;
 
   if (actor === "recruiter" && (!rationale || rationale.trim().length === 0)) {
     throw new Error("Manual overrides require a written rationale");
   }
+
+  assertDisposition(toState, disposition);
 
   const supabase = await createClient();
 
@@ -65,6 +97,8 @@ export async function transitionApplication(params: TransitionParams): Promise<v
     p_to_state: toState,
     p_actor: actor,
     p_rationale: rationale ?? null,
+    p_disposition_code: disposition?.code ?? null,
+    p_disposition_description: disposition?.description ?? null,
   });
 
   if (error) {
@@ -86,7 +120,10 @@ export async function transitionApplicationAsSystem(
   applicationId: string,
   toState: ApplicationState,
   rationale?: string,
+  disposition?: Disposition,
 ): Promise<void> {
+  assertDisposition(toState, disposition);
+
   const supabase = createAdminClient();
 
   const { data: app, error: fetchError } = await supabase
@@ -114,6 +151,8 @@ export async function transitionApplicationAsSystem(
     p_application_id: applicationId,
     p_to_state: toState,
     p_rationale: rationale ?? null,
+    p_disposition_code: disposition?.code ?? null,
+    p_disposition_description: disposition?.description ?? null,
   });
 
   if (error) {

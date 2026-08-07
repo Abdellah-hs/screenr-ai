@@ -185,5 +185,10 @@ async function scoreAndAdvance(args: {
   );
 
   const decision = evaluateResumeScoringOutcome(evidence.result, config);
-  await transitionApplicationAsSystem(applicationId, decision.toState, decision.rationale);
+  await transitionApplicationAsSystem(
+    applicationId,
+    decision.toState,
+    decision.rationale,
+    decision.disposition,
+  );
 }

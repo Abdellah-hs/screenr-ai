@@ -4,10 +4,33 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { decideManagerReview } from "@/lib/actions/manager-review";
 import { Modal, ModalFooter, ModalHeader } from "@/components/ui";
-import type { ManagerReviewDecision } from "@/lib/rules/manager-review";
+import type {
+  ManagerRejectionCode,
+  ManagerReviewDecision,
+} from "@/lib/rules/manager-review";
 
 /** Mirrors the server-side floor in `managerReviewDecisionSchema`. */
 const MIN_RATIONALE = 20;
+
+/**
+ * Radios rather than a dropdown, and the descriptions are not decoration.
+ *
+ * The whole reason this field exists is to separate "the evidence was weak"
+ * from "the evidence was fine and I disagreed" — a distinction a manager can
+ * only make deliberately if both readings are on screen at the moment they
+ * choose. A collapsed select shows one option and hides the other behind an
+ * interaction, which is how you get everybody accepting the default.
+ */
+const REJECTION_COPY: Record<ManagerRejectionCode, { label: string; hint: string }> = {
+  FAILED_INTERVIEW: {
+    label: "The evidence didn't support hiring",
+    hint: "Scores, transcript, or interview performance fell short.",
+  },
+  OVERRIDE_REJECTED: {
+    label: "I'm overriding a passing result",
+    hint: "The stages came back positive and you're deciding against them anyway.",
+  },
+};
 
 interface DecisionCopy {
   /** Button label on the panel. */
@@ -70,12 +93,15 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
   const router = useRouter();
   const [decision, setDecision] = useState<ManagerReviewDecision | null>(null);
   const [rationale, setRationale] = useState("");
+  const [rejectionCode, setRejectionCode] =
+    useState<ManagerRejectionCode>("FAILED_INTERVIEW");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function open(d: ManagerReviewDecision) {
     setDecision(d);
     setRationale("");
+    setRejectionCode("FAILED_INTERVIEW");
     setError(null);
   }
 
@@ -95,6 +121,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
           applicationId,
           decision,
           rationale: rationale.trim(),
+          rejectionCode,
         });
         setDecision(null);
         setRationale("");
@@ -167,6 +194,51 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
               <h2 className="text-lg font-semibold text-[#0C4A6E]">{copy.title}</h2>
               <p className="text-sm text-[#6B7280] mt-1">{copy.consequence}</p>
             </ModalHeader>
+
+            {decision === "reject" && (
+              <fieldset className="mb-4">
+                <legend className="block text-xs font-medium text-[#374151] mb-1.5">
+                  Which kind of rejection is this?
+                </legend>
+                <div className="space-y-2">
+                  {(Object.keys(REJECTION_COPY) as ManagerRejectionCode[]).map((code) => {
+                    const selected = rejectionCode === code;
+                    return (
+                      <label
+                        key={code}
+                        className={`flex items-start gap-2.5 px-3 py-2.5 border rounded-lg cursor-pointer transition-colors duration-200 ${
+                          selected
+                            ? "border-[#FECACA] bg-[#FEF2F2]"
+                            : "border-[#E5E7EB] bg-white hover:bg-[#F9FAFB]"
+                        } ${isPending ? "opacity-50 cursor-not-allowed" : ""}`}
+                      >
+                        <input
+                          type="radio"
+                          name="manager-review-rejection-code"
+                          value={code}
+                          checked={selected}
+                          disabled={isPending}
+                          onChange={() => setRejectionCode(code)}
+                          className="mt-0.5 accent-[#DC2626] cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <span className="flex-1">
+                          <span
+                            className={`block text-xs font-medium ${
+                              selected ? "text-[#B91C1C]" : "text-[#374151]"
+                            }`}
+                          >
+                            {REJECTION_COPY[code].label}
+                          </span>
+                          <span className="block text-xs text-[#6B7280] mt-0.5">
+                            {REJECTION_COPY[code].hint}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
 
             <label
               htmlFor="manager-review-rationale"

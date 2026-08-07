@@ -3,8 +3,10 @@ import {
   isRecruiterSettableTarget,
   recruiterStageOptions,
   assertRecruiterSettableTarget,
+  manualStageDisposition,
   SYSTEM_PRODUCED_STATES,
 } from "./manual-stage-change";
+import { requiresDisposition, type ApplicationState } from "@/lib/constants";
 
 describe("isRecruiterSettableTarget", () => {
   it("blocks every system-produced artifact state", () => {
@@ -92,5 +94,40 @@ describe("assertRecruiterSettableTarget", () => {
 
   it("does not throw for a recruiter-settable state", () => {
     expect(() => assertRecruiterSettableTarget("rejected")).not.toThrow();
+  });
+});
+
+describe("manualStageDisposition", () => {
+  it("marks a hand-set rejection as an override and keeps the recruiter's words", () => {
+    const disposition = manualStageDisposition("rejected", "Candidate took another offer.");
+
+    expect(disposition).toEqual({
+      code: "OVERRIDE_REJECTED",
+      description: "Candidate took another offer.",
+    });
+  });
+
+  it("marks a hand-set archive the same way", () => {
+    expect(manualStageDisposition("archived", "Role was cancelled.")?.code).toBe(
+      "OVERRIDE_REJECTED",
+    );
+  });
+
+  it("records nothing for a stage change that leaves the application open", () => {
+    expect(manualStageDisposition("screening_approved", "Looks strong.")).toBeUndefined();
+    expect(manualStageDisposition("interview_invited", "Advancing.")).toBeUndefined();
+  });
+
+  it("covers every closing state a recruiter is allowed to pick", () => {
+    // The dropdown's targets are derived from the state machine, so a future
+    // closing state would silently arrive here with no disposition and make
+    // the transition throw. This catches that at build time instead.
+    const settableClosing = (
+      ["rejected", "archived", "screening_expired", "interview_no_show"] as ApplicationState[]
+    ).filter((state) => isRecruiterSettableTarget(state) && requiresDisposition(state));
+
+    for (const state of settableClosing) {
+      expect(manualStageDisposition(state, "reason")).toBeDefined();
+    }
   });
 });

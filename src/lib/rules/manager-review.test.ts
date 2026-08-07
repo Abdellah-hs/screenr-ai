@@ -1,11 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
+  MANAGER_REJECTION_CODES,
   MANAGER_REVIEW_DECISIONS,
   assertReviewable,
+  managerDecisionDisposition,
   managerDecisionTarget,
   type ManagerReviewDecision,
 } from "./manager-review";
-import { APPLICATION_STATE_TRANSITIONS } from "@/lib/constants";
+import {
+  APPLICATION_STATE_TRANSITIONS,
+  DISPOSITION_CODES,
+  requiresDisposition,
+} from "@/lib/constants";
 
 describe("managerDecisionTarget", () => {
   it("routes advance to the final human interview", () => {
@@ -84,5 +90,51 @@ describe("MANAGER_REVIEW_DECISIONS", () => {
       "hire",
       "reject",
     ]);
+  });
+});
+
+describe("managerDecisionDisposition", () => {
+  it("records the manager's own words as the description of a rejection", () => {
+    const disposition = managerDecisionDisposition(
+      "reject",
+      "FAILED_INTERVIEW",
+      "System design answers were shallow under follow-up.",
+    );
+
+    expect(disposition).toEqual({
+      code: "FAILED_INTERVIEW",
+      description: "System design answers were shallow under follow-up.",
+    });
+  });
+
+  it("distinguishes overruling a passing candidate from a weak interview", () => {
+    const override = managerDecisionDisposition("reject", "OVERRIDE_REJECTED", "Team fit concern.");
+
+    expect(override?.code).toBe("OVERRIDE_REJECTED");
+  });
+
+  it.each(["advance", "hire"] as const)(
+    "records nothing for %s, which does not close the application",
+    (decision) => {
+      const disposition = managerDecisionDisposition(decision, "FAILED_INTERVIEW", "Strong.");
+
+      expect(disposition).toBeUndefined();
+    },
+  );
+
+  it("supplies a disposition for exactly the decisions that need one", () => {
+    // Ties the rule to the state machine: if a decision is ever repointed at
+    // a closing state, this fails rather than letting the transition throw at
+    // runtime for want of a code.
+    for (const decision of MANAGER_REVIEW_DECISIONS) {
+      const needed = requiresDisposition(managerDecisionTarget(decision));
+      const supplied = managerDecisionDisposition(decision, "FAILED_INTERVIEW", "reason") !== undefined;
+
+      expect(supplied).toBe(needed);
+    }
+  });
+
+  it("only offers codes the database will accept", () => {
+    expect(DISPOSITION_CODES).toEqual(expect.arrayContaining([...MANAGER_REJECTION_CODES]));
   });
 });

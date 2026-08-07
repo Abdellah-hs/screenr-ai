@@ -1,6 +1,8 @@
 import {
   APPLICATION_STATE_TRANSITIONS,
+  requiresDisposition,
   type ApplicationState,
+  type Disposition,
 } from "@/lib/constants";
 
 /**
@@ -73,4 +75,25 @@ export function assertRecruiterSettableTarget(toState: ApplicationState): void {
       `"${toState}" can't be set manually — it reflects the candidate's response and AI scoring, which the system records automatically.`,
     );
   }
+}
+
+/**
+ * The disposition to record when a recruiter closes an application from the
+ * stage dropdown, or `undefined` when the target doesn't close it.
+ *
+ * Always `OVERRIDE_REJECTED`, for both `rejected` and `archived`, because that
+ * code describes how the decision was made rather than what concluded it: a
+ * person reached past the pipeline and set the state by hand. Deriving
+ * something more specific would mean guessing — the dropdown collects a
+ * rationale, not a reason code, and inferring `EXPIRED` from the state the
+ * application happens to be leaving would attribute a cause the recruiter
+ * never claimed. Their own words go in the description.
+ */
+export function manualStageDisposition(
+  toState: ApplicationState,
+  rationale: string,
+): Disposition | undefined {
+  if (!requiresDisposition(toState)) return undefined;
+
+  return { code: "OVERRIDE_REJECTED", description: rationale };
 }
