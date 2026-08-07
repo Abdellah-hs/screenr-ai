@@ -7,6 +7,7 @@ import { getInterviewBooking } from "@/lib/actions/schedule";
 import { getInterviewSession } from "@/lib/actions/interview";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
+import { ManagerReviewPanel } from "@/components/candidates/manager-review-panel";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import InterviewTranscript from "@/components/candidates/interview-transcript";
 import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
@@ -825,6 +826,12 @@ export default async function CandidateDetailPage({
                 campaignActive={isActive}
               />
             ))
+          )}
+
+          {/* Last in the column on purpose: the panel asks the manager to judge
+              the evidence, so it sits below all of it rather than above. */}
+          {candidate.status === "manager_review" && (
+            <ManagerReviewPanel applicationId={candidateId} />
           )}
         </div>
       </div>
