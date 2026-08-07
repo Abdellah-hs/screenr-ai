@@ -5,6 +5,7 @@ import {
   renderEmailLayout,
   type BuiltEmail,
 } from "./shared";
+import { INTERVIEW_DURATION_MINUTES } from "@/lib/constants";
 
 export interface InterviewInviteEmailParams {
   candidateName: string;
@@ -55,7 +56,7 @@ export function buildInterviewInviteEmail(params: InterviewInviteEmailParams): B
     `A few things to know before you start:`,
     `- It's a video interview, so you'll need a working camera and microphone.`,
     `- Please use a desktop or laptop computer (not a phone).`,
-    `- Find a quiet, well-lit space and set aside about 20 minutes.`,
+    `- Find a quiet, well-lit space and set aside about ${INTERVIEW_DURATION_MINUTES} minutes.`,
     deadline ? `- Please complete it by ${deadline}.` : ``,
     ``,
     `Thanks,`,
@@ -77,7 +78,7 @@ export function buildInterviewInviteEmail(params: InterviewInviteEmailParams): B
                 <ul style="margin:0 0 16px; padding-left:20px; font-size:15px; line-height:1.6;">
                   <li>It&#39;s a video interview, so you&#39;ll need a working camera and microphone.</li>
                   <li>Please use a desktop or laptop computer (not a phone).</li>
-                  <li>Find a quiet, well-lit space and set aside about 20 minutes.</li>
+                  <li>Find a quiet, well-lit space and set aside about ${INTERVIEW_DURATION_MINUTES} minutes.</li>
                   ${deadline ? `<li>Please complete it by <strong>${escapeHtml(deadline)}</strong>.</li>` : ``}
                 </ul>
                 <p style="margin:24px 0 0; font-size:15px; line-height:1.6;">

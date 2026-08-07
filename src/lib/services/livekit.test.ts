@@ -1,23 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-const { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken } = vi.hoisted(() => {
-  const mockCreateRoom = vi.fn();
-  const mockToJwt = vi.fn(async () => "jwt-abc");
-  const mockAddGrant = vi.fn();
-  const mockAccessToken = vi.fn(function () {
-    return { addGrant: mockAddGrant, toJwt: mockToJwt };
-  });
-  return { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken };
-});
+const { mockCreateRoom, mockToJwt, mockAddGrant, mockAccessToken, mockCreateDispatch } =
+  vi.hoisted(() => ({
+    mockCreateRoom: vi.fn(),
+    mockToJwt: vi.fn(async () => "jwt-abc"),
+    mockAddGrant: vi.fn(),
+    mockCreateDispatch: vi.fn(),
+    mockAccessToken: vi.fn(function () {
+      return { addGrant: mockAddGrant, toJwt: mockToJwt };
+    }),
+  }));
 
 vi.mock("livekit-server-sdk", () => ({
   RoomServiceClient: vi.fn(function () {
     return { createRoom: mockCreateRoom };
   }),
+  AgentDispatchClient: vi.fn(function () {
+    return { createDispatch: mockCreateDispatch };
+  }),
   AccessToken: mockAccessToken,
 }));
 
-import { createScreeningRoomGrant, createInterviewRoomGrant } from "./livekit";
+import {
+  createScreeningRoomGrant,
+  createInterviewRoomGrant,
+  INTERVIEW_AGENT_NAME,
+  SCREENING_AGENT_NAME,
+} from "./livekit";
 
 describe("createScreeningRoomGrant", () => {
   beforeEach(() => {
@@ -88,6 +99,14 @@ describe("createScreeningRoomGrant", () => {
     ).rejects.toThrow(/LIVEKIT/);
     expect(mockCreateRoom).not.toHaveBeenCalled();
   });
+
+  // Each flow summons exactly its own worker; a screening room must never pull
+  // in the video interviewer.
+  it("summons the screening agent by name, not the interview agent", async () => {
+    const grant = await createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" });
+
+    expect(mockCreateDispatch).toHaveBeenCalledWith(grant.roomName, SCREENING_AGENT_NAME);
+  });
 });
 
 describe("createInterviewRoomGrant", () => {
@@ -138,6 +157,46 @@ describe("createInterviewRoomGrant", () => {
     expect(grant.serverUrl).toBe("wss://demo.livekit.cloud");
     expect(grant.roomName).toMatch(/^interview-app-1-/);
     expect(grant.participantToken).toBe("jwt-abc");
+  });
+
+  // Without this, the interview worker sits in the same automatic-dispatch pool
+  // as the screening worker and LiveKit gives interview rooms to whichever it
+  // picks — the "the interviewer didn't join" failure.
+  it("summons the interview agent by name so the screening worker can't take the job", async () => {
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
+
+    expect(mockCreateDispatch).toHaveBeenCalledWith(grant.roomName, INTERVIEW_AGENT_NAME);
+  });
+
+  // Regression: a RoomConfiguration on the join token is silently ignored when
+  // the room already exists, and we always createRoom first for the metadata.
+  // Measured against a live LiveKit project: dispatch list empty, no agent ever
+  // joined. The dispatch must be an explicit call against the created room.
+  it("dispatches against the room it just created, not via the join token", async () => {
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
+
+    const createdRoom = mockCreateRoom.mock.calls[0][0].name;
+    expect(createdRoom).toBe(grant.roomName);
+    expect(mockCreateDispatch).toHaveBeenCalledWith(createdRoom, INTERVIEW_AGENT_NAME);
+    expect(mockCreateRoom.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateDispatch.mock.invocationCallOrder[0],
+    );
+  });
+
+  // A name only dispatches if the worker registered under the SAME string; the
+  // workers are separate packages, so nothing but this check couples them.
+  it("uses the names the agent workers actually register under", async () => {
+    const workerSource = (name: string) =>
+      readFileSync(join(process.cwd(), "agents", name, "src", "agent.ts"), "utf8");
+
+    expect(workerSource("interview")).toContain(`agentName: INTERVIEW_AGENT_NAME`);
+    expect(workerSource("interview")).toContain(
+      `INTERVIEW_AGENT_NAME = "${INTERVIEW_AGENT_NAME}"`,
+    );
+    expect(workerSource("screening")).toContain(`agentName: SCREENING_AGENT_NAME`);
+    expect(workerSource("screening")).toContain(
+      `SCREENING_AGENT_NAME = "${SCREENING_AGENT_NAME}"`,
+    );
   });
 
   it("throws when LiveKit env vars are missing", async () => {

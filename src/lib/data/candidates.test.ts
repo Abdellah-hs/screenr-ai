@@ -26,7 +26,13 @@ vi.mock("@/lib/data/duplicate-flags", () => ({
   flagDuplicateCandidate: (...args: unknown[]) => mockFlagDuplicateCandidate(...args),
 }));
 
-import { upsertCandidate, saveResumeScore, getInterviewRecordingSignedUrl } from "./candidates";
+import {
+  upsertCandidate,
+  saveResumeScore,
+  getInterviewRecordingSignedUrl,
+  fetchInterviewContextByApplicationId,
+  fetchInterviewScoringContext,
+} from "./candidates";
 import type { ParsedResumeData } from "@/lib/services/openai";
 
 const baseResume: ParsedResumeData & { email: string } = {
@@ -273,5 +279,97 @@ describe("saveResumeScore", () => {
 
     await expect(saveResumeScore(validArgs)).rejects.toThrow(/Resume scored but audit log write failed/);
     expect(mockApplicationsUpdate).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The parsed résumé is an APPLICATION column. Selecting it off the `candidates`
+ * join makes PostgREST reject the entire query, which surfaced to candidates as
+ * "this link is no longer active" on a perfectly valid interview link — so the
+ * shape of the select string is part of these functions' contract.
+ */
+describe("interview context reads", () => {
+  const RESUME = { headline: "Data Scientist", summary: null, skills: ["Python", "SQL"] };
+
+  /** Wire `applications.select(...).eq(...).single()` and capture the select string. */
+  function stubApplicationsSingle(result: { data: unknown; error: unknown }) {
+    const single = vi.fn().mockResolvedValue(result);
+    const eq = vi.fn(() => ({ single }));
+    const select = vi.fn((query: string) => {
+      void query;
+      return { eq };
+    });
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "applications") return { select };
+      throw new Error(`Unexpected supabase.from(${table})`);
+    });
+    return { select, eq };
+  }
+
+  /** The column list the `candidates!inner(...)` join asks for, if any. */
+  function candidatesJoinColumns(select: { mock: { calls: [string][] } }): string {
+    return /candidates!inner\(([^)]*)\)/.exec(select.mock.calls[0][0])?.[1] ?? "";
+  }
+
+  describe("fetchInterviewContextByApplicationId", () => {
+    it("reads the parsed résumé off the application, not the candidate", async () => {
+      stubApplicationsSingle({
+        data: {
+          id: "app-1",
+          campaign_id: "camp-1",
+          parsed_data: RESUME,
+          campaigns: { id: "camp-1", title: "Data scientist", status: "active" },
+          candidates: { first_name: "Abdellah", last_name: "Hasnaoui" },
+        },
+        error: null,
+      });
+
+      const ctx = await fetchInterviewContextByApplicationId("app-1");
+
+      expect(ctx?.resume).toEqual(RESUME);
+      expect(ctx?.campaign_title).toBe("Data scientist");
+      expect(ctx?.candidate_first_name).toBe("Abdellah");
+    });
+
+    it("never asks the candidates join for parsed_data", async () => {
+      const { select } = stubApplicationsSingle({ data: null, error: null });
+
+      await fetchInterviewContextByApplicationId("app-1");
+
+      expect(candidatesJoinColumns(select)).not.toContain("parsed_data");
+    });
+
+    it("returns null when the query fails instead of throwing at the candidate", async () => {
+      stubApplicationsSingle({ data: null, error: { message: "column does not exist" } });
+
+      await expect(fetchInterviewContextByApplicationId("app-1")).resolves.toBeNull();
+    });
+  });
+
+  describe("fetchInterviewScoringContext", () => {
+    it("summarizes the résumé stored on the application", async () => {
+      stubApplicationsSingle({
+        data: {
+          candidate_id: "cand-1",
+          campaign_id: "camp-1",
+          parsed_data: RESUME,
+          campaigns: { user_id: "user-1", description: "Build models" },
+        },
+        error: null,
+      });
+
+      const ctx = await fetchInterviewScoringContext("app-1");
+
+      expect(ctx?.owner_user_id).toBe("user-1");
+      expect(ctx?.resume_summary).toContain("Python");
+    });
+
+    it("never asks the candidates join for parsed_data", async () => {
+      const { select } = stubApplicationsSingle({ data: null, error: null });
+
+      await fetchInterviewScoringContext("app-1");
+
+      expect(candidatesJoinColumns(select)).not.toContain("parsed_data");
+    });
   });
 });

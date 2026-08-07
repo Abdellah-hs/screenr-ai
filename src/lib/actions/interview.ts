@@ -5,9 +5,14 @@ import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { uuidSchema, proctoringEventsSchema } from "@/lib/validations";
-import { summarizeProctoring } from "@/lib/proctoring/incidents";
+import {
+  summarizeProctoring,
+  type ProctoringEvent,
+  type VisionObservation,
+} from "@/lib/proctoring/incidents";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import {
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
@@ -39,8 +44,8 @@ import {
   type InterviewRoomGrant,
 } from "@/lib/services/livekit";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
-import { transitionApplication } from "@/lib/data/transitions";
-import type { CampaignStatus } from "@/lib/constants";
+import { transitionApplicationAsSystem } from "@/lib/data/transitions";
+import type { ApplicationState, CampaignStatus } from "@/lib/constants";
 
 /**
  * Public server actions for the on-demand AI video interview
@@ -52,7 +57,13 @@ import type { CampaignStatus } from "@/lib/constants";
  *
  * State stays rule-driven: the agent produces the transcript (evidence); the
  * candidate's explicit submit is what finalizes it and advances the application
- * (`interview_invited → interview_completed`) via `transitionApplication`.
+ * (`interview_invited → interview_completed`) via the system transition.
+ *
+ * Every DB touch on this path uses the ADMIN client, because there is no
+ * candidate account: `applications`, `candidates`, and `interview_sessions` are
+ * all owner-only RLS, so the cookie client sees an empty database here and the
+ * page would report a dead link for a perfectly valid one. The signed token IS
+ * the authorization — it is verified before the client is ever built.
  */
 
 const INTERVIEW_RATE_LIMIT = {
@@ -75,14 +86,19 @@ async function getClientIp(): Promise<string> {
   return h.get("x-real-ip") ?? "unknown";
 }
 
-/** Best-effort transition — the candidate has already left; never surface it. */
+/**
+ * Best-effort transition — the candidate has already left; never surface it.
+ * Uses the SYSTEM transition: the owner-checked `transitionApplication` reads
+ * the application through the cookie client, which finds nothing in a
+ * session-less candidate request.
+ */
 async function tryTransition(
   applicationId: string,
-  toState: Parameters<typeof transitionApplication>[0]["toState"],
+  toState: ApplicationState,
   rationale: string,
 ): Promise<void> {
   try {
-    await transitionApplication({ applicationId, toState, actor: "system", rationale });
+    await transitionApplicationAsSystem(applicationId, toState, rationale);
   } catch (err) {
     console.error(
       `Failed to transition ${applicationId} → ${toState}:`,
@@ -134,10 +150,12 @@ export interface InterviewPageContext {
 export async function loadInterviewContext(token: string): Promise<InterviewPageContext> {
   const { application_id, expires_at } = verifyResponseToken(token);
 
-  const ctx = await fetchInterviewContextByApplicationId(application_id);
+  const db = createAdminClient();
+
+  const ctx = await fetchInterviewContextByApplicationId(application_id, db);
   if (!ctx) throw new Error(LINK_DEAD_MESSAGE);
 
-  const session = await fetchInterviewSessionByApplicationId(application_id);
+  const session = await fetchInterviewSessionByApplicationId(application_id, db);
 
   return {
     application_id,
@@ -160,18 +178,20 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "interview-start", ...INTERVIEW_RATE_LIMIT });
 
-  const ctx = await fetchInterviewContextByApplicationId(application_id);
+  const db = createAdminClient();
+
+  const ctx = await fetchInterviewContextByApplicationId(application_id, db);
   if (!ctx) throw new Error(LINK_DEAD_MESSAGE);
 
   assertCampaignAcceptingInterview(ctx.campaign_status);
 
-  const session = await fetchInterviewSessionByApplicationId(application_id);
+  const session = await fetchInterviewSessionByApplicationId(application_id, db);
   if (session?.status === "completed") {
     throw new Error("You've already completed this interview. The hiring team will be in touch.");
   }
 
-  await ensureInterviewSession(application_id, expires_at);
-  await markInterviewStarted(application_id);
+  await ensureInterviewSession(application_id, expires_at, db);
+  await markInterviewStarted(application_id, db);
 
   const instructions = buildInterviewInstructions({
     jobTitle: ctx.campaign_title,
@@ -183,7 +203,7 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
   // Best-effort recording (Phase B2). Started BEFORE the grant is returned so
   // egress is already capturing when the candidate joins — the room exists, and
   // a failure here never blocks the interview (recording just doesn't happen).
-  await tryStartRecording(application_id, ctx.campaign_id, grant.roomName);
+  await tryStartRecording(application_id, ctx.campaign_id, grant.roomName, db);
 
   return grant;
 }
@@ -200,6 +220,7 @@ async function tryStartRecording(
   applicationId: string,
   campaignId: string,
   roomName: string,
+  db: SupabaseDb,
 ): Promise<void> {
   if (!isInterviewRecordingConfigured()) return;
   try {
@@ -208,7 +229,7 @@ async function tryStartRecording(
       campaignId,
       applicationId,
     });
-    await saveInterviewRecording(applicationId, storageKey, createAdminClient());
+    await saveInterviewRecording(applicationId, storageKey, db);
   } catch (err) {
     console.error(
       `Failed to start interview recording for ${applicationId}:`,
@@ -237,7 +258,9 @@ export async function submitInterview(input: {
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "interview-submit", ...INTERVIEW_RATE_LIMIT });
 
-  const session = await fetchInterviewSessionByApplicationId(application_id);
+  const db = createAdminClient();
+
+  const session = await fetchInterviewSessionByApplicationId(application_id, db);
   if (!session) throw new Error(LINK_DEAD_MESSAGE);
 
   // Idempotent: a double-submit (two tabs, a retry) is not an error.
@@ -251,10 +274,16 @@ export async function submitInterview(input: {
   }
 
   // Before finalizing — the proctoring write is guarded to the open statuses,
-  // and finalize is what closes them.
-  await tryRecordProctoring(application_id, input.proctoringEvents);
+  // and finalize is what closes them. The worker's vision samples were reported
+  // during the call and are folded in here alongside the browser's events.
+  await tryRecordProctoring(
+    application_id,
+    input.proctoringEvents,
+    session.proctoring_observations ?? [],
+    db,
+  );
 
-  await finalizeInterviewTranscript(application_id, transcript);
+  await finalizeInterviewTranscript(application_id, transcript, db);
 
   await tryTransition(
     application_id,
@@ -273,35 +302,54 @@ export async function submitInterview(input: {
 }
 
 /**
- * Persist the browser's proctoring observations for a finished interview
- * (Phase C). Best-effort by design: proctoring is supporting evidence, so a
- * malformed or failed report must never cost the candidate their interview.
+ * Persist the proctoring report for a finished interview (Phases C + C2).
+ * Best-effort by design: proctoring is supporting evidence, so a malformed or
+ * failed report must never cost the candidate their interview.
  *
- * Distinguishes "no report" from "clean report" — an absent `proctoringEvents`
- * leaves the column null (the recruiter UI then says proctoring wasn't captured),
- * while an empty array records a genuine clean run. Rejecting a malformed payload
- * would buy nothing: a candidate who wants to hide incidents can just send `[]`.
+ * Two independent evidence streams meet here. `rawEvents` come from the
+ * candidate's browser and are untrusted — a malformed payload is discarded
+ * rather than rejected, because a candidate who wants to hide incidents can just
+ * send `[]`, so failing the submit would punish only the honest. `observations`
+ * were captured server-side by the agent worker during the call and are already
+ * schema-bounded at the reporting route; they are folded in whether or not the
+ * browser reported anything, which is precisely why they are the harder signal
+ * to defeat.
+ *
+ * Distinguishes "no report" from "clean report": with neither stream present the
+ * column stays null and the recruiter UI says proctoring wasn't captured, while
+ * an empty browser array with vision samples records a genuine watched run.
  *
  * Uses the admin client because this runs in the session-less candidate request.
  */
 async function tryRecordProctoring(
   applicationId: string,
   rawEvents: unknown,
+  observations: VisionObservation[],
+  db: SupabaseDb,
 ): Promise<void> {
-  if (rawEvents === undefined || rawEvents === null) return;
+  const noBrowserReport = rawEvents === undefined || rawEvents === null;
+  if (noBrowserReport && observations.length === 0) return;
 
-  const parsed = proctoringEventsSchema.safeParse(rawEvents);
-  if (!parsed.success) {
-    console.warn(
-      `Discarding malformed proctoring report for ${applicationId}:`,
-      parsed.error.message,
-    );
-    return;
+  let events: ProctoringEvent[] = [];
+  if (!noBrowserReport) {
+    const parsed = proctoringEventsSchema.safeParse(rawEvents);
+    if (parsed.success) {
+      events = parsed.data;
+    } else {
+      // Keep going: the worker's vision evidence stands on its own, and dropping
+      // it because the browser sent junk would hand a candidate an easy way to
+      // erase the one signal their machine doesn't control.
+      console.warn(
+        `Discarding malformed browser proctoring report for ${applicationId}:`,
+        parsed.error.message,
+      );
+      if (observations.length === 0) return;
+    }
   }
 
   try {
-    const report = summarizeProctoring(parsed.data);
-    await saveProctoringReport(applicationId, report, createAdminClient());
+    const report = summarizeProctoring(events, observations);
+    await saveProctoringReport(applicationId, report, db);
   } catch (err) {
     console.error(
       `Failed to save proctoring report for ${applicationId}:`,

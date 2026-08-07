@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProctoringReport } from "@/lib/proctoring/incidents";
 
 const mockResponseUpdate = vi.fn();
 const mockUpdateEq = vi.fn();
@@ -35,6 +36,7 @@ import {
   saveAnswerScores,
   saveVoiceTranscript,
   saveVoiceTranscriptDraft,
+  saveScreeningProctoringReport,
   markScreeningResponseExpired,
   markScreeningResponseExpiredAsSystem,
   fetchExpiredSentScreeningAppIds,
@@ -397,5 +399,67 @@ describe("markScreeningResponseExpiredAsSystem", () => {
     await expect(markScreeningResponseExpiredAsSystem("app-1")).rejects.toThrow(
       /Failed to expire screening response: denied/,
     );
+  });
+});
+
+describe("saveScreeningProctoringReport", () => {
+  const report: ProctoringReport = {
+    incidents: [
+      {
+        type: "tab_blur",
+        at: "2026-08-04T10:00:00.000Z",
+        duration_ms: 42_000,
+        severity: "critical",
+        source: "client",
+      },
+    ],
+    summary: {
+      tab_blur_count: 1,
+      tab_blur_total_ms: 42_000,
+      camera_off_count: 0,
+      camera_off_total_ms: 0,
+      face_absent_count: 0,
+      face_absent_total_ms: 0,
+      multiple_faces_count: 0,
+      multiple_faces_total_ms: 0,
+      vision_sampled: false,
+      overall_severity: "critical",
+    },
+    report_version: "proctoring-v2",
+    generated_at: "2026-08-04T10:05:00.000Z",
+  };
+
+  function proctoringDb() {
+    const statusEq = vi.fn().mockResolvedValue({ error: null });
+    const appEq = vi.fn().mockReturnValue({ eq: statusEq });
+    const update = vi.fn().mockReturnValue({ eq: appEq });
+    const from = vi.fn().mockReturnValue({ update });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { db: { from } as any, from, update, appEq, statusEq };
+  }
+
+  it("writes the report only while the response is still open", async () => {
+    const { db, from, update, appEq, statusEq } = proctoringDb();
+
+    await saveScreeningProctoringReport("app-1", report, db);
+
+    expect(from).toHaveBeenCalledWith("screening_question_responses");
+    expect(update).toHaveBeenCalledWith({ proctoring: report });
+    expect(appEq).toHaveBeenCalledWith("application_id", "app-1");
+    // The guard: a replayed report can't attach evidence to a finished or
+    // already-scored screening.
+    expect(statusEq).toHaveBeenCalledWith("status", "sent");
+  });
+
+  it("throws when the proctoring write fails", async () => {
+    const statusEq = vi.fn().mockResolvedValue({ error: { message: "nope" } });
+    const from = vi.fn().mockReturnValue({
+      update: vi.fn().mockReturnValue({ eq: vi.fn().mockReturnValue({ eq: statusEq }) }),
+    });
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      saveScreeningProctoringReport("app-1", report, { from } as any),
+    ).rejects.toThrow(/nope/);
   });
 });

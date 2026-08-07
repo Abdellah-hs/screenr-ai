@@ -32,6 +32,10 @@ vi.mock("@/lib/data/screening-questions", () => ({
   saveCandidateAnswers: vi.fn(),
   saveVoiceTranscript: vi.fn(),
   markScreeningResponseExpired: vi.fn(),
+  saveScreeningProctoringReport: vi.fn(),
+}));
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({ __brand: "admin-client" }),
 }));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplication: vi.fn() }));
 // Auto-scoring core is exercised by its own callers' tests; here we only assert
@@ -56,6 +60,7 @@ import {
   fetchScreeningResponseByApplicationId,
   fetchScoringContextByApplicationId,
   saveVoiceTranscript,
+  saveScreeningProctoringReport,
   markScreeningResponseExpired,
   type ScreeningResponseRow,
   type VoiceTranscriptTurn,
@@ -70,6 +75,7 @@ const mockFetchApp = vi.mocked(fetchApplicationForResponse);
 const mockFetchQuestions = vi.mocked(fetchScreeningQuestionsByCampaignId);
 const mockFetchResponse = vi.mocked(fetchScreeningResponseByApplicationId);
 const mockSaveTranscript = vi.mocked(saveVoiceTranscript);
+const mockSaveScreeningProctoring = vi.mocked(saveScreeningProctoringReport);
 const mockMarkExpired = vi.mocked(markScreeningResponseExpired);
 const mockTransition = vi.mocked(transitionApplication);
 const mockCreateGrant = vi.mocked(createScreeningRoomGrant);
@@ -110,6 +116,7 @@ function responseRow(over: Partial<ScreeningResponseRow> = {}): ScreeningRespons
     status: "sent",
     answers: [],
     transcript: [],
+    proctoring: null,
     audio_url: null,
     overall_score: null,
     overall_rationale: null,
@@ -247,6 +254,75 @@ describe("submitVoiceScreening", () => {
     expect(mockTransition).toHaveBeenCalledWith(
       expect.objectContaining({ toState: "screening_completed", actor: "system" }),
     );
+  });
+
+  // Proctoring for the voice screening: tab focus is the only signal this stage
+  // can have (no camera), and it is what catches "hold on, let me look that up".
+  it("classifies reported tab-focus events server-side rather than trusting the client", async () => {
+    await submitVoiceScreening({
+      token: TOKEN,
+      proctoringEvents: [
+        { type: "tab_blur", at: "2026-06-03T10:00:05.000Z", duration_ms: 42_000 },
+      ],
+    });
+
+    const [applicationId, report] = mockSaveScreeningProctoring.mock.calls[0];
+    expect(applicationId).toBe(APP_ID);
+    expect(report.summary.tab_blur_count).toBe(1);
+    expect(report.incidents[0].severity).toBe("critical");
+    expect(report.incidents[0].source).toBe("client");
+  });
+
+  it("drops sub-threshold focus noise so a notification isn't an incident", async () => {
+    await submitVoiceScreening({
+      token: TOKEN,
+      proctoringEvents: [
+        { type: "tab_blur", at: "2026-06-03T10:00:05.000Z", duration_ms: 300 },
+      ],
+    });
+
+    const [, report] = mockSaveScreeningProctoring.mock.calls[0];
+    expect(report.incidents).toEqual([]);
+    expect(report.summary.overall_severity).toBe("clean");
+  });
+
+  it("writes the report before the transcript, so the sent-status guard passes", async () => {
+    const order: string[] = [];
+    mockSaveScreeningProctoring.mockImplementation(async () => void order.push("proctoring"));
+    mockSaveTranscript.mockImplementation(async () => void order.push("transcript"));
+
+    await submitVoiceScreening({ token: TOKEN, proctoringEvents: [] });
+
+    expect(order).toEqual(["proctoring", "transcript"]);
+  });
+
+  it("leaves proctoring unwritten when the client reported nothing at all", async () => {
+    await submitVoiceScreening({ token: TOKEN });
+
+    expect(mockSaveScreeningProctoring).not.toHaveBeenCalled();
+    expect(mockSaveTranscript).toHaveBeenCalled();
+  });
+
+  it("still completes the screening when the proctoring write fails", async () => {
+    mockSaveScreeningProctoring.mockRejectedValue(new Error("db down"));
+
+    await expect(
+      submitVoiceScreening({ token: TOKEN, proctoringEvents: [] }),
+    ).resolves.toEqual({ ok: true });
+    expect(mockSaveTranscript).toHaveBeenCalled();
+  });
+
+  it("discards a malformed report without failing the submit", async () => {
+    await expect(
+      submitVoiceScreening({
+        token: TOKEN,
+        proctoringEvents: [{ type: "face_absent", at: "nope", duration_ms: -1 }],
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    // `face_absent` is a vision type the browser must not be able to claim.
+    expect(mockSaveScreeningProctoring).not.toHaveBeenCalled();
+    expect(mockSaveTranscript).toHaveBeenCalled();
   });
 
   it("rejects when no draft transcript was reported, without persisting", async () => {

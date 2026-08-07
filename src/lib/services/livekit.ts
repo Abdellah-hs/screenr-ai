@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, AgentDispatchClient, RoomServiceClient } from "livekit-server-sdk";
 
 /**
  * LiveKit room service for the candidate voice screening.
@@ -53,6 +53,50 @@ const TOKEN_TTL = "15m";
 /** An interview runs longer than a screening; give the join token more room. */
 const INTERVIEW_TOKEN_TTL = "45m";
 
+/**
+ * Registered names of the two agent workers under `agents/`, which are
+ * dispatched EXPLICITLY — each room summons exactly the worker it needs.
+ *
+ * Both workers were previously unnamed, which in LiveKit means *automatic*
+ * dispatch: every worker in that pool is a candidate for every room in the
+ * project. With two different agents sharing one pool, LiveKit handed each new
+ * room to whichever it picked, so roughly half of all interviews went to the
+ * screening worker — which saw the `interview-` prefix, left, and stranded the
+ * candidate with "the interviewer didn't join". Naming both removes the pool
+ * entirely; it also stops the other worker from consuming one of the room's two
+ * participant slots before it realises the room isn't its own.
+ *
+ * Changing a name requires restarting that worker, or its flow gets no agent.
+ */
+export const INTERVIEW_AGENT_NAME = "screenr-interview";
+export const SCREENING_AGENT_NAME = "screenr-screening";
+
+/**
+ * Summon a named worker into a room that already exists.
+ *
+ * It must be an explicit dispatch call. A `RoomConfiguration` attached to the
+ * candidate's join token does NOT work here: that only takes effect when the
+ * join itself creates the room, and we always `createRoom` first to attach the
+ * instructions metadata. Measured — with the token carrying a valid dispatch
+ * request, the room's dispatch list came back empty and no agent ever joined.
+ *
+ * Throws rather than failing quietly: a room with no interviewer in it is
+ * useless, and surfacing it now beats leaving the candidate watching a silent
+ * screen until the client's join timeout gives up.
+ */
+async function dispatchAgent(
+  args: { serverUrl: string; apiKey: string; apiSecret: string },
+  roomName: string,
+  agentName: string,
+): Promise<void> {
+  const dispatchClient = new AgentDispatchClient(
+    args.serverUrl,
+    args.apiKey,
+    args.apiSecret,
+  );
+  await dispatchClient.createDispatch(roomName, agentName);
+}
+
 function requireEnv(name: "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRET"): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is not configured`);
@@ -103,6 +147,9 @@ export async function createScreeningRoomGrant(args: {
     // harmless (the agent ignores candidate data), but room admin is not granted.
     canPublishData: true,
   });
+
+  // Summon the screening worker by name — never the interview worker.
+  await dispatchAgent({ serverUrl, apiKey, apiSecret }, roomName, SCREENING_AGENT_NAME);
 
   return {
     serverUrl,
@@ -156,6 +203,11 @@ export async function createInterviewRoomGrant(args: {
     canSubscribe: true,
     canPublishData: true,
   });
+
+  // Summon the interview worker by name. This fires as the grant is minted, so
+  // the agent is already joining while the browser connects; an abandoned link
+  // leaves it briefly alone in the room until `emptyTimeout` closes it.
+  await dispatchAgent({ serverUrl, apiKey, apiSecret }, roomName, INTERVIEW_AGENT_NAME);
 
   return {
     serverUrl,

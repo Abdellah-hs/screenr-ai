@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type { ApplicationState } from "@/lib/constants";
 import type { Json } from "@/types/database.types";
+import type { ProctoringReport } from "@/lib/proctoring/incidents";
 
 export interface ApplicationForScreeningSend {
   application_id: string;
@@ -208,6 +209,8 @@ export interface ScreeningResponseRow {
   transcript: VoiceTranscriptTurn[];
   /** Optional recorded-audio pointer in Supabase Storage; null until wired. */
   audio_url: string | null;
+  /** Browser proctoring report for the voice call; null when none was captured. */
+  proctoring: ProctoringReport | null;
   overall_score: number | null;
   overall_rationale: string | null;
   sent_at: string | null;
@@ -427,6 +430,36 @@ export async function saveVoiceTranscript(
   if (error) {
     throw new Error(
       `Failed to save voice transcript: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
+/**
+ * Persist the proctoring report for a completed voice screening.
+ *
+ * Guarded to `sent` — the status the response is still in when the candidate
+ * submits — so a late or replayed report cannot attach evidence to a screening
+ * that was already finalized, scored, or expired. Callers therefore write this
+ * BEFORE `saveVoiceTranscript` flips the row to `responded`, mirroring the
+ * interview's ordering.
+ *
+ * Runs on an injected `db` because it fires in the candidate's session-less
+ * submit request.
+ */
+export async function saveScreeningProctoringReport(
+  applicationId: string,
+  report: ProctoringReport,
+  db: SupabaseDb
+): Promise<void> {
+  const { error } = await db
+    .from("screening_question_responses")
+    .update({ proctoring: report as unknown as Json })
+    .eq("application_id", applicationId)
+    .eq("status", "sent");
+
+  if (error) {
+    throw new Error(
+      `Failed to save screening proctoring report: ${error.message ?? JSON.stringify(error)}`
     );
   }
 }

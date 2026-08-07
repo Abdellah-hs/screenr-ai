@@ -17,6 +17,7 @@ import {
   diagnoseAgentSilence,
   realtimeTrace,
 } from "@/lib/realtime/interview-diagnostics";
+import { createProctoringCollector } from "@/lib/proctoring/collector";
 
 interface VoiceScreeningProps {
   token: string;
@@ -126,6 +127,12 @@ export default function VoiceScreening({
   const agentPresentRef = useRef(false);
   const agentAudioRef = useRef(false);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Proctoring buffer. Screening is voice-only, so tab focus is the ONLY signal
+  // available here — there is no camera to watch and nothing server-side to
+  // corroborate it with. It exists because this is the stage a candidate has
+  // most reason to game: the question is asked before the answer is given, and
+  // "hold on a second" while they search costs them nothing.
+  const proctoringRef = useRef(createProctoringCollector());
 
   // Informational only — the server re-checks and is the real gate.
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
@@ -212,6 +219,38 @@ export default function VoiceScreening({
     roomRef.current = null;
     room?.disconnect();
   }
+
+  // Tab-focus tracking, armed only while the call is live so time spent on the
+  // intro or the review step never counts against the candidate.
+  //
+  // Both listeners open the same condition because each misses what the other
+  // catches: `visibilitychange` sees the tab hidden (switching tabs, minimising,
+  // locking a phone), while `blur` sees focus leave a tab that is still visible
+  // — the second window or second monitor case, which is exactly the "let me
+  // just look this up" behaviour worth knowing about. `begin` is idempotent, so
+  // the two firing together for one tab switch still counts once.
+  useEffect(() => {
+    if (status !== "live") return;
+    const collector = proctoringRef.current;
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") collector.begin("tab_blur", Date.now());
+      else collector.end("tab_blur", Date.now());
+    };
+    const onBlur = () => collector.begin("tab_blur", Date.now());
+    const onFocus = () => collector.end("tab_blur", Date.now());
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      // Close anything still open so a call that ends mid-blur is still counted.
+      collector.end("tab_blur", Date.now());
+    };
+  }, [status]);
 
   // Attach the interviewer's audio track to our sink and nudge playback.
   // attach() alone can be swallowed by the autoplay policy, so play()
@@ -414,7 +453,12 @@ export default function VoiceScreening({
     setStatus("submitting");
     setError(null);
     try {
-      await submitVoiceScreening({ token });
+      // Flushed once, here — never streamed during the call. The server bounds
+      // the payload and decides severity; this only reports what happened.
+      await submitVoiceScreening({
+        token,
+        proctoringEvents: proctoringRef.current.drain(Date.now()),
+      });
       setStatus("done");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't save your responses.");

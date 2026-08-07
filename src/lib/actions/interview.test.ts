@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
+  mockAdminDb,
   mockVerifyToken,
   mockCheckRateLimit,
   mockHeaders,
@@ -16,6 +17,9 @@ const {
   mockIsRecordingConfigured,
   mockStartRecording,
 } = vi.hoisted(() => ({
+  // Identity sentinel: candidate-path DB calls must receive THIS client, not the
+  // cookie-scoped one (which RLS blanks when there is no recruiter session).
+  mockAdminDb: { __brand: "admin-client" },
   mockVerifyToken: vi.fn(),
   mockCheckRateLimit: vi.fn(),
   mockHeaders: vi.fn(),
@@ -57,14 +61,26 @@ vi.mock("@/lib/services/livekit-egress", () => ({
   isInterviewRecordingConfigured: mockIsRecordingConfigured,
   startInterviewRecording: mockStartRecording,
 }));
-vi.mock("@/lib/data/transitions", () => ({ transitionApplication: mockTransition }));
+vi.mock("@/lib/data/transitions", () => ({
+  transitionApplicationAsSystem: mockTransition,
+  transitionApplication: vi.fn(() => {
+    throw new Error("owner-checked transition must not run on the candidate path");
+  }),
+}));
 
 // Isolate the auto-score: submitInterview schedules it via after(); mock after
 // to a no-op and stub the scoring core so the OpenAI-instantiating module never
 // loads into this test's import graph.
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("./interview-scoring", () => ({ runInterviewScoring: vi.fn() }));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ __brand: "admin-client" }) }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => mockAdminDb }));
+// The cookie client must never be reached on the candidate path — it would throw
+// outside a request scope anyway, but failing loudly here documents the rule.
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: () => {
+    throw new Error("cookie client must not be used on the candidate interview path");
+  },
+}));
 
 import {
   loadInterviewContext,
@@ -126,6 +142,22 @@ describe("loadInterviewContext", () => {
 
     expect(ctx.status).toBe("completed");
   });
+
+  it("reads through the admin client so a signed link works with no recruiter session", async () => {
+    await loadInterviewContext("tok");
+
+    expect(mockFetchInterviewContext).toHaveBeenCalledWith("app-1", mockAdminDb);
+    expect(mockFetchSession).toHaveBeenCalledWith("app-1", mockAdminDb);
+  });
+
+  it("verifies the token before touching the database", async () => {
+    mockVerifyToken.mockImplementationOnce(() => {
+      throw new Error("This link is not valid.");
+    });
+
+    await expect(loadInterviewContext("forged")).rejects.toThrow("This link is not valid.");
+    expect(mockFetchInterviewContext).not.toHaveBeenCalled();
+  });
 });
 
 describe("startCandidateInterview", () => {
@@ -139,8 +171,8 @@ describe("startCandidateInterview", () => {
   it("opens a room with résumé-grounded, job-titled instructions", async () => {
     const grant = await startCandidateInterview("tok");
 
-    expect(mockEnsureSession).toHaveBeenCalledWith("app-1", FUTURE);
-    expect(mockMarkStarted).toHaveBeenCalledWith("app-1");
+    expect(mockEnsureSession).toHaveBeenCalledWith("app-1", FUTURE, mockAdminDb);
+    expect(mockMarkStarted).toHaveBeenCalledWith("app-1", mockAdminDb);
     const arg = mockCreateGrant.mock.calls[0][0];
     expect(arg.applicationId).toBe("app-1");
     expect(arg.instructions).toContain("Senior Backend Engineer");
@@ -167,7 +199,7 @@ describe("startCandidateInterview", () => {
         applicationId: "app-1",
       }),
     );
-    expect(mockSaveRecording).toHaveBeenCalledWith("app-1", "camp-1/app-1.mp4", expect.anything());
+    expect(mockSaveRecording).toHaveBeenCalledWith("app-1", "camp-1/app-1.mp4", mockAdminDb);
     expect(grant.roomName).toBe("interview-app-1-abcd");
   });
 
@@ -186,6 +218,13 @@ describe("startCandidateInterview", () => {
 
     expect(mockStartRecording).not.toHaveBeenCalled();
     expect(mockSaveRecording).not.toHaveBeenCalled();
+  });
+
+  it("reads and writes through the admin client (no recruiter session exists)", async () => {
+    await startCandidateInterview("tok");
+
+    expect(mockFetchInterviewContext).toHaveBeenCalledWith("app-1", mockAdminDb);
+    expect(mockFetchSession).toHaveBeenCalledWith("app-1", mockAdminDb);
   });
 
   it("rate-limits before doing any work", async () => {
@@ -221,9 +260,11 @@ describe("submitInterview", () => {
 
     const result = await submitInterview({ token: "tok" });
 
-    expect(mockFinalize).toHaveBeenCalledWith("app-1", expect.any(Array));
+    expect(mockFinalize).toHaveBeenCalledWith("app-1", expect.any(Array), mockAdminDb);
     expect(mockTransition).toHaveBeenCalledWith(
-      expect.objectContaining({ applicationId: "app-1", toState: "interview_completed" }),
+      "app-1",
+      "interview_completed",
+      expect.any(String),
     );
     expect(result).toEqual({ ok: true });
   });
@@ -259,8 +300,9 @@ describe("submitInterview proctoring", () => {
       ],
     });
 
-    const [applicationId, report] = mockSaveProctoring.mock.calls[0];
+    const [applicationId, report, db] = mockSaveProctoring.mock.calls[0];
     expect(applicationId).toBe("app-1");
+    expect(db).toBe(mockAdminDb);
     expect(report.incidents[0].severity).toBe("critical");
     expect(report.summary.overall_severity).toBe("critical");
   });
@@ -303,6 +345,58 @@ describe("submitInterview proctoring", () => {
     expect(mockFinalize).toHaveBeenCalled();
   });
 
+  // Phase C2: the worker's camera readings are stored on the session during the
+  // call, so they are folded in at submit regardless of what the browser sends.
+  it("folds the worker's vision samples into the report", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [
+        { at: "2026-07-29T10:00:00.000Z", face_count: 2, confidence: 0.9 },
+        { at: "2026-07-29T10:00:10.000Z", face_count: 2, confidence: 0.9 },
+        { at: "2026-07-29T10:00:20.000Z", face_count: 2, confidence: 0.9 },
+      ],
+    });
+
+    await submitInterview({ token: "tok", proctoringEvents: [] });
+
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.summary.multiple_faces_count).toBe(1);
+    expect(report.summary.vision_sampled).toBe(true);
+    expect(report.incidents[0].source).toBe("vision");
+  });
+
+  // The browser payload is the half a candidate controls. Letting junk there
+  // discard the worker's evidence would hand them a one-line way to erase it.
+  it("keeps vision evidence even when the browser sends a malformed report", async () => {
+    mockFetchSession.mockResolvedValue({
+      ...SPOKEN,
+      proctoring_observations: [
+        { at: "2026-07-29T10:00:00.000Z", face_count: 0, confidence: 0.9 },
+        { at: "2026-07-29T10:00:10.000Z", face_count: 0, confidence: 0.9 },
+        { at: "2026-07-29T10:00:20.000Z", face_count: 0, confidence: 0.9 },
+      ],
+    });
+
+    await submitInterview({
+      token: "tok",
+      proctoringEvents: [{ type: "keylogger", at: "nope", duration_ms: -5 }],
+    });
+
+    expect(mockSaveProctoring).toHaveBeenCalled();
+    const [, report] = mockSaveProctoring.mock.calls[0];
+    expect(report.summary.face_absent_count).toBe(1);
+    expect(report.summary.tab_blur_count).toBe(0);
+  });
+
+  it("writes nothing when neither the browser nor the worker reported anything", async () => {
+    mockFetchSession.mockResolvedValue({ ...SPOKEN, proctoring_observations: [] });
+
+    await submitInterview({ token: "tok" });
+
+    expect(mockSaveProctoring).not.toHaveBeenCalled();
+    expect(mockFinalize).toHaveBeenCalled();
+  });
+
   it("still completes the interview when the proctoring write fails", async () => {
     mockSaveProctoring.mockRejectedValue(new Error("db down"));
 
@@ -311,7 +405,9 @@ describe("submitInterview proctoring", () => {
     expect(result).toEqual({ ok: true });
     expect(mockFinalize).toHaveBeenCalled();
     expect(mockTransition).toHaveBeenCalledWith(
-      expect.objectContaining({ toState: "interview_completed" }),
+      "app-1",
+      "interview_completed",
+      expect.any(String),
     );
   });
 

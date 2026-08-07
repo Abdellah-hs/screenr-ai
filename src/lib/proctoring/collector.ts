@@ -1,4 +1,4 @@
-import type { ProctoringEvent, ProctoringIncidentType } from "./incidents";
+import type { ProctoringEvent, ProctoringEventType } from "./incidents";
 
 /**
  * Client-side buffer for proctoring observations during a live interview.
@@ -25,18 +25,18 @@ export const MAX_BUFFERED_EVENTS = 200;
 
 export interface ProctoringCollector {
   /** Note that a condition started (no-op if it's already open). */
-  begin(type: ProctoringIncidentType, atMs: number): void;
+  begin(type: ProctoringEventType, atMs: number): void;
   /** Note that a condition ended (no-op if it was never open). */
-  end(type: ProctoringIncidentType, atMs: number): void;
+  end(type: ProctoringEventType, atMs: number): void;
   /** Close anything still open, return every buffered event, and reset. */
   drain(atMs: number): ProctoringEvent[];
 }
 
 export function createProctoringCollector(): ProctoringCollector {
-  const openedAt = new Map<ProctoringIncidentType, number>();
+  const openedAt = new Map<ProctoringEventType, number>();
   let events: ProctoringEvent[] = [];
 
-  function close(type: ProctoringIncidentType, atMs: number): void {
+  function close(type: ProctoringEventType, atMs: number): void {
     const startedAt = openedAt.get(type);
     if (startedAt === undefined) return;
     openedAt.delete(type);

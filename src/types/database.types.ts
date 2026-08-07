@@ -685,6 +685,7 @@ export type Database = {
           expires_at: string | null
           id: string
           proctoring: Json | null
+          proctoring_observations: Json | null
           recording_url: string | null
           scores: Json | null
           started_at: string | null
@@ -699,6 +700,7 @@ export type Database = {
           expires_at?: string | null
           id?: string
           proctoring?: Json | null
+          proctoring_observations?: Json | null
           recording_url?: string | null
           scores?: Json | null
           started_at?: string | null
@@ -713,6 +715,7 @@ export type Database = {
           expires_at?: string | null
           id?: string
           proctoring?: Json | null
+          proctoring_observations?: Json | null
           recording_url?: string | null
           scores?: Json | null
           started_at?: string | null
@@ -793,6 +796,7 @@ export type Database = {
           id: string
           overall_rationale: string | null
           overall_score: number | null
+          proctoring: Json | null
           responded_at: string | null
           rubric_version: number | null
           scored_at: string | null
@@ -810,6 +814,7 @@ export type Database = {
           id?: string
           overall_rationale?: string | null
           overall_score?: number | null
+          proctoring?: Json | null
           responded_at?: string | null
           rubric_version?: number | null
           scored_at?: string | null
@@ -827,6 +832,7 @@ export type Database = {
           id?: string
           overall_rationale?: string | null
           overall_score?: number | null
+          proctoring?: Json | null
           responded_at?: string | null
           rubric_version?: number | null
           scored_at?: string | null

@@ -11,6 +11,7 @@ import {
   type ScriptedSignal,
 } from "@/lib/screening/transcript-cadence";
 import { Badge, type BadgeProps } from "@/components/ui";
+import { ProctoringReportPanel } from "./proctoring-report";
 import type { ApplicationState } from "@/lib/constants";
 import type {
   ScoredAnswerRow,
@@ -187,6 +188,17 @@ export default function ScreeningThread({
             </p>
           )}
         </div>
+      )}
+
+      {/* Voice screening only: there is no browser session to watch for the
+          legacy text form. Shown once the candidate has actually responded, so
+          a still-open screening doesn't read as "nothing captured". */}
+      {isVoice && (status === "responded" || status === "scored") && (
+        <ProctoringReportPanel
+          report={response?.proctoring ?? null}
+          stage="screening"
+          showWhenAbsent
+        />
       )}
 
       {isVoice && (

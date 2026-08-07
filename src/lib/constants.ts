@@ -214,6 +214,31 @@ export const SLA_STAGES: { name: string; key: SlaStage }[] = [
   { name: "Final Interview", key: "final_interview" },
 ];
 
+// ─── AI Video Interview ─────────────────────────────────────────────────────
+
+/**
+ * How long a candidate's AI video interview runs, in minutes.
+ *
+ * Single source of truth on purpose. Three things have to agree about this
+ * number — the client's hard cap, the copy the candidate reads before starting,
+ * and the pacing the interviewer is instructed to keep — and when they were
+ * three separate literals they drifted: the call was capped at 20 minutes while
+ * the interviewer was being told to wrap up in 10–15, so a candidate could be
+ * cut off mid-answer or left in silence after the agent had said goodbye.
+ */
+export const INTERVIEW_DURATION_MINUTES = 10;
+
+/**
+ * How many main questions the interviewer should plan for.
+ *
+ * The instructions carry this alongside the minute budget because a realtime
+ * model has no clock — it cannot feel time passing, so "keep it under 10
+ * minutes" is guidance it cannot actually follow. It CAN count its own
+ * questions, which makes this the constraint that does the work. Roughly two
+ * minutes per question and its follow-ups.
+ */
+export const INTERVIEW_TARGET_QUESTIONS = 5;
+
 // ─── Candidate Types ────────────────────────────────────────────────────────
 
 export type CandidateStage = "applied" | "screening" | "interview" | "final_interview" | "hired" | "rejected";
