@@ -42,20 +42,27 @@ const INFERENCE_THREADS = Number(process.env.VISION_INFERENCE_THREADS) || 2;
 /** A stuck worker must not wedge the sampler; skip the frame instead. */
 const DETECT_TIMEOUT_MS = 5_000;
 
-export type { DetectReading as DetectorReading } from "./detector-worker.js";
+/**
+ * How many times the thread may be (re)started before proctoring gives up.
+ *
+ * This process is long-lived and serves one interview after another, so a crash
+ * must not be permanent: without a respawn, one bad frame during one candidate's
+ * call would silently cost every later candidate on this worker their camera
+ * evidence. Bounded, because a thread that dies on every frame is a broken
+ * install, and retrying it forever would just burn CPU quietly.
+ */
+const MAX_SPAWN_ATTEMPTS = 3;
 
-function modelPath(): string {
-  return process.env.VISION_MODEL_PATH || DEFAULT_MODEL_PATH;
-}
+const MODEL_PATH = process.env.VISION_MODEL_PATH || DEFAULT_MODEL_PATH;
 
 /**
  * Optional single override for both class score floors. Useful when tuning
  * against a real camera; the defaults in `postprocess.ts` are what ships.
  */
-function scoreOverride(): number | undefined {
+const SCORE_OVERRIDE = ((): number | undefined => {
   const raw = Number(process.env.VISION_DETECTION_MIN_SCORE);
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : undefined;
-}
+})();
 
 interface Pending {
   resolve: (reading: DetectReading | null) => void;
@@ -63,7 +70,8 @@ interface Pending {
 }
 
 let worker: Worker | null = null;
-let spawnFailed = false;
+let spawnAttempts = 0;
+let gaveUp = false;
 let nextId = 1;
 const pending = new Map<number, Pending>();
 
@@ -75,15 +83,27 @@ function settle(id: number, reading: DetectReading | null): void {
   entry.resolve(reading);
 }
 
-/** Spawn the inference thread once, lazily. Null forever if it can't start. */
+/**
+ * Spawn the inference thread lazily, and again if it dies — up to
+ * `MAX_SPAWN_ATTEMPTS`, after which camera evidence is off for good.
+ */
 function ensureWorker(): Worker | null {
-  if (worker || spawnFailed) return worker;
+  if (worker || gaveUp) return worker;
+
+  if (spawnAttempts >= MAX_SPAWN_ATTEMPTS) {
+    gaveUp = true;
+    console.error(
+      `vision: detector thread failed ${spawnAttempts} times — proctoring will report no camera evidence for the rest of this process`,
+    );
+    return null;
+  }
+  spawnAttempts++;
 
   try {
     // tsx compiles this file on the fly, so the worker entry is the .ts source;
     // the loader that started the parent handles the child the same way.
     worker = new Worker(new URL("./detector-worker.ts", import.meta.url), {
-      workerData: { modelPath: modelPath(), threads: INFERENCE_THREADS },
+      workerData: { modelPath: MODEL_PATH, threads: INFERENCE_THREADS },
     });
 
     worker.on("message", (response: DetectResponse) => {
@@ -93,19 +113,20 @@ function ensureWorker(): Worker | null {
       console.error("vision: detector thread error:", err.message);
       for (const id of [...pending.keys()]) settle(id, null);
     });
-    worker.on("exit", () => {
+    worker.on("exit", (code) => {
+      // Drop the handle but keep the budget: the next frame respawns. Anything
+      // still in flight is settled null — a lost sample, not a thrown error.
       worker = null;
-      spawnFailed = true;
+      if (code !== 0) console.error(`vision: detector thread exited (code ${code})`);
       for (const id of [...pending.keys()]) settle(id, null);
     });
 
     // Don't hold the process open on shutdown for a detector nobody is reading.
     worker.unref();
   } catch (err) {
-    spawnFailed = true;
     worker = null;
     console.error(
-      "vision: could not start the detector thread — proctoring will report no camera evidence:",
+      "vision: could not start the detector thread:",
       err instanceof Error ? err.message : err,
     );
   }
@@ -143,7 +164,7 @@ export async function detectFrame(
     pending.set(id, { resolve: resolveReading, timer });
 
     try {
-      active.postMessage({ id, rgba, width, height, minScore: scoreOverride() });
+      active.postMessage({ id, rgba, width, height, minScore: SCORE_OVERRIDE });
     } catch (err) {
       console.error(
         "vision: could not hand the frame to the detector:",

@@ -71,11 +71,13 @@ interface WorkerConfig {
 const config = workerData as WorkerConfig;
 
 let session: OrtTypes.InferenceSession | null = null;
+/** Resolved alongside the session, so scoring a frame costs no module lookup. */
+let ort: typeof OrtTypes | null = null;
 
 async function loadSession(): Promise<OrtTypes.InferenceSession | null> {
   if (session) return session;
   try {
-    const ort = require("onnxruntime-node") as typeof OrtTypes;
+    ort = require("onnxruntime-node") as typeof OrtTypes;
     session = await ort.InferenceSession.create(config.modelPath, {
       intraOpNumThreads: config.threads,
       graphOptimizationLevel: "all",
@@ -109,7 +111,7 @@ async function preprocess(
   rgba: Uint8Array,
   width: number,
   height: number,
-): Promise<{ tensorData: Float32Array; usability: number } | null> {
+): Promise<{ tensorData: Float32Array; usability: number; ratio: number } | null> {
   const ratio = letterboxRatio(width, height);
   if (ratio <= 0) return null;
 
@@ -139,18 +141,19 @@ async function preprocess(
     }
   }
 
-  return { tensorData, usability: frameUsability(mean, stdDev) };
+  // The ratio travels with the tensor it scaled: decoding the boxes back to
+  // frame coordinates must use the exact value the pixels were resized by.
+  return { tensorData, usability: frameUsability(mean, stdDev), ratio };
 }
 
 async function detect(request: DetectRequest): Promise<DetectReading | null> {
   const active = await loadSession();
-  if (!active) return null;
+  if (!active || !ort) return null;
 
   const { rgba, width, height, minScore } = request;
   const prepared = await preprocess(rgba, width, height);
   if (!prepared) return null;
 
-  const ort = require("onnxruntime-node") as typeof OrtTypes;
   const inputName = active.inputNames[0];
   const outputName = active.outputNames[0];
 
@@ -165,7 +168,7 @@ async function detect(request: DetectRequest): Promise<DetectReading | null> {
   const raw = output[outputName]?.data;
   if (!(raw instanceof Float32Array)) return null;
 
-  const ratio = letterboxRatio(width, height);
+  const { ratio } = prepared;
   const frame = { width, height };
   const thresholds = { personMinScore: minScore, phoneMinScore: minScore };
 
