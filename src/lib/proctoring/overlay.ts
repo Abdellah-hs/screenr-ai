@@ -16,6 +16,13 @@
  * the kind of maths that looks right until someone tilts a webcam.
  */
 
+/**
+ * Data-channel topic the agent worker publishes boxes on. Mirrors
+ * `VISION_OVERLAY_TOPIC` in agents/interview/src/vision.ts — the packet parser
+ * and the topic it arrives on are one contract, so they live together.
+ */
+export const OVERLAY_TOPIC = "proctoring.boxes";
+
 /** What a box means. Mirrors `SignalLabel` in the agent worker. */
 export type OverlayBoxLabel = "person" | "phone";
 

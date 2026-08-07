@@ -15,6 +15,7 @@ import { startCandidateInterview, submitInterview } from "@/lib/actions/intervie
 import { createProctoringCollector } from "@/lib/proctoring/collector";
 import {
   OVERLAY_STALE_AFTER_MS,
+  OVERLAY_TOPIC,
   parseOverlayPacket,
   placeBoxes,
   type OverlayBox,
@@ -73,9 +74,13 @@ const CALL_SECONDS = INTERVIEW_DURATION_MINUTES * 60;
 /** LiveKit publishes live transcription segments on this text-stream topic. */
 const TRANSCRIPTION_TOPIC = "lk.transcription";
 
-/** Data-channel topic the agent worker publishes proctoring boxes on. Must match
- *  `VISION_OVERLAY_TOPIC` in agents/interview/src/vision.ts. */
-const OVERLAY_TOPIC = "proctoring.boxes";
+/**
+ * The self-view is mirrored, because a preview that doesn't mirror feels wrong
+ * to look at. One constant drives both the CSS and the overlay geometry — the
+ * detector sees the unmirrored frame, so if these two ever disagree every box
+ * lands on the wrong side.
+ */
+const SELF_VIEW_MIRRORED = true;
 
 function formatClock(total: number): string {
   const m = Math.floor(total / 60);
@@ -129,33 +134,48 @@ function DetectionOverlay({
 
   useEffect(() => {
     const video = videoRef.current;
+
+    // Measuring reads clientWidth/Height, which forces layout, and setting a
+    // fresh object would re-render even when nothing moved. So measure only on
+    // events that can actually change the geometry, and keep the old object
+    // when the numbers are unchanged.
     const measure = () => {
       const el = videoRef.current;
-      if (!el || !el.videoWidth || !el.clientWidth) {
-        setGeometry(null);
-        return;
-      }
-      setGeometry({
-        frameWidth: el.videoWidth,
-        frameHeight: el.videoHeight,
-        elementWidth: el.clientWidth,
-        elementHeight: el.clientHeight,
-        // Matches the [transform:scaleX(-1)] on the <video> above. If that ever
-        // changes, this must change with it or every box lands mirrored.
-        mirrored: true,
+      const next: VideoGeometry | null =
+        el && el.videoWidth && el.clientWidth
+          ? {
+              frameWidth: el.videoWidth,
+              frameHeight: el.videoHeight,
+              elementWidth: el.clientWidth,
+              elementHeight: el.clientHeight,
+              mirrored: SELF_VIEW_MIRRORED,
+            }
+          : null;
+
+      setGeometry((current) => {
+        if (current === next) return current;
+        if (!current || !next) return next;
+        return current.frameWidth === next.frameWidth &&
+          current.frameHeight === next.frameHeight &&
+          current.elementWidth === next.elementWidth &&
+          current.elementHeight === next.elementHeight
+          ? current
+          : next;
       });
     };
 
     measure();
     window.addEventListener("resize", measure);
     video?.addEventListener("loadedmetadata", measure);
+    // Fires when the track's intrinsic dimensions change mid-call — cheaper and
+    // more precise than re-measuring on every packet.
+    video?.addEventListener("resize", measure);
     return () => {
       window.removeEventListener("resize", measure);
       video?.removeEventListener("loadedmetadata", measure);
+      video?.removeEventListener("resize", measure);
     };
-    // Re-measures on each packet: cheap, and it keeps the boxes correct through
-    // a resolution change mid-call without needing a second observer.
-  }, [videoRef, boxes]);
+  }, [videoRef]);
 
   if (!geometry || boxes.length === 0) return null;
 
@@ -736,7 +756,9 @@ export default function VideoInterview({
             autoPlay
             playsInline
             muted
-            className="h-full w-full object-cover [transform:scaleX(-1)]"
+            className={`h-full w-full object-cover ${
+              SELF_VIEW_MIRRORED ? "[transform:scaleX(-1)]" : ""
+            }`}
           />
           <DetectionOverlay videoRef={selfViewRef} boxes={overlayBoxes} />
           <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/50 px-2.5 py-1 text-xs font-medium text-white">

@@ -24,9 +24,6 @@
 import sharp from "sharp";
 import type { OverlayBox } from "./postprocess.js";
 
-/** Which finding a snapshot is evidence for. Mirrors `VisionIncidentType`. */
-export type SnapshotCondition = "person_absent" | "multiple_people" | "phone_visible";
-
 /**
  * Stored width. Big enough to recognise a face and read a phone in someone's
  * hand, small enough that a handful of these is a rounding error next to the
@@ -92,30 +89,32 @@ function annotationSvg(boxes: OverlayBox[], width: number, height: number): Buff
  * disturb sampling, the report, or the call.
  */
 export async function encodeSnapshot(
-  rgba: Buffer,
+  rgba: Uint8Array,
   width: number,
   height: number,
   boxes: OverlayBox[],
 ): Promise<Buffer | null> {
   try {
-    const base = sharp(rgba, { raw: { width, height, channels: 4 } }).resize(
-      SNAPSHOT_WIDTH,
-      null,
-      { withoutEnlargement: true },
+    // Compute the output size rather than round-tripping through a buffer to
+    // discover it. One encode instead of two: half the work, and — the reason
+    // that matters — the stored image is quantized once, not twice. It is the
+    // thing a recruiter is asked to check a finding against.
+    const outWidth = Math.min(SNAPSHOT_WIDTH, width);
+    const outHeight = Math.max(1, Math.round((height * outWidth) / width));
+
+    const pipeline = sharp(rgba, { raw: { width, height, channels: 4 } }).resize(
+      outWidth,
+      outHeight,
+      { fit: "fill" },
     );
 
-    // Round-trip through a buffer to learn the post-resize dimensions, so the
-    // SVG overlay is built at exactly the size it will be composited onto.
-    const { data, info } = await base
-      .jpeg({ quality: SNAPSHOT_QUALITY })
-      .toBuffer({ resolveWithObject: true });
+    if (boxes.length > 0) {
+      pipeline.composite([
+        { input: annotationSvg(boxes, outWidth, outHeight), top: 0, left: 0 },
+      ]);
+    }
 
-    if (boxes.length === 0) return data;
-
-    return await sharp(data)
-      .composite([{ input: annotationSvg(boxes, info.width, info.height), top: 0, left: 0 }])
-      .jpeg({ quality: SNAPSHOT_QUALITY })
-      .toBuffer();
+    return await pipeline.jpeg({ quality: SNAPSHOT_QUALITY }).toBuffer();
   } catch (err) {
     console.error(
       "vision snapshot encode failed:",
@@ -126,20 +125,22 @@ export async function encodeSnapshot(
 }
 
 /**
- * Which finding, if any, a reading is evidence of.
+ * A private throttling key for "frames that look like this", or null when the
+ * frame looks ordinary and is not worth encoding at all.
  *
- * Mirrors `conditionsOf` in the app's rule layer, but returns a single condition
- * because a snapshot is one image: when a frame carries both a second person and
- * a phone, the extra person is the more serious claim and gets the attribution.
- * The app still derives both incidents from the counts — this only labels which
- * finding the picture is filed under.
+ * Deliberately NOT the incident vocabulary. Naming the finding is the rule
+ * layer's job (`primaryCondition` in the app), and duplicating that judgement
+ * here would mean a threshold change on one side silently leaves the worker
+ * photographing a condition the rules no longer recognise. All this decides is
+ * how often to spend an encode — an approximation is fine, and being wrong
+ * costs a redundant image rather than a mislabelled one.
  */
-export function snapshotCondition(reading: {
+export function snapshotBucket(reading: {
   person_count: number;
   phone_count: number;
-}): SnapshotCondition | null {
-  if (reading.person_count >= 2) return "multiple_people";
-  if (reading.person_count === 0) return "person_absent";
-  if (reading.phone_count >= 1) return "phone_visible";
-  return null;
+}): string | null {
+  const people = reading.person_count === 1 ? null : `people:${reading.person_count}`;
+  const phone = reading.phone_count >= 1 ? "phone" : null;
+  if (!people && !phone) return null;
+  return [people, phone].filter(Boolean).join("+");
 }

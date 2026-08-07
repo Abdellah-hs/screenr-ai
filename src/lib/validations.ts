@@ -448,17 +448,15 @@ export const visionObservationsSchema = z
  */
 const MAX_SNAPSHOT_BASE64_LENGTH = 512 * 1024;
 
-const snapshotConditionValues = [
-  "person_absent",
-  "multiple_people",
-  "phone_visible",
-] as const;
-
+// Note what is absent: no condition and no incident type. The worker sends the
+// same counts it reports as observations, and the rule layer derives what they
+// mean — so the vocabulary has exactly one definition, on the server.
 export const proctoringSnapshotSchema = z.object({
   at: z
     .string()
     .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
-  condition: z.enum(snapshotConditionValues),
+  person_count: z.number().int().min(0).max(MAX_PERSON_COUNT),
+  phone_count: z.number().int().min(0).max(MAX_PHONE_COUNT),
   image_base64: z.string().min(1).max(MAX_SNAPSHOT_BASE64_LENGTH),
 });
 

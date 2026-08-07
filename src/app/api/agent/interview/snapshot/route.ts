@@ -7,9 +7,10 @@ import {
 } from "@/lib/data/interview-sessions";
 import {
   deleteProctoringSnapshots,
-  fetchInterviewContextByApplicationId,
+  fetchApplicationCampaignId,
   uploadProctoringSnapshot,
 } from "@/lib/data/candidates";
+import { primaryCondition } from "@/lib/proctoring/incidents";
 import { uuidSchema, proctoringSnapshotSchema } from "@/lib/validations";
 
 // Service-role write driven by a machine caller — always run on the server,
@@ -26,10 +27,11 @@ export const runtime = "nodejs";
  * keeps only its object key.
  *
  * This is the one agent report that carries bytes rather than numbers, which is
- * why it is bounded harder than the others: a closed set of conditions, a
- * parseable timestamp, and a hard cap on the payload. It still accepts no
- * severity and no incident type — the worker says "this frame looked like X",
- * and the rule layer alone decides whether X ever amounted to anything.
+ * why it is bounded harder than the others: bounded counts, a parseable
+ * timestamp, and a hard cap on the payload. It accepts no severity and no
+ * incident type — the worker reports the same counts it reports as
+ * observations, and `primaryCondition` derives what they mean here, so the
+ * vocabulary has one definition rather than one per package.
  *
  * Routed through the app rather than uploading straight from the worker so the
  * worker never needs storage credentials: it holds `AGENT_API_SECRET` and
@@ -69,26 +71,41 @@ export async function POST(request: Request) {
     );
   }
 
-  const { application_id, at, condition, image_base64 } = parsed.data;
+  const { application_id, at, person_count, phone_count, image_base64 } = parsed.data;
+
+  // What the counts MEAN is the rule layer's call, derived here rather than
+  // trusted from the worker. A frame the rules consider ordinary is not
+  // evidence of anything and never reaches storage.
+  const condition = primaryCondition({ at, person_count, phone_count, confidence: 1 });
+  if (!condition) {
+    return NextResponse.json({ error: "Frame carries no finding" }, { status: 400 });
+  }
+
   const db = createAdminClient();
+
+  // Both reads are keyed on application_id alone and neither depends on the
+  // other. The session check still gates the upload — it just no longer waits
+  // on a round trip it doesn't need.
+  const [session, campaignId] = await Promise.all([
+    fetchInterviewSessionByApplicationId(application_id, db),
+    fetchApplicationCampaignId(application_id, db),
+  ]);
 
   // Check the session is open BEFORE spending an upload on it, so a replayed or
   // late report can't push images into the bucket for a finished interview.
-  const session = await fetchInterviewSessionByApplicationId(application_id, db);
   if (!session || (session.status !== "invited" && session.status !== "in_progress")) {
     return NextResponse.json({ error: "Session is not open" }, { status: 409 });
   }
 
   // The campaign id is the first path segment the bucket's RLS scopes on, so it
   // comes from the application server-side — never from the caller.
-  const ctx = await fetchInterviewContextByApplicationId(application_id, db);
-  if (!ctx) {
+  if (!campaignId) {
     return NextResponse.json({ error: "Unknown application" }, { status: 404 });
   }
 
   const key = await uploadProctoringSnapshot(
     {
-      campaignId: ctx.campaign_id,
+      campaignId,
       applicationId: application_id,
       at,
       image: Buffer.from(image_base64, "base64"),

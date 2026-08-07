@@ -111,10 +111,13 @@ export type ProctoringEventType = "tab_blur" | "camera_off";
  * the client-facing Zod schema is bound to that union, so a candidate's browser
  * cannot post a `person_absent` (or, more to the point, suppress one).
  */
-export type VisionIncidentType =
-  | "person_absent"
-  | "multiple_people"
-  | "phone_visible";
+export const VISION_CONDITIONS = [
+  "person_absent",
+  "multiple_people",
+  "phone_visible",
+] as const;
+
+export type VisionIncidentType = (typeof VISION_CONDITIONS)[number];
 
 export type ProctoringIncidentType = ProctoringEventType | VisionIncidentType;
 
@@ -256,7 +259,7 @@ function classify(
  * `person_absent` and `multiple_people` are the only mutually exclusive pair,
  * because they are two ends of the same count.
  */
-function conditionsOf(observation: VisionObservation): VisionIncidentType[] {
+export function conditionsOf(observation: VisionObservation): VisionIncidentType[] {
   const conditions: VisionIncidentType[] = [];
   if (observation.person_count === 0) conditions.push("person_absent");
   else if (observation.person_count >= 2) conditions.push("multiple_people");
@@ -264,11 +267,27 @@ function conditionsOf(observation: VisionObservation): VisionIncidentType[] {
   return conditions;
 }
 
-const VISION_CONDITIONS: readonly VisionIncidentType[] = [
-  "person_absent",
-  "multiple_people",
-  "phone_visible",
-];
+/**
+ * The single condition a one-image piece of evidence should be filed under.
+ *
+ * A still is one picture, so it gets one label even when the frame satisfies two
+ * conditions — an extra person is the more serious claim and wins. This lives
+ * here rather than in the worker on purpose: the worker reports counts, and what
+ * a set of counts *means* is this layer's vocabulary. Keeping it here means a
+ * change to `conditionsOf` can never leave the worker filing stills under a
+ * definition the rules no longer use.
+ */
+export function primaryCondition(
+  observation: VisionObservation,
+): VisionIncidentType | null {
+  const conditions = conditionsOf(observation);
+  return (
+    conditions.find((c) => c === "multiple_people") ??
+    conditions.find((c) => c === "person_absent") ??
+    conditions[0] ??
+    null
+  );
+}
 
 /**
  * Collapse periodic frame samples into durations.
@@ -385,15 +404,16 @@ export function attachSnapshots(
     const endTs = startTs + incident.duration_ms;
 
     const match = snapshots
+      .map((s) => ({ snapshot: s, ts: Date.parse(s.at) }))
       .filter(
-        (s) =>
-          !claimed.has(s.key) &&
-          s.condition === incident.type &&
-          !Number.isNaN(Date.parse(s.at)) &&
-          Date.parse(s.at) >= startTs &&
-          Date.parse(s.at) <= endTs,
+        ({ snapshot, ts }) =>
+          !claimed.has(snapshot.key) &&
+          snapshot.condition === incident.type &&
+          !Number.isNaN(ts) &&
+          ts >= startTs &&
+          ts <= endTs,
       )
-      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))[0];
+      .sort((a, b) => a.ts - b.ts)[0]?.snapshot;
 
     if (!match) return incident;
     claimed.add(match.key);

@@ -19,7 +19,7 @@ import {
   deleteProctoringSnapshots,
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
-  getProctoringSnapshotSignedUrl,
+  getProctoringSnapshotSignedUrls,
   type InterviewCandidateContext,
 } from "@/lib/data/candidates";
 import { runInterviewScoring } from "./interview-scoring";
@@ -295,15 +295,10 @@ async function tryRecordProctoring(
   db: SupabaseDb,
 ): Promise<void> {
   const noBrowserReport = rawEvents === undefined || rawEvents === null;
-  if (noBrowserReport && observations.length === 0) {
-    // No report to write, but stills may still have been captured for
-    // conditions that never became incidents. Nothing will reference them, so
-    // they must not be left sitting in the bucket.
-    await tryPruneSnapshots(applicationId, snapshots.map((s) => s.key), [], db);
-    return;
-  }
 
   let events: ProctoringEvent[] = [];
+  let hasReport = !noBrowserReport || observations.length > 0;
+
   if (!noBrowserReport) {
     const parsed = proctoringEventsSchema.safeParse(rawEvents);
     if (parsed.success) {
@@ -316,33 +311,41 @@ async function tryRecordProctoring(
         `Discarding malformed browser proctoring report for ${applicationId}:`,
         parsed.error.message,
       );
-      if (observations.length === 0) return;
+      hasReport = observations.length > 0;
     }
   }
 
-  try {
-    const summary = summarizeProctoring(events, observations);
-    // Only stills that landed inside a CONFIRMED incident survive. The rest are
-    // frames the detector flagged and the rules then rejected — the pictures
-    // behind its own false positives, which are the last thing worth keeping.
-    const { report, orphanedKeys } = attachSnapshots(summary, snapshots);
+  // Default: nothing references any still. Writing a report is what rescues the
+  // ones that turned out to be evidence — so every path out of this function
+  // ends at the same prune, and no exit can leave images behind.
+  let orphanedKeys = snapshots.map((s) => s.key);
 
-    await saveProctoringReport(applicationId, report, db);
-
-    const orphaned = new Set(orphanedKeys);
-    const kept = snapshots.filter((s) => !orphaned.has(s.key));
-    await tryPruneSnapshots(applicationId, orphanedKeys, kept, db);
-  } catch (err) {
-    console.error(
-      `Failed to save proctoring report for ${applicationId}:`,
-      err instanceof Error ? err.message : err,
-    );
+  if (hasReport) {
+    try {
+      const summary = summarizeProctoring(events, observations);
+      // Only stills that landed inside a CONFIRMED incident survive. The rest
+      // are frames the detector flagged and the rules then rejected — the
+      // pictures behind its own false positives, the last thing worth keeping.
+      const attached = attachSnapshots(summary, snapshots);
+      await saveProctoringReport(applicationId, attached.report, db);
+      orphanedKeys = attached.orphanedKeys;
+    } catch (err) {
+      console.error(
+        `Failed to save proctoring report for ${applicationId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
+
+  await tryPruneSnapshots(applicationId, snapshots, orphanedKeys, db);
 }
 
 /**
  * Delete the evidence stills nothing references, and point the session's index
  * at what's left.
+ *
+ * Takes the full set plus the orphans and derives what's kept, so "orphaned"
+ * has exactly one definition rather than one per caller.
  *
  * Best-effort in both halves and in that order: a failed delete leaves an
  * unreferenced object (tidy-up debt), while a failed index write would leave the
@@ -351,10 +354,14 @@ async function tryRecordProctoring(
  */
 async function tryPruneSnapshots(
   applicationId: string,
+  snapshots: ProctoringSnapshot[],
   orphanedKeys: string[],
-  kept: ProctoringSnapshot[],
   db: SupabaseDb,
 ): Promise<void> {
+  if (snapshots.length === 0) return;
+  const orphaned = new Set(orphanedKeys);
+  const kept = snapshots.filter((s) => !orphaned.has(s.key));
+
   try {
     await deleteProctoringSnapshots(orphanedKeys, db);
   } catch (err) {
@@ -438,14 +445,5 @@ export async function getInterviewSession(
     .map((i) => i.snapshot_key)
     .filter((k): k is string => typeof k === "string");
 
-  const signed = await Promise.all(
-    keys.map(async (key) => [key, await getProctoringSnapshotSignedUrl(key)] as const),
-  );
-
-  return {
-    ...row,
-    snapshot_urls: Object.fromEntries(
-      signed.filter((entry): entry is readonly [string, string] => entry[1] !== null),
-    ),
-  };
+  return { ...row, snapshot_urls: await getProctoringSnapshotSignedUrls(keys) };
 }

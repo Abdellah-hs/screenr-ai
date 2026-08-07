@@ -1,66 +1,48 @@
 /**
  * Local object detection for interview proctoring.
  *
- * Runs YOLOX-tiny (Apache-2.0) in-process through onnxruntime-node. Nothing
- * about a frame leaves this worker: pixels are pulled off the live LiveKit
- * track, scored in memory, and dropped. Only counts are ever reported, and the
- * interview is not recorded, so a frame's lifetime is one function call.
+ * Runs YOLOX-tiny (Apache-2.0) on a dedicated worker thread. Nothing about a
+ * frame leaves this process: pixels are pulled off the live LiveKit track,
+ * scored in memory, and dropped. Only counts are ever reported, and the
+ * interview is not recorded, so a frame's lifetime is one round trip.
  *
  * That locality is the point. The previous implementation POSTed every sampled
  * frame to a hosted vision API — a per-frame bill, a network round trip inside a
  * live call, and the candidate's face crossing a third-party boundary sixty
  * times per interview. This does the same job on the CPU already paid for.
  *
+ * The thread matters as much as the locality: `onnxruntime-node`'s `run()` is a
+ * synchronous native call behind a Promise, so running it inline would block
+ * this process's event loop — the same loop pumping the Realtime WebSocket and
+ * LiveKit audio — for ~58ms every frame. See `detector-worker.ts`.
+ *
  * Fails silent and total, like everything else in the proctoring path: no model
- * file, an unreadable frame, a runtime that won't load — all return null, the
+ * file, an unreadable frame, a worker that won't spawn — all return null, the
  * interview continues untouched, and the report simply carries fewer samples.
  * A missing proctoring sample costs a recruiter a little evidence; a thrown
  * error would cost a candidate their interview.
  */
-import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import sharp from "sharp";
-import type * as OrtTypes from "onnxruntime-node";
-import {
-  INPUT_SIZE,
-  countSignals,
-  decodeYoloxOutput,
-  frameUsability,
-  letterboxRatio,
-  luminanceStats,
-  nms,
-  observationConfidence,
-  selectSignals,
-  toOverlayBoxes,
-  type OverlayBox,
-} from "./postprocess.js";
-
-// onnxruntime-node ships CommonJS with native bindings; `createRequire` loads it
-// from this ESM module without the interop surprises of a default import.
-const require = createRequire(import.meta.url);
+import { Worker } from "node:worker_threads";
+import type { DetectReading, DetectResponse } from "./detector-worker.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** Committed alongside the source so a deploy is one artifact with no fetch. */
 const DEFAULT_MODEL_PATH = resolve(HERE, "../models/yolox_tiny.onnx");
 
-/** YOLOX pads the letterbox remainder with this constant, not with black. */
-const PAD_VALUE = 114;
+/**
+ * Intra-op threads for inference. Now that the run is off the audio loop, more
+ * is simply faster (~58ms → ~31ms at 4) with nothing to trade against — the
+ * opposite of the right call when this ran inline.
+ */
+const INFERENCE_THREADS = Number(process.env.VISION_INFERENCE_THREADS) || 2;
 
-/** What the app is told about one frame. Counts only — never a verdict. */
-export interface DetectorReading {
-  person_count: number;
-  phone_count: number;
-  confidence: number;
-  /**
-   * Normalised boxes for the live overlay only. These are NOT part of the
-   * proctoring evidence: they are published to the candidate's browser over the
-   * room's data channel and then discarded. Nothing persists them, and the
-   * reporting route would reject them if they were sent.
-   */
-  boxes: OverlayBox[];
-}
+/** A stuck worker must not wedge the sampler; skip the frame instead. */
+const DETECT_TIMEOUT_MS = 5_000;
+
+export type { DetectReading as DetectorReading } from "./detector-worker.js";
 
 function modelPath(): string {
   return process.env.VISION_MODEL_PATH || DEFAULT_MODEL_PATH;
@@ -75,86 +57,60 @@ function scoreOverride(): number | undefined {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : undefined;
 }
 
-let sessionPromise: Promise<OrtTypes.InferenceSession | null> | null = null;
-
-/**
- * Load the model once, on first use. Single-threaded on purpose: this worker is
- * also driving a live Realtime audio session, and letting ONNX spin up a thread
- * per core to save ~20ms on a frame we only take every 10 seconds would be a
- * poor trade against the conversation stuttering.
- */
-function loadSession(): Promise<OrtTypes.InferenceSession | null> {
-  sessionPromise ??= (async () => {
-    const path = modelPath();
-    try {
-      const ort = require("onnxruntime-node") as typeof OrtTypes;
-      const session = await ort.InferenceSession.create(path, {
-        intraOpNumThreads: 1,
-        interOpNumThreads: 1,
-        graphOptimizationLevel: "all",
-        executionMode: "sequential",
-      });
-      console.log(`vision: loaded detector from ${path}`);
-      return session;
-    } catch (err) {
-      console.error(
-        `vision: detector unavailable (${path}) — proctoring will report no camera evidence:`,
-        err instanceof Error ? err.message : err,
-      );
-      return null;
-    }
-  })();
-  return sessionPromise;
+interface Pending {
+  resolve: (reading: DetectReading | null) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
-/**
- * Build YOLOX's input tensor from a raw RGBA frame.
- *
- * Two conventions here are YOLOX-specific and easy to get wrong, both taken from
- * its own `demo/ONNXRuntime` reference: the model wants **BGR** channel order,
- * and it wants raw **0–255** values with no mean/std normalisation. Feeding it
- * normalised RGB produces boxes that look reasonable and are quietly wrong.
- *
- * The luminance stats are measured on the RESIZED CONTENT ONLY, before padding.
- * A 16:9 webcam frame letterboxed into a square is ~44% flat grey padding, which
- * would drag the mean toward 114 and crush the standard deviation — a well-lit
- * interview would then score as an unusable frame.
- */
-async function preprocess(
-  rgba: Buffer,
-  width: number,
-  height: number,
-): Promise<{ tensorData: Float32Array; usability: number } | null> {
-  const ratio = letterboxRatio(width, height);
-  if (ratio <= 0) return null;
+let worker: Worker | null = null;
+let spawnFailed = false;
+let nextId = 1;
+const pending = new Map<number, Pending>();
 
-  const contentWidth = Math.max(1, Math.min(INPUT_SIZE, Math.round(width * ratio)));
-  const contentHeight = Math.max(1, Math.min(INPUT_SIZE, Math.round(height * ratio)));
+function settle(id: number, reading: DetectReading | null): void {
+  const entry = pending.get(id);
+  if (!entry) return;
+  pending.delete(id);
+  clearTimeout(entry.timer);
+  entry.resolve(reading);
+}
 
-  const content = await sharp(rgba, { raw: { width, height, channels: 4 } })
-    .resize(contentWidth, contentHeight, { fit: "fill", kernel: "linear" })
-    .removeAlpha()
-    .raw()
-    .toBuffer();
+/** Spawn the inference thread once, lazily. Null forever if it can't start. */
+function ensureWorker(): Worker | null {
+  if (worker || spawnFailed) return worker;
 
-  const { mean, stdDev } = luminanceStats(content);
+  try {
+    // tsx compiles this file on the fly, so the worker entry is the .ts source;
+    // the loader that started the parent handles the child the same way.
+    worker = new Worker(new URL("./detector-worker.ts", import.meta.url), {
+      workerData: { modelPath: modelPath(), threads: INFERENCE_THREADS },
+    });
 
-  const plane = INPUT_SIZE * INPUT_SIZE;
-  const tensorData = new Float32Array(3 * plane).fill(PAD_VALUE);
+    worker.on("message", (response: DetectResponse) => {
+      settle(response.id, response.reading);
+    });
+    worker.on("error", (err) => {
+      console.error("vision: detector thread error:", err.message);
+      for (const id of [...pending.keys()]) settle(id, null);
+    });
+    worker.on("exit", () => {
+      worker = null;
+      spawnFailed = true;
+      for (const id of [...pending.keys()]) settle(id, null);
+    });
 
-  for (let y = 0; y < contentHeight; y++) {
-    const srcRow = y * contentWidth * 3;
-    const dstRow = y * INPUT_SIZE;
-    for (let x = 0; x < contentWidth; x++) {
-      const src = srcRow + x * 3;
-      const dst = dstRow + x;
-      tensorData[dst] = content[src + 2]; // B
-      tensorData[plane + dst] = content[src + 1]; // G
-      tensorData[2 * plane + dst] = content[src]; // R
-    }
+    // Don't hold the process open on shutdown for a detector nobody is reading.
+    worker.unref();
+  } catch (err) {
+    spawnFailed = true;
+    worker = null;
+    console.error(
+      "vision: could not start the detector thread — proctoring will report no camera evidence:",
+      err instanceof Error ? err.message : err,
+    );
   }
 
-  return { tensorData, usability: frameUsability(mean, stdDev) };
+  return worker;
 }
 
 /**
@@ -162,58 +118,43 @@ async function preprocess(
  * different from "nobody was there", and must stay different: a null is simply
  * not reported, while a zero person count with good confidence is real evidence
  * of an empty chair.
+ *
+ * The buffer is structured-cloned rather than transferred: the caller still
+ * needs the pixels afterwards to encode an evidence still for a flagged frame,
+ * and transferring would detach it. The clone costs ~0.8ms for a 720p frame,
+ * against the ~58ms of blocked event loop this thread exists to avoid.
  */
 export async function detectFrame(
-  rgba: Buffer,
+  rgba: Uint8Array,
   width: number,
   height: number,
-): Promise<DetectorReading | null> {
-  const session = await loadSession();
-  if (!session) return null;
+): Promise<DetectReading | null> {
+  const active = ensureWorker();
+  if (!active) return null;
 
-  try {
-    const prepared = await preprocess(rgba, width, height);
-    if (!prepared) return null;
+  const id = nextId++;
 
-    const ort = require("onnxruntime-node") as typeof OrtTypes;
-    const inputName = session.inputNames[0];
-    const outputName = session.outputNames[0];
+  return new Promise<DetectReading | null>((resolveReading) => {
+    const timer = setTimeout(() => {
+      console.error(`vision: detection timed out after ${DETECT_TIMEOUT_MS}ms`);
+      settle(id, null);
+    }, DETECT_TIMEOUT_MS);
 
-    const feeds: Record<string, OrtTypes.Tensor> = {
-      [inputName]: new ort.Tensor("float32", prepared.tensorData, [1, 3, INPUT_SIZE, INPUT_SIZE]),
-    };
-    const output = await session.run(feeds);
-    const raw = output[outputName]?.data;
-    if (!(raw instanceof Float32Array)) return null;
+    pending.set(id, { resolve: resolveReading, timer });
 
-    const minScore = scoreOverride();
-    const detections = nms(
-      decodeYoloxOutput(raw, { ratio: letterboxRatio(width, height) }),
-    );
-    const frame = { width, height };
-    const thresholds = { personMinScore: minScore, phoneMinScore: minScore };
-
-    // One pass over the thresholds, reused for both the counts and the boxes,
-    // so the overlay can only ever show what the report actually counted.
-    const kept = selectSignals(detections, frame, thresholds);
-    const signals = countSignals(detections, frame, thresholds);
-
-    return {
-      person_count: signals.personCount,
-      phone_count: signals.phoneCount,
-      confidence: observationConfidence(prepared.usability, signals),
-      boxes: toOverlayBoxes(kept, frame),
-    };
-  } catch (err) {
-    console.error(
-      "vision: detection failed:",
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  }
+    try {
+      active.postMessage({ id, rgba, width, height, minScore: scoreOverride() });
+    } catch (err) {
+      console.error(
+        "vision: could not hand the frame to the detector:",
+        err instanceof Error ? err.message : err,
+      );
+      settle(id, null);
+    }
+  });
 }
 
-/** Warm the model before the first candidate frame arrives. Best-effort. */
-export async function preloadDetector(): Promise<boolean> {
-  return (await loadSession()) !== null;
+/** Start the inference thread before the first candidate frame arrives. */
+export function preloadDetector(): void {
+  ensureWorker();
 }

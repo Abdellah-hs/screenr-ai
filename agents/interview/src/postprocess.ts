@@ -22,7 +22,7 @@
 export const INPUT_SIZE = 416;
 
 /** Feature-map strides the YOLOX head predicts at, in output order. */
-export const STRIDES = [8, 16, 32] as const;
+const STRIDES = [8, 16, 32] as const;
 
 /** 4 box + 1 objectness + 80 COCO class scores. */
 const NUM_CLASSES = 80;
@@ -44,7 +44,7 @@ export const PERSON_CLASS_ID = 0;
  * report. `book` (73) is out for the same reason — it fires on the scratch paper
  * candidates are explicitly allowed to use.
  */
-export const PHONE_CLASS_IDS: ReadonlySet<number> = new Set([67, 65]);
+const PHONE_CLASS_IDS: ReadonlySet<number> = new Set([67, 65]);
 
 /**
  * Minimum detection score to count a person. Low-ish because a person mid-frame
@@ -52,7 +52,7 @@ export const PHONE_CLASS_IDS: ReadonlySet<number> = new Set([67, 65]);
  * floor below, and a weak score is separately folded into the sample's confidence
  * so the rule layer can discard it.
  */
-export const PERSON_MIN_SCORE = 0.35;
+const PERSON_MIN_SCORE = 0.35;
 
 /**
  * Phones are small, often partly occluded by a hand, and easy to confuse with
@@ -60,7 +60,7 @@ export const PERSON_MIN_SCORE = 0.35;
  * with the rule layer's three-consecutive-sightings requirement, a single
  * confident-looking mistake still cannot produce an incident.
  */
-export const PHONE_MIN_SCORE = 0.45;
+const PHONE_MIN_SCORE = 0.45;
 
 /**
  * A person must fill at least this fraction of the frame to be counted. This is
@@ -68,19 +68,19 @@ export const PHONE_MIN_SCORE = 0.45;
  * or a person on a background monitor. Someone actually in the room with the
  * candidate is close enough to the camera to clear it easily.
  */
-export const PERSON_MIN_AREA_RATIO = 0.015;
+const PERSON_MIN_AREA_RATIO = 0.015;
 
 /** Same idea for phones, far smaller — a held phone is a small object by nature. */
-export const PHONE_MIN_AREA_RATIO = 0.003;
+const PHONE_MIN_AREA_RATIO = 0.003;
 
 /** Boxes overlapping more than this are the same object; keep the best-scoring. */
-export const NMS_IOU_THRESHOLD = 0.45;
+const NMS_IOU_THRESHOLD = 0.45;
 
 /**
  * Pre-NMS score floor. Below both class thresholds on purpose — filtering here
  * only bounds how much work NMS does; the real decisions happen after it.
  */
-export const DECODE_MIN_SCORE = 0.2;
+const DECODE_MIN_SCORE = 0.2;
 
 /** One decoded box, in SOURCE-image pixel coordinates. */
 export interface Detection {
@@ -293,14 +293,14 @@ export function selectSignals(
   return kept;
 }
 
-/** Reduce a frame's surviving boxes to the two counts the app understands. */
-export function countSignals(
-  detections: Detection[],
-  frame: { width: number; height: number },
-  opts: { personMinScore?: number; phoneMinScore?: number } = {},
-): FrameSignals {
-  const kept = selectSignals(detections, frame, opts);
-
+/**
+ * Reduce already-selected boxes to the two counts the app understands.
+ *
+ * Split from `countSignals` so a caller that also needs the boxes (the overlay,
+ * the evidence still) can select once and count from that exact array, rather
+ * than selecting a second time and trusting two independent calls to agree.
+ */
+export function countKept(kept: CountedDetection[]): FrameSignals {
   let personCount = 0;
   let phoneCount = 0;
   let weakestPersonScore = 1;
@@ -315,6 +315,15 @@ export function countSignals(
   }
 
   return { personCount, phoneCount, weakestPersonScore };
+}
+
+/** Select and count in one call, for callers that don't need the boxes. */
+export function countSignals(
+  detections: Detection[],
+  frame: { width: number; height: number },
+  opts: { personMinScore?: number; phoneMinScore?: number } = {},
+): FrameSignals {
+  return countKept(selectSignals(detections, frame, opts));
 }
 
 /** A box as it travels to the browser: fractions of the frame, not pixels. */

@@ -48,6 +48,7 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
 /** The private bucket holding proctoring evidence stills. */
 const SNAPSHOT_BUCKET = "proctoring-snapshots";
 
+
 /**
  * Upload one proctoring evidence still and return its object key.
  *
@@ -93,22 +94,32 @@ export async function deleteProctoringSnapshots(
 }
 
 /**
- * Time-limited signed URL for one evidence still, for the recruiter's report.
- * Mirrors `getResumeSignedUrl`: the stored value is a private object KEY, never
- * a URL, so an image is only ever reachable through a fresh short-lived link.
+ * Time-limited signed URLs for evidence stills, keyed by object key.
+ *
+ * Batched because a report can carry several findings and the recruiter's page
+ * needs them all at once: `createSignedUrls` is one request for the set, where
+ * mapping the single-key helper over them would be one Supabase client and one
+ * round trip each. Keys that fail to sign are simply absent from the result —
+ * an incident without a picture still renders.
  */
-export async function getProctoringSnapshotSignedUrl(
-  key: string,
-): Promise<string | null> {
-  if (!key) return null;
-  const supabase = await createClient();
+export async function getProctoringSnapshotSignedUrls(
+  keys: string[],
+): Promise<Record<string, string>> {
+  const wanted = keys.filter(Boolean);
+  if (wanted.length === 0) return {};
 
+  const supabase = await createClient();
   const { data, error } = await supabase.storage
     .from(SNAPSHOT_BUCKET)
-    .createSignedUrl(key, 3600);
+    .createSignedUrls(wanted, 3600);
 
-  if (error || !data) return null;
-  return data.signedUrl;
+  if (error || !data) return {};
+
+  return Object.fromEntries(
+    data
+      .filter((entry) => entry.signedUrl && entry.path)
+      .map((entry) => [entry.path as string, entry.signedUrl]),
+  );
 }
 
 /**
@@ -407,18 +418,23 @@ export async function saveResumeScore(args: {
 }
 
 /**
- * Minimal read used by action code that only needs to revalidate cache paths
- * for an application's owning campaign.
+ * Minimal read for callers that only need an application's owning campaign —
+ * revalidating cache paths, or building a campaign-scoped storage key.
+ *
+ * Takes an optional `db` so the session-less agent routes can pass the admin
+ * client; without it the cookie client's RLS returns nothing on a candidate-path
+ * request.
  */
 export async function fetchApplicationCampaignId(
-  applicationId: string
+  applicationId: string,
+  db?: SupabaseDb
 ): Promise<string | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
   const { data } = await supabase
     .from("applications")
     .select("campaign_id")
     .eq("id", applicationId)
-    .single();
+    .maybeSingle();
   return data?.campaign_id ?? null;
 }
 

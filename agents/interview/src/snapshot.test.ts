@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeSnapshot, snapshotCondition } from "./snapshot.js";
+import { encodeSnapshot, snapshotBucket } from "./snapshot.js";
 import type { OverlayBox } from "./postprocess.js";
 
 /** A solid-colour RGBA frame — enough for the encoder, no fixture file needed. */
@@ -18,27 +18,39 @@ function box(overrides: Partial<OverlayBox> = {}): OverlayBox {
   return { label: "person", x: 0.2, y: 0.2, w: 0.4, h: 0.5, score: 0.9, ...overrides };
 }
 
-describe("snapshotCondition", () => {
-  it("files a frame with a second person under multiple_people", () => {
-    expect(snapshotCondition({ person_count: 2, phone_count: 0 })).toBe("multiple_people");
+/**
+ * The bucket is a throttling key, NOT the incident vocabulary — naming the
+ * finding is the app's job. These tests pin the only property that matters:
+ * ordinary frames aren't worth encoding, and distinguishable findings throttle
+ * independently so one can't starve another of its picture.
+ */
+describe("snapshotBucket", () => {
+  it("declines to encode an ordinary frame", () => {
+    expect(snapshotBucket({ person_count: 1, phone_count: 0 })).toBeNull();
   });
 
-  it("files an empty frame under person_absent", () => {
-    expect(snapshotCondition({ person_count: 0, phone_count: 0 })).toBe("person_absent");
+  it("buckets an empty frame, a crowded one, and a phone separately", () => {
+    const empty = snapshotBucket({ person_count: 0, phone_count: 0 });
+    const crowded = snapshotBucket({ person_count: 2, phone_count: 0 });
+    const phone = snapshotBucket({ person_count: 1, phone_count: 1 });
+
+    expect(new Set([empty, crowded, phone]).size).toBe(3);
+    expect([empty, crowded, phone].every((b) => b !== null)).toBe(true);
   });
 
-  it("files a phone under phone_visible", () => {
-    expect(snapshotCondition({ person_count: 1, phone_count: 1 })).toBe("phone_visible");
+  // Two findings at once must not share a throttle slot, or the second one
+  // never gets an image of its own.
+  it("distinguishes a frame carrying two findings from either alone", () => {
+    const both = snapshotBucket({ person_count: 2, phone_count: 1 });
+
+    expect(both).not.toBe(snapshotBucket({ person_count: 2, phone_count: 0 }));
+    expect(both).not.toBe(snapshotBucket({ person_count: 1, phone_count: 1 }));
   });
 
-  // A snapshot is one image, so it gets one filing. The extra person is the
-  // more serious claim; the app still derives both incidents from the counts.
-  it("prefers the more serious condition when a frame carries two", () => {
-    expect(snapshotCondition({ person_count: 2, phone_count: 1 })).toBe("multiple_people");
-  });
-
-  it("captures nothing for an ordinary frame", () => {
-    expect(snapshotCondition({ person_count: 1, phone_count: 0 })).toBeNull();
+  it("is stable for the same reading", () => {
+    expect(snapshotBucket({ person_count: 2, phone_count: 1 })).toBe(
+      snapshotBucket({ person_count: 2, phone_count: 1 }),
+    );
   });
 });
 

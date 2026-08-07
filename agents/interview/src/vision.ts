@@ -36,7 +36,7 @@ import {
 import type { JobContext } from "@livekit/agents";
 import { detectFrame, preloadDetector } from "./detector.js";
 import type { OverlayBox } from "./postprocess.js";
-import { encodeSnapshot, snapshotCondition, type SnapshotCondition } from "./snapshot.js";
+import { encodeSnapshot, snapshotBucket } from "./snapshot.js";
 
 /** One sampled frame's reading. Mirrors `VisionObservation` in the app. */
 export interface VisionObservation {
@@ -99,7 +99,7 @@ const SNAPSHOT_MIN_INTERVAL_MS =
 
 /** A single frame lifted off the live track, in RGBA. */
 interface RawFrame {
-  data: Buffer;
+  data: Uint8Array;
   width: number;
   height: number;
 }
@@ -113,13 +113,11 @@ async function captureFrame(track: RemoteTrack): Promise<RawFrame | null> {
     if (done || !value) return null;
 
     // The wire format varies by codec/browser (I420 in practice); converting to
-    // RGBA here means the detector only ever deals with one layout.
+    // RGBA here means the detector only ever deals with one layout. `convert`
+    // already returns a freshly-owned buffer, so copying it again would be
+    // ~3.7MB of pointless churn per frame at 720p.
     const rgba = value.frame.convert(VideoBufferType.RGBA);
-    return {
-      data: Buffer.from(rgba.data),
-      width: rgba.width,
-      height: rgba.height,
-    };
+    return { data: rgba.data, width: rgba.width, height: rgba.height };
   } catch (err) {
     console.error(
       "frame capture error:",
@@ -156,11 +154,19 @@ async function publishOverlay(ctx: JobContext, packet: OverlayPacket): Promise<v
   }
 }
 
-/** One flagged frame, encoded for upload. The bytes are handed off and dropped. */
+/**
+ * One flagged frame, encoded for upload. The bytes are handed off and dropped.
+ *
+ * Carries the COUNTS, not a named finding: what a set of counts means is the
+ * app's rule layer's vocabulary, and it derives the label on receipt. That keeps
+ * a single definition of each condition rather than one here and one there that
+ * must be kept in step by hand.
+ */
 export interface VisionSnapshot {
   /** ISO timestamp of the frame — how the app matches it to an incident. */
   at: string;
-  condition: SnapshotCondition;
+  person_count: number;
+  phone_count: number;
   jpeg: Buffer;
 }
 
@@ -193,11 +199,11 @@ export function startVisionProctoring(
   let stopped = false;
   let busy = false;
   let lastRecordedMs = 0;
-  const lastSnapshotMs = new Map<SnapshotCondition, number>();
+  const lastSnapshotMs = new Map<string, number>();
 
-  // Warm the model while the candidate is still being greeted, so the first
-  // sample isn't also paying the load cost.
-  void preloadDetector();
+  // Start the inference thread while the candidate is still being greeted, so
+  // the first sample isn't also paying the model-load cost.
+  preloadDetector();
 
   const onSubscribed = (track: RemoteTrack) => {
     if (track.kind === TrackKind.KIND_VIDEO) videoTrack = track;
@@ -259,17 +265,23 @@ export function startVisionProctoring(
       // depict a frame that is in the report, and it inherits the confidence
       // filtering that goes with it.
       if (SNAPSHOTS_ENABLED && onSnapshot) {
-        const condition = snapshotCondition(reading);
-        const since = condition ? capturedMs - (lastSnapshotMs.get(condition) ?? 0) : 0;
-        if (condition && since >= SNAPSHOT_MIN_INTERVAL_MS) {
-          lastSnapshotMs.set(condition, capturedMs);
+        const bucket = snapshotBucket(reading);
+        if (bucket && capturedMs - (lastSnapshotMs.get(bucket) ?? 0) >= SNAPSHOT_MIN_INTERVAL_MS) {
+          lastSnapshotMs.set(bucket, capturedMs);
           const jpeg = await encodeSnapshot(
             frame.data,
             frame.width,
             frame.height,
             reading.boxes,
           );
-          if (jpeg) onSnapshot({ at, condition, jpeg });
+          if (jpeg) {
+            onSnapshot({
+              at,
+              person_count: reading.person_count,
+              phone_count: reading.phone_count,
+              jpeg,
+            });
+          }
         }
       }
     } catch (err) {

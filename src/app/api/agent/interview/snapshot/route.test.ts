@@ -8,7 +8,7 @@ vi.mock("@/lib/data/interview-sessions", () => ({
   appendProctoringSnapshot: vi.fn(),
 }));
 vi.mock("@/lib/data/candidates", () => ({
-  fetchInterviewContextByApplicationId: vi.fn(),
+  fetchApplicationCampaignId: vi.fn(),
   uploadProctoringSnapshot: vi.fn(),
   deleteProctoringSnapshots: vi.fn(),
 }));
@@ -19,14 +19,14 @@ import {
   appendProctoringSnapshot,
 } from "@/lib/data/interview-sessions";
 import {
-  fetchInterviewContextByApplicationId,
+  fetchApplicationCampaignId,
   uploadProctoringSnapshot,
   deleteProctoringSnapshots,
 } from "@/lib/data/candidates";
 
 const mockFetchSession = vi.mocked(fetchInterviewSessionByApplicationId);
 const mockAppend = vi.mocked(appendProctoringSnapshot);
-const mockFetchContext = vi.mocked(fetchInterviewContextByApplicationId);
+const mockFetchCampaignId = vi.mocked(fetchApplicationCampaignId);
 const mockUpload = vi.mocked(uploadProctoringSnapshot);
 const mockDelete = vi.mocked(deleteProctoringSnapshots);
 
@@ -41,7 +41,9 @@ function body(overrides: Record<string, unknown> = {}) {
   return {
     application_id: APP_ID,
     at: "2026-08-04T12:00:00.000Z",
-    condition: "multiple_people",
+    // Counts, not a named finding — the route derives the condition itself.
+    person_count: 2,
+    phone_count: 0,
     image_base64: IMAGE,
     ...overrides,
   };
@@ -62,7 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.AGENT_API_SECRET = "agent-secret";
   mockFetchSession.mockResolvedValue({ status: "in_progress" } as never);
-  mockFetchContext.mockResolvedValue({ campaign_id: CAMPAIGN_ID } as never);
+  mockFetchCampaignId.mockResolvedValue(CAMPAIGN_ID);
   mockUpload.mockResolvedValue(KEY);
   mockAppend.mockResolvedValue(true);
 });
@@ -76,11 +78,34 @@ describe("POST /api/agent/interview/snapshot", () => {
       expect.objectContaining({ campaignId: CAMPAIGN_ID, applicationId: APP_ID }),
       expect.objectContaining({ __brand: "admin-client" }),
     );
+    // The condition is DERIVED from the counts by the rule layer, never taken
+    // from the worker — one definition of what a reading means.
     expect(mockAppend).toHaveBeenCalledWith(
       APP_ID,
       { at: "2026-08-04T12:00:00.000Z", condition: "multiple_people", key: KEY },
       expect.anything(),
     );
+  });
+
+  it("files a phone frame under phone_visible", async () => {
+    await POST(request(body({ person_count: 1, phone_count: 1 }), "agent-secret"));
+
+    expect(mockAppend).toHaveBeenCalledWith(
+      APP_ID,
+      expect.objectContaining({ condition: "phone_visible" }),
+      expect.anything(),
+    );
+  });
+
+  // A frame the rules consider ordinary is evidence of nothing, so it must not
+  // reach storage even though the worker chose to send it.
+  it("refuses a frame that carries no finding", async () => {
+    const res = await POST(
+      request(body({ person_count: 1, phone_count: 0 }), "agent-secret"),
+    );
+
+    expect(res.status).toBe(400);
+    expect(mockUpload).not.toHaveBeenCalled();
   });
 
   // The campaign id is the first path segment the bucket's RLS scopes on, so it
@@ -136,15 +161,13 @@ describe("POST /api/agent/interview/snapshot", () => {
 
   it("rejects malformed payloads with 400", async () => {
     const badId = await POST(request(body({ application_id: "nope" }), "agent-secret"));
-    const badCondition = await POST(
-      request(body({ condition: "looked_shifty" }), "agent-secret"),
-    );
+    const badCount = await POST(request(body({ person_count: -1 }), "agent-secret"));
     const badTimestamp = await POST(request(body({ at: "not-a-date" }), "agent-secret"));
     const noImage = await POST(request(body({ image_base64: "" }), "agent-secret"));
 
     expect([
       badId.status,
-      badCondition.status,
+      badCount.status,
       badTimestamp.status,
       noImage.status,
     ]).toEqual([400, 400, 400, 400]);
