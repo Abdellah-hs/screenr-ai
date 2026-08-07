@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  attachSnapshots,
   summarizeProctoring,
   CAMERA_OFF_MIN_MS,
   TAB_BLUR_MIN_MS,
   type ProctoringEvent,
+  type VisionIncidentType,
   type VisionObservation,
 } from "./incidents";
 
@@ -116,31 +118,45 @@ describe("summarizeProctoring", () => {
 
 /**
  * Vision proctoring (Phase C2). The worker samples a frame every ~10s and reports
- * a face count per frame; these rules turn that series into durations.
+ * how many people and how many phones it counted; these rules turn that series
+ * into durations.
  *
  * The bias here is deliberate and asymmetric: wrongly accusing a real candidate
  * of having someone else in the room is far more costly than missing a genuine
  * incident, so every test below that pins down a *non*-detection is protecting
- * that property, not describing an incidental behaviour.
+ * that property, not describing an incidental behaviour. That asymmetry matters
+ * more since the interview stopped being recorded — there is no footage anyone
+ * can go check a finding against.
  */
 describe("summarizeProctoring — vision observations", () => {
   const T0 = Date.parse("2026-07-29T10:00:00.000Z");
 
-  /** A run of samples 10s apart, all reading the same face count. */
+  /** A run of samples 10s apart, all reading the same counts. */
   function samples(
-    faceCount: number,
+    personCount: number,
     count: number,
-    opts: { confidence?: number; startMs?: number; stepMs?: number } = {},
+    opts: {
+      confidence?: number;
+      startMs?: number;
+      stepMs?: number;
+      phoneCount?: number;
+    } = {},
   ): VisionObservation[] {
-    const { confidence = 0.95, startMs = 0, stepMs = 10_000 } = opts;
+    const {
+      confidence = 0.95,
+      startMs = 0,
+      stepMs = 10_000,
+      phoneCount = 0,
+    } = opts;
     return Array.from({ length: count }, (_, i) => ({
       at: new Date(T0 + startMs + i * stepMs).toISOString(),
-      face_count: faceCount,
+      person_count: personCount,
       confidence,
+      phone_count: phoneCount,
     }));
   }
 
-  it("raises nothing when exactly one face is present throughout", () => {
+  it("raises nothing when exactly one person is present throughout", () => {
     const report = summarizeProctoring([], samples(1, 20));
 
     expect(report.incidents).toEqual([]);
@@ -148,12 +164,12 @@ describe("summarizeProctoring — vision observations", () => {
   });
 
   it("flags a sustained absence from frame", () => {
-    // 4 samples * 10s spacing = 30s span, past FACE_ABSENT_MIN_MS (15s).
+    // 4 samples * 10s spacing = 30s span, past PERSON_ABSENT_MIN_MS (15s).
     const report = summarizeProctoring([], samples(0, 4));
 
     expect(report.incidents).toHaveLength(1);
     expect(report.incidents[0]).toMatchObject({
-      type: "face_absent",
+      type: "person_absent",
       severity: "warning",
       source: "vision",
     });
@@ -176,7 +192,7 @@ describe("summarizeProctoring — vision observations", () => {
   });
 
   it("ignores a brief glimpse of a second person passing behind", () => {
-    // Two samples = 10s span, below MULTIPLE_FACES_MIN_MS.
+    // Two samples = 10s span, below MULTIPLE_PEOPLE_MIN_MS.
     const observations = [
       ...samples(1, 2),
       ...samples(2, 2, { startMs: 20_000 }),
@@ -192,14 +208,72 @@ describe("summarizeProctoring — vision observations", () => {
     const report = summarizeProctoring([], samples(2, 5, { startMs: 0 })); // 40s
 
     expect(report.incidents[0]).toMatchObject({
-      type: "multiple_faces",
+      type: "multiple_people",
       severity: "critical",
       source: "vision",
     });
   });
 
+  it("flags a phone that stays in shot", () => {
+    // 3 samples = 20s span, past PHONE_VISIBLE_MIN_MS (15s).
+    const report = summarizeProctoring([], samples(1, 3, { phoneCount: 1 }));
+
+    expect(report.incidents).toHaveLength(1);
+    expect(report.incidents[0]).toMatchObject({
+      type: "phone_visible",
+      severity: "warning",
+      source: "vision",
+    });
+  });
+
+  it("ignores a phone glimpsed in a single frame", () => {
+    // Picking up a phone to silence it, or a stray reflection off one on the
+    // desk. One frame spans zero time and can never clear a threshold.
+    const observations = [
+      ...samples(1, 2),
+      ...samples(1, 1, { startMs: 20_000, phoneCount: 1 }),
+      ...samples(1, 2, { startMs: 30_000 }),
+    ];
+
+    const report = summarizeProctoring([], observations);
+
+    expect(report.incidents).toEqual([]);
+  });
+
+  // The regression guard for per-condition run tracking: before this, one run
+  // was shared across all vision conditions, so whichever condition a frame was
+  // attributed to first silently swallowed the other.
+  it("reports two conditions present in the same frames independently", () => {
+    const report = summarizeProctoring(
+      [],
+      samples(2, 4, { phoneCount: 1 }), // two people AND a phone, for 30s
+    );
+
+    expect(report.incidents.map((i) => i.type).sort()).toEqual([
+      "multiple_people",
+      "phone_visible",
+    ]);
+    expect(report.summary.multiple_people_count).toBe(1);
+    expect(report.summary.phone_visible_count).toBe(1);
+  });
+
+  it("keeps an ongoing condition open while an overlapping one ends", () => {
+    // The phone is in shot the whole time; the second person leaves halfway.
+    const observations = [
+      ...samples(2, 3, { phoneCount: 1 }), // 0–20s: both
+      ...samples(1, 3, { startMs: 30_000, phoneCount: 1 }), // 30–50s: phone only
+    ];
+
+    const report = summarizeProctoring([], observations);
+
+    const phone = report.incidents.filter((i) => i.type === "phone_visible");
+    expect(phone).toHaveLength(1);
+    expect(phone[0].duration_ms).toBe(50_000);
+    expect(report.summary.multiple_people_count).toBe(1);
+  });
+
   it("discards low-confidence samples instead of believing them", () => {
-    // A dark or blurred room reading "no face" must not become an absence.
+    // A dark or blurred room reading "nobody there" must not become an absence.
     const report = summarizeProctoring([], samples(0, 8, { confidence: 0.3 }));
 
     expect(report.incidents).toEqual([]);
@@ -239,14 +313,111 @@ describe("summarizeProctoring — vision observations", () => {
     const report = summarizeProctoring(events, samples(0, 4));
 
     expect(report.incidents.map((i) => i.source)).toEqual(["vision", "client"]);
-    expect(report.summary.face_absent_count).toBe(1);
+    expect(report.summary.person_absent_count).toBe(1);
     expect(report.summary.tab_blur_count).toBe(1);
+  });
+
+  /**
+   * Evidence stills. The load-bearing property is the prune: the worker captures
+   * while a condition holds, but only the rules know which conditions survived —
+   * so a still for a frame that never became an incident is a photograph of a
+   * candidate the system was WRONG about, and must not be kept.
+   */
+  describe("attachSnapshots", () => {
+    function snapshot(atMs: number, condition: VisionIncidentType, key: string) {
+      return { at: new Date(T0 + atMs).toISOString(), condition, key };
+    }
+
+    it("attaches a still captured inside a confirmed incident", () => {
+      const report = summarizeProctoring([], samples(0, 4)); // 0–30s absence
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(10_000, "person_absent", "camp/app/1.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBe("camp/app/1.jpg");
+      expect(orphanedKeys).toEqual([]);
+    });
+
+    it("orphans a still whose condition never cleared the threshold", () => {
+      // One stray frame — never an incident, so its picture is evidence of
+      // nothing and gets deleted.
+      const report = summarizeProctoring([], [
+        ...samples(1, 2),
+        ...samples(0, 1, { startMs: 20_000 }),
+      ]);
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(20_000, "person_absent", "camp/app/stray.jpg"),
+      ]);
+
+      expect(withSnaps.incidents).toEqual([]);
+      expect(orphanedKeys).toEqual(["camp/app/stray.jpg"]);
+    });
+
+    it("does not attach a still of a different condition", () => {
+      const report = summarizeProctoring([], samples(0, 4));
+      const { orphanedKeys } = attachSnapshots(report, [
+        snapshot(10_000, "phone_visible", "camp/app/phone.jpg"),
+      ]);
+
+      expect(orphanedKeys).toEqual(["camp/app/phone.jpg"]);
+    });
+
+    it("does not attach a still taken outside the incident's window", () => {
+      const report = summarizeProctoring([], samples(0, 4)); // spans 0–30s
+      const { orphanedKeys } = attachSnapshots(report, [
+        snapshot(120_000, "person_absent", "camp/app/late.jpg"),
+      ]);
+
+      expect(orphanedKeys).toEqual(["camp/app/late.jpg"]);
+    });
+
+    it("keeps the earliest still and orphans the rest of the same incident", () => {
+      const report = summarizeProctoring([], samples(0, 8)); // 0–70s absence
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(40_000, "person_absent", "camp/app/late.jpg"),
+        snapshot(10_000, "person_absent", "camp/app/early.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBe("camp/app/early.jpg");
+      expect(orphanedKeys).toEqual(["camp/app/late.jpg"]);
+    });
+
+    it("never attaches a still to a browser-signal incident", () => {
+      const report = summarizeProctoring([event({ duration_ms: 20_000 })], []);
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(0, "person_absent", "camp/app/1.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBeUndefined();
+      expect(orphanedKeys).toEqual(["camp/app/1.jpg"]);
+    });
+
+    it("gives two incidents two different stills", () => {
+      // Two people AND a phone throughout: two incidents, one picture each.
+      const report = summarizeProctoring([], samples(2, 4, { phoneCount: 1 }));
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(10_000, "multiple_people", "camp/app/people.jpg"),
+        snapshot(10_000, "phone_visible", "camp/app/phone.jpg"),
+      ]);
+
+      const keys = withSnaps.incidents.map((i) => i.snapshot_key).sort();
+      expect(keys).toEqual(["camp/app/people.jpg", "camp/app/phone.jpg"]);
+      expect(orphanedKeys).toEqual([]);
+    });
+
+    it("leaves a report untouched when nothing was captured", () => {
+      const report = summarizeProctoring([], samples(0, 4));
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, []);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBeUndefined();
+      expect(orphanedKeys).toEqual([]);
+    });
   });
 
   it("labels every incident with the evidence it came from", () => {
     const report = summarizeProctoring([event({ duration_ms: 20_000 })], samples(0, 4));
 
     const bySource = Object.fromEntries(report.incidents.map((i) => [i.type, i.source]));
-    expect(bySource).toEqual({ tab_blur: "client", face_absent: "vision" });
+    expect(bySource).toEqual({ tab_blur: "client", person_absent: "vision" });
   });
 });

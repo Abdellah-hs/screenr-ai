@@ -418,20 +418,47 @@ export const proctoringEventsSchema = z.array(proctoringEventSchema).max(MAX_PRO
 /** A ~10s cadence over the call cap needs ~60; this leaves generous headroom. */
 const MAX_VISION_OBSERVATIONS = 500;
 
-/** Beyond a few faces the exact count stops mattering; cap it to bound the input. */
-const MAX_FACE_COUNT = 20;
+/** Beyond a few people the exact count stops mattering; cap it to bound the input. */
+const MAX_PERSON_COUNT = 20;
+
+/** Same idea for devices — "several phones in shot" needs no more precision. */
+const MAX_PHONE_COUNT = 10;
 
 export const visionObservationSchema = z.object({
   at: z
     .string()
     .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
-  face_count: z.number().int().min(0).max(MAX_FACE_COUNT),
+  person_count: z.number().int().min(0).max(MAX_PERSON_COUNT),
   confidence: z.number().min(0).max(1),
+  phone_count: z.number().int().min(0).max(MAX_PHONE_COUNT),
 });
 
 export const visionObservationsSchema = z
   .array(visionObservationSchema)
   .max(MAX_VISION_OBSERVATIONS);
+
+// Evidence snapshots: one annotated still per flagged frame, uploaded by the
+// worker over the same AGENT_API_SECRET-guarded boundary. Bounded hard because
+// this is the one agent report that carries bytes rather than numbers.
+
+/**
+ * ~50KB JPEG at the worker's 640px/q72 settings; base64 inflates by a third.
+ * 512KB leaves generous headroom for a busy frame while making it impossible to
+ * use this route to push anything of consequence into storage.
+ */
+const MAX_SNAPSHOT_BASE64_LENGTH = 512 * 1024;
+
+// Note what is absent: no condition and no incident type. The worker sends the
+// same counts it reports as observations, and the rule layer derives what they
+// mean — so the vocabulary has exactly one definition, on the server.
+export const proctoringSnapshotSchema = z.object({
+  at: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid timestamp"),
+  person_count: z.number().int().min(0).max(MAX_PERSON_COUNT),
+  phone_count: z.number().int().min(0).max(MAX_PHONE_COUNT),
+  image_base64: z.string().min(1).max(MAX_SNAPSHOT_BASE64_LENGTH),
+});
 
 // ─── HITL Screening Review ──────────────────────────────────────────────────
 

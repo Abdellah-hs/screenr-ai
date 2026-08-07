@@ -45,25 +45,81 @@ export async function getResumeSignedUrl(filePath: string): Promise<string | nul
   return data.signedUrl;
 }
 
+/** The private bucket holding proctoring evidence stills. */
+const SNAPSHOT_BUCKET = "proctoring-snapshots";
+
+
 /**
- * Generate a time-limited signed URL for an interview recording (Phase B2).
- * Same shape as `getResumeSignedUrl`, against the private `interview-recordings`
- * bucket. Returns null when there's no key, or when the object doesn't exist yet
- * (egress still finalizing) — the recruiter UI then shows "processing" instead
- * of a broken player.
+ * Upload one proctoring evidence still and return its object key.
+ *
+ * Key layout `<campaign>/<application>/<epoch>.jpg` puts the campaign id in the
+ * first path segment, which is what the bucket's owner-scoped RLS keys off —
+ * the same convention as `resumes`. Uploaded with the admin client from the
+ * agent route, so it bypasses RLS on write; the recruiter read path is what the
+ * policies govern.
  */
-export async function getInterviewRecordingSignedUrl(
-  storageKey: string,
-): Promise<string | null> {
-  if (!storageKey) return null;
+export async function uploadProctoringSnapshot(
+  args: {
+    campaignId: string;
+    applicationId: string;
+    at: string;
+    image: Buffer;
+  },
+  db: SupabaseDb,
+): Promise<string> {
+  const stamp = Number.isNaN(Date.parse(args.at)) ? Date.now() : Date.parse(args.at);
+  const key = `${args.campaignId}/${args.applicationId}/${stamp}.jpg`;
+
+  const { error } = await db.storage
+    .from(SNAPSHOT_BUCKET)
+    .upload(key, args.image, { contentType: "image/jpeg", upsert: true });
+
+  if (error) throw error;
+  return key;
+}
+
+/**
+ * Delete evidence stills by key. Used to prune snapshots that didn't land inside
+ * a confirmed incident — the images behind the detector's own false positives.
+ * Best-effort at the call site; a failure here leaves an unreferenced object,
+ * never a broken report.
+ */
+export async function deleteProctoringSnapshots(
+  keys: string[],
+  db: SupabaseDb,
+): Promise<void> {
+  if (keys.length === 0) return;
+  const { error } = await db.storage.from(SNAPSHOT_BUCKET).remove(keys);
+  if (error) throw error;
+}
+
+/**
+ * Time-limited signed URLs for evidence stills, keyed by object key.
+ *
+ * Batched because a report can carry several findings and the recruiter's page
+ * needs them all at once: `createSignedUrls` is one request for the set, where
+ * mapping the single-key helper over them would be one Supabase client and one
+ * round trip each. Keys that fail to sign are simply absent from the result —
+ * an incident without a picture still renders.
+ */
+export async function getProctoringSnapshotSignedUrls(
+  keys: string[],
+): Promise<Record<string, string>> {
+  const wanted = keys.filter(Boolean);
+  if (wanted.length === 0) return {};
+
   const supabase = await createClient();
-
   const { data, error } = await supabase.storage
-    .from("interview-recordings")
-    .createSignedUrl(storageKey, 3600);
+    .from(SNAPSHOT_BUCKET)
+    .createSignedUrls(wanted, 3600);
 
-  if (error || !data) return null;
-  return data.signedUrl;
+  if (error || !data) return {};
+
+  return Object.fromEntries(
+    data
+      .filter((entry) => entry.signedUrl && entry.path)
+      .map((entry) => [entry.path as string, entry.signedUrl]),
+  );
 }
 
 /**
@@ -362,18 +418,23 @@ export async function saveResumeScore(args: {
 }
 
 /**
- * Minimal read used by action code that only needs to revalidate cache paths
- * for an application's owning campaign.
+ * Minimal read for callers that only need an application's owning campaign —
+ * revalidating cache paths, or building a campaign-scoped storage key.
+ *
+ * Takes an optional `db` so the session-less agent routes can pass the admin
+ * client; without it the cookie client's RLS returns nothing on a candidate-path
+ * request.
  */
 export async function fetchApplicationCampaignId(
-  applicationId: string
+  applicationId: string,
+  db?: SupabaseDb
 ): Promise<string | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
   const { data } = await supabase
     .from("applications")
     .select("campaign_id")
     .eq("id", applicationId)
-    .single();
+    .maybeSingle();
   return data?.campaign_id ?? null;
 }
 

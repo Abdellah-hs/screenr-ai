@@ -12,9 +12,9 @@ export const runtime = "nodejs";
 /**
  * Agent-report endpoint for vision proctoring (Phase C2): the interview agent
  * worker (agents/interview/) samples frames from the candidate's published video
- * track, runs a vision model over them, and posts the observations it has
- * accumulated so far. They land as a DRAFT on the interview_sessions row and are
- * folded into the final proctoring report by `summarizeProctoring` when the
+ * track, runs a local object detector over them, and posts the observations it
+ * has accumulated so far. They land as a DRAFT on the interview_sessions row and
+ * are folded into the final proctoring report by `summarizeProctoring` when the
  * candidate submits.
  *
  * This is the one proctoring signal the candidate's machine does NOT supply —
@@ -22,11 +22,13 @@ export const runtime = "nodejs";
  * `Authorization: Bearer ${AGENT_API_SECRET}`, failing closed when the secret is
  * unset, and `saveVisionObservationsDraft` only writes while the session is open.
  *
- * What this route deliberately does not accept: any severity, any incident type,
- * any conclusion about the candidate. The worker reports counts and its own
- * confidence; the rule layer decides what — if anything — that means. A worker
- * (or anything holding its secret) therefore cannot manufacture an incident, only
- * the raw readings one is derived from.
+ * Counts only: the frames themselves never leave the worker (the interview is
+ * not recorded, and nothing here would store an image if it did). What this
+ * route deliberately does not accept is any severity, any incident type, any
+ * conclusion about the candidate. The worker reports what it counted and how
+ * usable the frame was; the rule layer decides what — if anything — that means.
+ * A worker (or anything holding its secret) therefore cannot manufacture an
+ * incident, only the raw readings one is derived from.
  */
 const bodySchema = z.object({
   application_id: uuidSchema,

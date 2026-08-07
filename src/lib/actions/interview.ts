@@ -6,17 +6,20 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { uuidSchema, proctoringEventsSchema } from "@/lib/validations";
 import {
+  attachSnapshots,
   summarizeProctoring,
   type ProctoringEvent,
+  type ProctoringSnapshot,
   type VisionObservation,
 } from "@/lib/proctoring/incidents";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import {
+  deleteProctoringSnapshots,
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
-  getInterviewRecordingSignedUrl,
+  getProctoringSnapshotSignedUrls,
   type InterviewCandidateContext,
 } from "@/lib/data/candidates";
 import { runInterviewScoring } from "./interview-scoring";
@@ -24,17 +27,13 @@ import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
   markInterviewStarted,
-  saveInterviewRecording,
   saveProctoringReport,
+  saveProctoringSnapshots,
   finalizeInterviewTranscript,
   type InterviewSessionRow,
   type InterviewSessionStatus,
   type InterviewTranscriptTurn,
 } from "@/lib/data/interview-sessions";
-import {
-  isInterviewRecordingConfigured,
-  startInterviewRecording,
-} from "@/lib/services/livekit-egress";
 import {
   buildInterviewInstructions,
   type InterviewResume,
@@ -198,44 +197,10 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
     resume: toInterviewResume(ctx),
   });
 
-  const grant = await createInterviewRoomGrant({ applicationId: application_id, instructions });
-
-  // Best-effort recording (Phase B2). Started BEFORE the grant is returned so
-  // egress is already capturing when the candidate joins — the room exists, and
-  // a failure here never blocks the interview (recording just doesn't happen).
-  await tryStartRecording(application_id, ctx.campaign_id, grant.roomName, db);
-
-  return grant;
-}
-
-/**
- * Start the LiveKit egress recording for this interview room and store its
- * storage key on the session. Best-effort: skipped cleanly when recording isn't
- * configured, and any failure is logged, never surfaced — the interview runs
- * regardless. Uses the admin client because this is a session-less candidate
- * request. Storage key is `<campaignId>/<applicationId>.mp4` (owner-scoped by
- * the private bucket's RLS).
- */
-async function tryStartRecording(
-  applicationId: string,
-  campaignId: string,
-  roomName: string,
-  db: SupabaseDb,
-): Promise<void> {
-  if (!isInterviewRecordingConfigured()) return;
-  try {
-    const { storageKey } = await startInterviewRecording({
-      roomName,
-      campaignId,
-      applicationId,
-    });
-    await saveInterviewRecording(applicationId, storageKey, db);
-  } catch (err) {
-    console.error(
-      `Failed to start interview recording for ${applicationId}:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
+  // The candidate's video is never recorded or stored: it exists only as a live
+  // LiveKit track, which the agent worker samples in-memory for proctoring and
+  // discards. There is deliberately no egress here.
+  return createInterviewRoomGrant({ applicationId: application_id, instructions });
 }
 
 /**
@@ -280,6 +245,7 @@ export async function submitInterview(input: {
     application_id,
     input.proctoringEvents,
     session.proctoring_observations ?? [],
+    session.proctoring_snapshots ?? [],
     db,
   );
 
@@ -325,12 +291,14 @@ async function tryRecordProctoring(
   applicationId: string,
   rawEvents: unknown,
   observations: VisionObservation[],
+  snapshots: ProctoringSnapshot[],
   db: SupabaseDb,
 ): Promise<void> {
   const noBrowserReport = rawEvents === undefined || rawEvents === null;
-  if (noBrowserReport && observations.length === 0) return;
 
   let events: ProctoringEvent[] = [];
+  let hasReport = !noBrowserReport || observations.length > 0;
+
   if (!noBrowserReport) {
     const parsed = proctoringEventsSchema.safeParse(rawEvents);
     if (parsed.success) {
@@ -343,16 +311,71 @@ async function tryRecordProctoring(
         `Discarding malformed browser proctoring report for ${applicationId}:`,
         parsed.error.message,
       );
-      if (observations.length === 0) return;
+      hasReport = observations.length > 0;
     }
   }
 
+  // Default: nothing references any still. Writing a report is what rescues the
+  // ones that turned out to be evidence — so every path out of this function
+  // ends at the same prune, and no exit can leave images behind.
+  let orphanedKeys = snapshots.map((s) => s.key);
+
+  if (hasReport) {
+    try {
+      const summary = summarizeProctoring(events, observations);
+      // Only stills that landed inside a CONFIRMED incident survive. The rest
+      // are frames the detector flagged and the rules then rejected — the
+      // pictures behind its own false positives, the last thing worth keeping.
+      const attached = attachSnapshots(summary, snapshots);
+      await saveProctoringReport(applicationId, attached.report, db);
+      orphanedKeys = attached.orphanedKeys;
+    } catch (err) {
+      console.error(
+        `Failed to save proctoring report for ${applicationId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  await tryPruneSnapshots(applicationId, snapshots, orphanedKeys, db);
+}
+
+/**
+ * Delete the evidence stills nothing references, and point the session's index
+ * at what's left.
+ *
+ * Takes the full set plus the orphans and derives what's kept, so "orphaned"
+ * has exactly one definition rather than one per caller.
+ *
+ * Best-effort in both halves and in that order: a failed delete leaves an
+ * unreferenced object (tidy-up debt), while a failed index write would leave the
+ * report pointing at an image that has already been removed. Neither may cost
+ * the candidate their submit.
+ */
+async function tryPruneSnapshots(
+  applicationId: string,
+  snapshots: ProctoringSnapshot[],
+  orphanedKeys: string[],
+  db: SupabaseDb,
+): Promise<void> {
+  if (snapshots.length === 0) return;
+  const orphaned = new Set(orphanedKeys);
+  const kept = snapshots.filter((s) => !orphaned.has(s.key));
+
   try {
-    const report = summarizeProctoring(events, observations);
-    await saveProctoringReport(applicationId, report, db);
+    await deleteProctoringSnapshots(orphanedKeys, db);
   } catch (err) {
     console.error(
-      `Failed to save proctoring report for ${applicationId}:`,
+      `Failed to prune proctoring snapshots for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  try {
+    await saveProctoringSnapshots(applicationId, kept, db);
+  } catch (err) {
+    console.error(
+      `Failed to update snapshot index for ${applicationId}:`,
       err instanceof Error ? err.message : err,
     );
   }
@@ -391,18 +414,23 @@ async function autoScoreInterview(applicationId: string): Promise<void> {
   }
 }
 
-/** An interview session plus a freshly-minted, short-lived playback URL for its
- *  recording (null when there's no recording or it isn't ready yet). */
+/** The session plus short-lived URLs for whatever evidence stills it carries. */
 export interface InterviewSessionView extends InterviewSessionRow {
-  recording_signed_url: string | null;
+  /** Incident snapshot key → signed URL, minted fresh on each read. */
+  snapshot_urls: Record<string, string>;
 }
 
 /**
  * Recruiter-facing read of an application's interview session (transcript +
- * status + recording) for the candidate detail page. Session-guarded; RLS
- * scopes the row to the recruiter's own campaigns. The stored `recording_url` is
- * a private storage KEY — resolve it to a time-limited signed URL here so the
- * page can play it back. Returns null for a bad id or no session yet.
+ * status + score + proctoring) for the candidate detail page. Session-guarded;
+ * RLS scopes the row to the recruiter's own campaigns. Returns null for a bad id
+ * or no session yet.
+ *
+ * There is no recording to resolve — the interview is never captured to storage.
+ * What a proctoring finding CAN be checked against is its evidence still, so the
+ * stored object keys are resolved to time-limited signed URLs here, the same way
+ * résumés are. A key that no longer resolves is simply omitted: an incident
+ * without a picture still renders.
  */
 export async function getInterviewSession(
   applicationId: string,
@@ -413,9 +441,9 @@ export async function getInterviewSession(
   const row = await fetchInterviewSessionByApplicationId(applicationId);
   if (!row) return null;
 
-  const recording_signed_url = row.recording_url
-    ? await getInterviewRecordingSignedUrl(row.recording_url)
-    : null;
+  const keys = (row.proctoring?.incidents ?? [])
+    .map((i) => i.snapshot_key)
+    .filter((k): k is string => typeof k === "string");
 
-  return { ...row, recording_signed_url };
+  return { ...row, snapshot_urls: await getProctoringSnapshotSignedUrls(keys) };
 }

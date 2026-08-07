@@ -31,7 +31,11 @@ import {
 import * as openai from "@livekit/agents-plugin-openai";
 import { fileURLToPath } from "node:url";
 import "dotenv/config";
-import { startVisionProctoring, type VisionObservation } from "./vision.js";
+import {
+  startVisionProctoring,
+  type VisionObservation,
+  type VisionSnapshot,
+} from "./vision.js";
 
 /** Mirrors `InterviewTranscriptTurn` in the app (src/lib/data/interview-sessions.ts). */
 interface TranscriptTurn {
@@ -72,60 +76,88 @@ function parseMetadata(raw: string | undefined): InterviewRoomMetadata | null {
  * worker or dropped call loses at most the final turn — and so the draft is
  * already complete when the candidate reaches the review step.
  */
-async function reportTranscript(applicationId: string, turns: TranscriptTurn[]): Promise<void> {
+/**
+ * POST one report to the app's agent API.
+ *
+ * Every report this worker makes — transcript, proctoring readings, evidence
+ * stills — crosses the same boundary with the same shared secret and the same
+ * best-effort contract, so the boundary lives in one place. Losing a report
+ * costs a recruiter some evidence; it must never cost the candidate their
+ * interview, so nothing here throws.
+ */
+async function postToApp(path: string, label: string, body: unknown): Promise<void> {
   const origin = process.env.SCREENR_APP_ORIGIN;
   const secret = process.env.AGENT_API_SECRET;
   if (!origin || !secret) {
-    console.error("SCREENR_APP_ORIGIN / AGENT_API_SECRET not configured; cannot report transcript");
+    console.error(
+      `SCREENR_APP_ORIGIN / AGENT_API_SECRET not configured; cannot send ${label}`,
+    );
     return;
   }
-  if (turns.length === 0) return;
 
   try {
-    const res = await fetch(`${origin}/api/agent/interview/transcript`, {
+    const res = await fetch(`${origin}/api/agent/${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${secret}`,
       },
-      body: JSON.stringify({ application_id: applicationId, transcript: turns }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
-      console.error(`transcript report failed (${res.status}) for ${applicationId}`);
+      console.error(`${label} failed (${res.status})`);
     }
   } catch (err) {
-    console.error("transcript report failed:", err instanceof Error ? err.message : err);
+    console.error(`${label} failed:`, err instanceof Error ? err.message : err);
   }
+}
+
+async function reportTranscript(applicationId: string, turns: TranscriptTurn[]): Promise<void> {
+  if (turns.length === 0) return;
+  await postToApp("interview/transcript", "transcript report", {
+    application_id: applicationId,
+    transcript: turns,
+  });
+}
+
+/**
+ * Upload one evidence still for a flagged frame.
+ *
+ * The image goes through the app rather than straight to storage on purpose:
+ * the worker already holds `AGENT_API_SECRET` and nothing more, so it never
+ * needs storage credentials, and the app stays the single place that decides
+ * where a candidate's image may be written.
+ *
+ * Sends the raw counts, not a named finding — the app's rule layer owns what a
+ * set of counts means, so the label is derived on receipt rather than agreed
+ * across a package boundary.
+ */
+async function reportSnapshot(
+  applicationId: string,
+  snapshot: VisionSnapshot,
+): Promise<void> {
+  await postToApp("interview/snapshot", "snapshot upload", {
+    application_id: applicationId,
+    at: snapshot.at,
+    person_count: snapshot.person_count,
+    phone_count: snapshot.phone_count,
+    image_base64: snapshot.jpeg.toString("base64"),
+  });
 }
 
 /**
  * Report the vision-proctoring samples so far (Phase C2), same idempotent
- * overwrite as the transcript. Best-effort: a failed report costs a proctoring
- * sample, never the interview.
+ * overwrite as the transcript.
  */
 async function reportVisionObservations(
   applicationId: string,
   observations: VisionObservation[],
 ): Promise<void> {
-  const origin = process.env.SCREENR_APP_ORIGIN;
-  const secret = process.env.AGENT_API_SECRET;
-  if (!origin || !secret || observations.length === 0) return;
-
-  try {
-    const res = await fetch(`${origin}/api/agent/interview/proctoring`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify({ application_id: applicationId, observations }),
-    });
-    if (!res.ok) {
-      console.error(`proctoring report failed (${res.status}) for ${applicationId}`);
-    }
-  } catch (err) {
-    console.error("proctoring report failed:", err instanceof Error ? err.message : err);
-  }
+  if (observations.length === 0) return;
+  await postToApp("interview/proctoring", "proctoring report", {
+    application_id: applicationId,
+    observations,
+  });
 }
 
 export default defineAgent({
@@ -184,11 +216,21 @@ export default defineAgent({
     // it can't react to them mid-interview. Serialized like the transcript so
     // two reports can't overwrite each other out of order.
     let visionReporting: Promise<void> = Promise.resolve();
-    const vision = startVisionProctoring(ctx, (observations) => {
-      visionReporting = visionReporting.then(() =>
-        reportVisionObservations(meta.application_id, observations),
-      );
-    });
+    const vision = startVisionProctoring(
+      ctx,
+      (observations) => {
+        visionReporting = visionReporting.then(() =>
+          reportVisionObservations(meta.application_id, observations),
+        );
+      },
+      (snapshot) => {
+        // Evidence stills ride the same serialized chain, so an upload can't
+        // race the observation report that gives it meaning.
+        visionReporting = visionReporting.then(() =>
+          reportSnapshot(meta.application_id, snapshot),
+        );
+      },
+    );
 
     // Final flush when the job winds down (candidate left / room closed).
     ctx.addShutdownCallback(async () => {

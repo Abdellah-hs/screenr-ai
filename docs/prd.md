@@ -194,18 +194,26 @@ The AI interviewer supports these interview formats (configurable per campaign):
 #### 3.5.4 Proctoring
 - The candidate's **camera must be enabled** throughout the interview
 - The system monitors for:
-  - Candidate presence (face visible in frame)
-  - Multiple faces (detecting unauthorized assistance)
-  - Candidate looking away from screen for extended periods
+  - Candidate presence (a person visible in frame)
+  - Multiple people in frame (detecting unauthorized assistance)
+  - A phone or second device held in frame
   - Tab switching or window focus changes
-- Proctoring violations are **flagged and timestamped** in the recording for human review
+- Proctoring violations are **flagged and timestamped** for human review
 - Proctoring does not auto-terminate the interview — violations are logged for manager review
+- Detection runs **locally in the agent worker** on a self-hosted object-detection model. Frames are sampled from the live track, scored in memory, and discarded — no frame is stored or sent to a third party
+- Candidate looking away from the screen (gaze direction) is **out of scope**: it cannot be measured reliably enough to accuse someone
 
 #### 3.5.5 Recording
-- The entire interview session is **recorded** (video + audio + screen content)
-- Recordings are stored for later **human review** by hiring managers
-- The system generates a **full transcript** of the interview
-- Managers can jump to specific timestamps or flagged moments
+
+> **Decision (2026-08-04):** The interview is **not recorded**. The requirement below is retired.
+>
+> Storing interview video meant keeping the largest concentration of candidate biometric data in the system, exported to third-party storage, in exchange for a review affordance that was rarely used. The camera is now live-only: the agent worker samples frames for proctoring in memory and discards them, and nothing is written to storage.
+>
+> The durable record of an interview is therefore the **transcript**, the **score**, and the **proctoring report** — all text, all versioned, all inspectable. The cost of this decision is real and is stated in the product: a proctoring finding can no longer be checked against footage, so the report is presented with an explicit fallibility note rather than as something a manager can go verify. That is also why the detection rules are deliberately biased toward missing incidents rather than inventing them.
+
+- The system generates a **full transcript** of the interview, captured server-side
+- Managers review the transcript alongside the score and the proctoring report as independent evidence
+- **Evidence snapshots (2026-08-04):** a proctoring finding stores the single frame that triggered it, annotated with what the detector saw, so a manager can check an automated claim instead of taking it on trust. Only flagged frames are kept, and any still not tied to a confirmed incident is deleted when the report is finalized — a clean interview stores no image at all
 
 #### 3.5.6 Interview Invitation (On-Demand)
 
@@ -300,7 +308,7 @@ Beyond traditional Q&A, the AI interviewer can drop candidates into **realistic 
   - All stage scores (independent)
   - AI-generated summaries for each stage
   - Full screening question video responses
-  - Full interview recording with transcript
+  - Full interview transcript (the interview itself is not recorded — see 3.5.5)
   - Proctoring report
   - Parsed resume and original document
 

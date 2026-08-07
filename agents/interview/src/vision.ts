@@ -3,10 +3,10 @@
  *
  * The candidate publishes a camera track, but the interviewer itself is
  * speech-to-speech and never looks at it. This module is the only thing that
- * does: it samples one frame every ~10s, asks a vision model how many people are
- * in shot, and hands the readings back for reporting to the app.
+ * does: it samples one frame every ~10s, runs a local object detector over it
+ * (`detector.ts`), and hands the readings back for reporting to the app.
  *
- * Two boundaries are deliberate and load-bearing:
+ * Three boundaries are deliberate and load-bearing:
  *
  *  1. It is kept OUT of the interviewer's conversation. Feeding frames into the
  *     Realtime session would make the interviewer react to what it sees ("is
@@ -14,153 +14,110 @@
  *     interview, and turns a monitoring signal into an accusation delivered live.
  *     The interviewer stays deaf to this entirely.
  *  2. It reports COUNTS AND CONFIDENCE, never verdicts. Nothing here decides
- *     that a candidate cheated, and no threshold lives in this file — the app's
- *     rule layer (`summarizeProctoring`) owns severity, so the judgement is
+ *     that a candidate cheated, and no severity threshold lives in this file —
+ *     the app's rule layer (`summarizeProctoring`) owns that, so the judgement is
  *     versioned, unit-tested, and identical for every candidate.
+ *  3. Frames never leave the process. Detection is local, the interview is not
+ *     recorded, and no image is written to disk or sent anywhere. A sampled
+ *     frame lives for one function call.
  *
- * Failure is always silent and total: if the model is unreachable, the track
- * never arrives, or sampling throws, the interview continues untouched and the
- * report simply carries fewer samples. Proctoring must never cost a candidate
- * their interview.
+ * Failure is always silent and total: if the model won't load, the track never
+ * arrives, or sampling throws, the interview continues untouched and the report
+ * simply carries fewer samples. Proctoring must never cost a candidate their
+ * interview.
  */
-import { llm } from "@livekit/agents";
-import { RoomEvent, TrackKind, VideoStream, type RemoteTrack } from "@livekit/rtc-node";
+import {
+  RoomEvent,
+  TrackKind,
+  VideoBufferType,
+  VideoStream,
+  type RemoteTrack,
+} from "@livekit/rtc-node";
 import type { JobContext } from "@livekit/agents";
+import { detectFrame, preloadDetector } from "./detector.js";
+import type { OverlayBox } from "./postprocess.js";
+import { encodeSnapshot, snapshotBucket } from "./snapshot.js";
 
 /** One sampled frame's reading. Mirrors `VisionObservation` in the app. */
 export interface VisionObservation {
   at: string;
-  face_count: number;
+  person_count: number;
   confidence: number;
+  phone_count: number;
 }
 
 /**
- * How often to sample. Every frame is a billed vision call, so this is the cost
- * dial: measured at ~2,980 prompt tokens per frame on gpt-4o-mini (its image
- * token multiplier is far higher than gpt-4o's, even at `detail: "low"`), a
- * 10-minute interview at 10s ≈ 60 frames ≈ 180k tokens ≈ $0.03. Raise the
- * interval to cut that; the rule thresholds are expressed in milliseconds, not
- * sample counts, so they stay correct at any cadence — though intervals above
- * ~15s start losing the shorter incidents entirely, and on a call this short
- * there is little room to widen it before the evidence thins out.
+ * How often an observation is RECORDED for the proctoring report. The rule
+ * thresholds are expressed in milliseconds, not sample counts, so they stay
+ * correct at any cadence; intervals above ~15s start losing the shorter
+ * incidents entirely, and on a 10-minute call there is little room to widen it
+ * before ~60 samples becomes too few to say anything.
+ *
+ * Deliberately NOT the same knob as the overlay cadence below. The app bounds a
+ * report at 500 observations, so driving this at overlay speed would blow the
+ * schema on a long call — and would quietly change what every stored report
+ * means.
  */
 const SAMPLE_INTERVAL_MS = Number(process.env.VISION_SAMPLE_INTERVAL_MS) || 10_000;
 
+/** Set `VISION_OVERLAY=0` to stop publishing boxes to the candidate's browser. */
+const OVERLAY_ENABLED = (process.env.VISION_OVERLAY ?? "1") !== "0";
+
 /**
- * Frames are downscaled hard before they leave the worker. A face count needs
- * far less resolution than a readable screen, and this keeps both the token cost
- * and the amount of the candidate's video crossing the network to a minimum.
+ * How often frames are scored while the overlay is on.
+ *
+ * The overlay is why this exists: at the report's 10s cadence a drawn box is up
+ * to ten seconds stale, so it sits over where the candidate *used to be* and
+ * reads as broken. ~1s tracks a person well enough to look live. The cost is
+ * real — ~75ms of CPU per frame, so roughly 7% of a core per concurrent
+ * interview instead of 0.7%.
  */
-const INFERENCE_WIDTH = 512;
+const OVERLAY_INTERVAL_MS = Number(process.env.VISION_OVERLAY_INTERVAL_MS) || 1_000;
 
-/** Vision-capable and cheap; the task is counting people, not reading text. */
-const VISION_MODEL = process.env.VISION_MODEL || "gpt-4o-mini";
+/** Data-channel topic the candidate's browser listens on for overlay boxes. */
+export const VISION_OVERLAY_TOPIC = "proctoring.boxes";
 
-/** A stalled vision call must never delay the next sample or leak a handle. */
-const VISION_REQUEST_TIMEOUT_MS = 8_000;
-
-const SYSTEM_PROMPT =
-  "You analyse a single webcam frame from a video job interview for proctoring. " +
-  "Report only what is visibly verifiable. Count DISTINCT REAL HUMAN FACES that " +
-  "are physically present in the room. Do NOT count faces on screens, posters, " +
-  "photographs, reflections, or artwork. If the image is too dark, blurred, or " +
-  "ambiguous to judge, say so with low confidence rather than guessing. " +
-  'Respond with JSON only: {"face_count": <integer>, "confidence": <0-1>}. ' +
-  "Confidence is how certain you are of the count, where below 0.6 means the " +
-  "frame is not usable as evidence.";
-
-interface VisionReading {
-  face_count: number;
-  confidence: number;
+/** The overlay packet. Ephemeral: published, drawn, and never stored anywhere. */
+interface OverlayPacket {
+  at: string;
+  boxes: OverlayBox[];
 }
 
-/** Parse and hard-bound the model's reply; anything odd becomes "unusable". */
-function parseReading(raw: string): VisionReading | null {
-  try {
-    const json = JSON.parse(raw) as Partial<VisionReading>;
-    if (typeof json.face_count !== "number" || typeof json.confidence !== "number") {
-      return null;
-    }
-    if (!Number.isFinite(json.face_count) || !Number.isFinite(json.confidence)) return null;
-    return {
-      face_count: Math.max(0, Math.min(20, Math.round(json.face_count))),
-      confidence: Math.max(0, Math.min(1, json.confidence)),
-    };
-  } catch {
-    return null;
-  }
+/** Set `VISION_SNAPSHOTS=0` to stop capturing evidence stills entirely. */
+const SNAPSHOTS_ENABLED = (process.env.VISION_SNAPSHOTS ?? "1") !== "0";
+
+/**
+ * Minimum gap between stored snapshots of the SAME condition.
+ *
+ * A phone left on the desk for five minutes is one finding, not three hundred
+ * photographs of a candidate. One still every 30s is enough to show a recruiter
+ * that the condition persisted, and bounds a pathological interview to a couple
+ * of dozen small images.
+ */
+const SNAPSHOT_MIN_INTERVAL_MS =
+  Number(process.env.VISION_SNAPSHOT_INTERVAL_MS) || 30_000;
+
+/** A single frame lifted off the live track, in RGBA. */
+interface RawFrame {
+  data: Uint8Array;
+  width: number;
+  height: number;
 }
 
-/** Ask the vision model to read one frame. Returns null when unusable. */
-async function analyzeFrame(dataUrl: string): Promise<VisionReading | null> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), VISION_REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        temperature: 0,
-        max_tokens: 60,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "How many real people are in this frame?" },
-              { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
-            ],
-          },
-        ],
-      }),
-    });
-
-    if (!res.ok) {
-      console.error(`vision analysis failed (${res.status})`);
-      return null;
-    }
-    const body = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const content = body.choices?.[0]?.message?.content;
-    return content ? parseReading(content) : null;
-  } catch (err) {
-    console.error(
-      "vision analysis error:",
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/** Grab a single frame off the track and encode it for the vision model. */
-async function captureFrame(track: RemoteTrack): Promise<string | null> {
+/** Grab one frame off the track and hand back raw pixels. */
+async function captureFrame(track: RemoteTrack): Promise<RawFrame | null> {
   const stream = new VideoStream(track);
   const reader = stream.getReader();
   try {
     const { value, done } = await reader.read();
     if (done || !value) return null;
 
-    const serialized = await llm.serializeImage(
-      llm.createImageContent({
-        image: value.frame,
-        inferenceDetail: "low",
-        inferenceWidth: INFERENCE_WIDTH,
-      }),
-    );
-    if (!serialized.base64Data) return null;
-    return `data:${serialized.mimeType ?? "image/jpeg"};base64,${serialized.base64Data}`;
+    // The wire format varies by codec/browser (I420 in practice); converting to
+    // RGBA here means the detector only ever deals with one layout. `convert`
+    // already returns a freshly-owned buffer, so copying it again would be
+    // ~3.7MB of pointless churn per frame at 720p.
+    const rgba = value.frame.convert(VideoBufferType.RGBA);
+    return { data: rgba.data, width: rgba.width, height: rgba.height };
   } catch (err) {
     console.error(
       "frame capture error:",
@@ -173,6 +130,44 @@ async function captureFrame(track: RemoteTrack): Promise<string | null> {
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
+}
+
+/**
+ * Push the latest boxes to the candidate's browser over the room data channel.
+ *
+ * Lossy on purpose: this is a live overlay, so a dropped packet should be
+ * replaced by the next one a second later rather than queued and delivered late.
+ * Best-effort like everything else here — a publish failure must never disturb
+ * sampling or the call.
+ */
+async function publishOverlay(ctx: JobContext, packet: OverlayPacket): Promise<void> {
+  try {
+    await ctx.room.localParticipant?.publishData(
+      new TextEncoder().encode(JSON.stringify(packet)),
+      { reliable: false, topic: VISION_OVERLAY_TOPIC },
+    );
+  } catch (err) {
+    console.error(
+      "vision overlay publish failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * One flagged frame, encoded for upload. The bytes are handed off and dropped.
+ *
+ * Carries the COUNTS, not a named finding: what a set of counts means is the
+ * app's rule layer's vocabulary, and it derives the label on receipt. That keeps
+ * a single definition of each condition rather than one here and one there that
+ * must be kept in step by hand.
+ */
+export interface VisionSnapshot {
+  /** ISO timestamp of the frame — how the app matches it to an incident. */
+  at: string;
+  person_count: number;
+  phone_count: number;
+  jpeg: Buffer;
 }
 
 export interface VisionProctor {
@@ -197,10 +192,18 @@ export interface VisionProctor {
 export function startVisionProctoring(
   ctx: JobContext,
   onSample: (observations: VisionObservation[]) => void,
+  onSnapshot?: (snapshot: VisionSnapshot) => void,
 ): VisionProctor {
   const observations: VisionObservation[] = [];
   let videoTrack: RemoteTrack | null = null;
   let stopped = false;
+  let busy = false;
+  let lastRecordedMs = 0;
+  const lastSnapshotMs = new Map<string, number>();
+
+  // Start the inference thread while the candidate is still being greeted, so
+  // the first sample isn't also paying the model-load cost.
+  preloadDetector();
 
   const onSubscribed = (track: RemoteTrack) => {
     if (track.kind === TrackKind.KIND_VIDEO) videoTrack = track;
@@ -212,29 +215,85 @@ export function startVisionProctoring(
   ctx.room.on(RoomEvent.TrackSubscribed, onSubscribed);
   ctx.room.on(RoomEvent.TrackUnsubscribed, onUnsubscribed);
 
-  const timer = setInterval(async () => {
-    if (stopped || !videoTrack) return;
-    try {
-      const dataUrl = await captureFrame(videoTrack);
-      if (!dataUrl) return;
+  const tickMs = OVERLAY_ENABLED
+    ? Math.min(OVERLAY_INTERVAL_MS, SAMPLE_INTERVAL_MS)
+    : SAMPLE_INTERVAL_MS;
 
-      const reading = await analyzeFrame(dataUrl);
+  const timer = setInterval(async () => {
+    // `busy` serialises the ticks: a slow capture or inference must skip the
+    // next sample rather than overlap it, or two runs end up competing for the
+    // same track and stamping observations out of order.
+    if (stopped || busy || !videoTrack) return;
+    busy = true;
+    try {
+      const frame = await captureFrame(videoTrack);
+      if (!frame) return;
+
+      // Stamped at CAPTURE, not after inference: the reading describes the
+      // moment the shutter closed, and the rule layer measures durations
+      // between these timestamps.
+      const capturedMs = Date.now();
+      const at = new Date(capturedMs).toISOString();
+
+      const reading = await detectFrame(frame.data, frame.width, frame.height);
+
+      if (OVERLAY_ENABLED) {
+        // An unreadable frame publishes an empty list rather than nothing, so a
+        // stale box doesn't sit frozen on screen after detection stops working.
+        await publishOverlay(ctx, { at, boxes: reading?.boxes ?? [] });
+      }
+
       if (!reading) return;
 
+      // The overlay may run far faster than the report needs. Record on the
+      // report's own cadence so the stored evidence — and every threshold
+      // expressed against it — is unchanged by how smooth the overlay looks.
+      if (capturedMs - lastRecordedMs < SAMPLE_INTERVAL_MS) return;
+      lastRecordedMs = capturedMs;
+
       observations.push({
-        at: new Date().toISOString(),
-        face_count: reading.face_count,
+        at,
+        person_count: reading.person_count,
         confidence: reading.confidence,
+        phone_count: reading.phone_count,
       });
       onSample([...observations]);
+
+      // Evidence still, only for a frame that actually carries a finding, and
+      // only if this condition hasn't been photographed recently. Deliberately
+      // hung off the RECORDED observation rather than the overlay tick: it must
+      // depict a frame that is in the report, and it inherits the confidence
+      // filtering that goes with it.
+      if (SNAPSHOTS_ENABLED && onSnapshot) {
+        const bucket = snapshotBucket(reading);
+        if (bucket && capturedMs - (lastSnapshotMs.get(bucket) ?? 0) >= SNAPSHOT_MIN_INTERVAL_MS) {
+          lastSnapshotMs.set(bucket, capturedMs);
+          const jpeg = await encodeSnapshot(
+            frame.data,
+            frame.width,
+            frame.height,
+            reading.boxes,
+          );
+          if (jpeg) {
+            onSnapshot({
+              at,
+              person_count: reading.person_count,
+              phone_count: reading.phone_count,
+              jpeg,
+            });
+          }
+        }
+      }
     } catch (err) {
       // Never let a sampling failure surface into the interview.
       console.error(
         "vision sampling error:",
         err instanceof Error ? err.message : err,
       );
+    } finally {
+      busy = false;
     }
-  }, SAMPLE_INTERVAL_MS);
+  }, tickMs);
 
   return {
     observations: () => [...observations],

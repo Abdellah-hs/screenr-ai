@@ -1,10 +1,6 @@
-import type { InterviewSessionRow, InterviewScore } from "@/lib/data/interview-sessions";
+import type { InterviewScore } from "@/lib/data/interview-sessions";
+import type { InterviewSessionView } from "@/lib/actions/interview";
 import { ProctoringReportPanel } from "./proctoring-report";
-
-/** The row plus a resolved playback URL for the recording (Phase B2). */
-type InterviewSessionView = InterviewSessionRow & {
-  recording_signed_url?: string | null;
-};
 
 function scoreColor(score: number | null): string {
   if (score == null) return "text-[#9CA3AF]";
@@ -15,9 +11,13 @@ function scoreColor(score: number | null): string {
 
 /**
  * Recruiter-facing review of the AI video interview: the AI score (Phase B1),
- * the proctoring report (Phase C), the recording (Phase B2), and the spoken
- * transcript. Each is independent evidence shown side by side — per CLAUDE.md
- * there is no rollup. Renders nothing until there's a session worth showing.
+ * the proctoring report (Phase C), and the spoken transcript. Each is
+ * independent evidence shown side by side — per CLAUDE.md there is no rollup.
+ * Renders nothing until there's a session worth showing.
+ *
+ * The interview is never recorded, so the transcript, the proctoring report, and
+ * the single frames captured for each camera finding are the entire record of
+ * the call.
  */
 export default function InterviewTranscript({
   session,
@@ -48,9 +48,8 @@ export default function InterviewTranscript({
         report={session.proctoring}
         stage="interview"
         showWhenAbsent={session.status === "completed"}
+        snapshotUrls={session.snapshot_urls}
       />
-
-      <RecordingBlock session={session} />
 
       {transcript.length > 0 ? (
         <ol className="space-y-2">
@@ -88,45 +87,6 @@ export default function InterviewTranscript({
       )}
     </div>
   );
-}
-
-/** The interview recording (Phase B2). Shows the player once egress has
- *  uploaded the file and a signed URL is available; a plain "processing" note
- *  while the key exists but the object isn't signable yet; nothing when the
- *  interview was never recorded. */
-function RecordingBlock({ session }: { session: InterviewSessionView }) {
-  if (session.recording_signed_url) {
-    return (
-      <div className="mb-4">
-        <p className="text-xs font-medium text-[#0369A1] uppercase tracking-wider mb-1.5">
-          Recording
-        </p>
-        <video
-          controls
-          preload="metadata"
-          src={session.recording_signed_url}
-          className="w-full max-h-[480px] rounded-lg border border-[#E5E7EB] bg-black"
-        >
-          Your browser does not support playing this recording.
-        </video>
-      </div>
-    );
-  }
-
-  if (session.recording_url) {
-    return (
-      <div className="mb-4 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
-        <p className="text-xs font-medium text-[#6B7280] uppercase tracking-wider mb-0.5">
-          Recording
-        </p>
-        <p className="text-xs text-[#9CA3AF]">
-          The recording is being processed and will appear here shortly.
-        </p>
-      </div>
-    );
-  }
-
-  return null;
 }
 
 /** The AI interview score: overall + strengths/concerns + per-competency bars.
@@ -217,7 +177,7 @@ function formatDate(iso: string | null): string {
   });
 }
 
-function StatusLine({ session }: { session: InterviewSessionRow }) {
+function StatusLine({ session }: { session: InterviewSessionView }) {
   switch (session.status) {
     case "invited":
       return <p className="text-xs text-[#6B7280] mt-1">Invited · Awaiting the candidate</p>;

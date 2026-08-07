@@ -14,6 +14,15 @@ import {
 import { startCandidateInterview, submitInterview } from "@/lib/actions/interview";
 import { createProctoringCollector } from "@/lib/proctoring/collector";
 import {
+  OVERLAY_STALE_AFTER_MS,
+  OVERLAY_TOPIC,
+  parseOverlayPacket,
+  placeBoxes,
+  type OverlayBox,
+  type OverlayBoxLabel,
+  type VideoGeometry,
+} from "@/lib/proctoring/overlay";
+import {
   AGENT_JOIN_TIMEOUT_MS,
   diagnoseAgentSilence,
   realtimeTrace,
@@ -65,6 +74,14 @@ const CALL_SECONDS = INTERVIEW_DURATION_MINUTES * 60;
 /** LiveKit publishes live transcription segments on this text-stream topic. */
 const TRANSCRIPTION_TOPIC = "lk.transcription";
 
+/**
+ * The self-view is mirrored, because a preview that doesn't mirror feels wrong
+ * to look at. One constant drives both the CSS and the overlay geometry — the
+ * detector sees the unmirrored frame, so if these two ever disagree every box
+ * lands on the wrong side.
+ */
+const SELF_VIEW_MIRRORED = true;
+
 function formatClock(total: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
@@ -78,6 +95,115 @@ function formatDeadline(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+const BOX_STYLE: Record<OverlayBoxLabel, { box: string; chip: string; text: string }> = {
+  person: {
+    box: "border-[#22C55E]",
+    chip: "bg-[#22C55E]",
+    text: "Person",
+  },
+  phone: {
+    box: "border-[#F59E0B]",
+    chip: "bg-[#F59E0B]",
+    text: "Phone",
+  },
+};
+
+/**
+ * Live detection boxes drawn over the candidate's self-view.
+ *
+ * Display only, and structurally incapable of being anything else: the boxes
+ * arrive over the room's data channel, are drawn, and are dropped. The
+ * proctoring report is assembled server-side from the worker's own readings, so
+ * a candidate who blocks, replays, or forges these packets changes what they
+ * see and nothing about what is recorded.
+ *
+ * Geometry is measured from the element rather than assumed, because
+ * `object-fit: cover` crops the frame and the preview is mirrored — see
+ * `placeBoxes`, which owns that maths and is tested on its own.
+ */
+function DetectionOverlay({
+  videoRef,
+  boxes,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  boxes: OverlayBox[];
+}) {
+  const [geometry, setGeometry] = useState<VideoGeometry | null>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+
+    // Measuring reads clientWidth/Height, which forces layout, and setting a
+    // fresh object would re-render even when nothing moved. So measure only on
+    // events that can actually change the geometry, and keep the old object
+    // when the numbers are unchanged.
+    const measure = () => {
+      const el = videoRef.current;
+      const next: VideoGeometry | null =
+        el && el.videoWidth && el.clientWidth
+          ? {
+              frameWidth: el.videoWidth,
+              frameHeight: el.videoHeight,
+              elementWidth: el.clientWidth,
+              elementHeight: el.clientHeight,
+              mirrored: SELF_VIEW_MIRRORED,
+            }
+          : null;
+
+      setGeometry((current) => {
+        if (current === next) return current;
+        if (!current || !next) return next;
+        return current.frameWidth === next.frameWidth &&
+          current.frameHeight === next.frameHeight &&
+          current.elementWidth === next.elementWidth &&
+          current.elementHeight === next.elementHeight
+          ? current
+          : next;
+      });
+    };
+
+    measure();
+    window.addEventListener("resize", measure);
+    video?.addEventListener("loadedmetadata", measure);
+    // Fires when the track's intrinsic dimensions change mid-call — cheaper and
+    // more precise than re-measuring on every packet.
+    video?.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      video?.removeEventListener("loadedmetadata", measure);
+      video?.removeEventListener("resize", measure);
+    };
+  }, [videoRef]);
+
+  if (!geometry || boxes.length === 0) return null;
+
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+      {placeBoxes(boxes, geometry).map((box, i) => {
+        const style = BOX_STYLE[box.label];
+        return (
+          <div
+            key={`${box.label}-${i}`}
+            className={`absolute rounded-md border-2 ${style.box} transition-all duration-300 ease-out`}
+            style={{
+              left: `${box.left}px`,
+              top: `${box.top}px`,
+              width: `${box.width}px`,
+              height: `${box.height}px`,
+            }}
+          >
+            <span
+              className={`absolute -top-[1px] left-[-2px] -translate-y-full rounded-t px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white ${style.chip}`}
+            >
+              {style.text} {Math.round(box.score * 100)}%
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /** Desktop-only: the AI interview requires a real keyboard/camera setup (PRD
@@ -117,6 +243,10 @@ export default function VideoInterview({
   const [timedOut, setTimedOut] = useState(false);
   const [caption, setCaption] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);
+  // Live detection boxes drawn over the self-view. Display only — they are never
+  // sent back, and the proctoring report is built server-side from the worker's
+  // own readings regardless of what happens here.
+  const [overlayBoxes, setOverlayBoxes] = useState<OverlayBox[]>([]);
   // Starts optimistic (true) so SSR/first paint doesn't flash the block screen;
   // corrected on mount + resize.
   const [isDesktop, setIsDesktop] = useState(true);
@@ -141,6 +271,9 @@ export default function VideoInterview({
   // track, which would otherwise open a "camera off" gap that runs until submit
   // and reads as a critical incident against a candidate who did nothing wrong.
   const proctoringActiveRef = useRef(false);
+  // When the last overlay packet arrived, so stale boxes can be cleared rather
+  // than left hanging over a scene they no longer describe.
+  const overlayAtRef = useRef(0);
 
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
 
@@ -160,6 +293,23 @@ export default function VideoInterview({
       roomRef.current?.disconnect();
     };
   }, []);
+
+  // Drop stale overlay boxes. If the worker stops publishing — it died, the data
+  // channel dropped, the camera cut — the last packet's boxes would otherwise
+  // hang frozen over a scene they no longer describe, which reads as the
+  // detector being confidently wrong rather than simply absent.
+  useEffect(() => {
+    if (status !== "live") {
+      setOverlayBoxes([]);
+      return;
+    }
+    const sweep = setInterval(() => {
+      if (Date.now() - overlayAtRef.current > OVERLAY_STALE_AFTER_MS) {
+        setOverlayBoxes((current) => (current.length === 0 ? current : []));
+      }
+    }, 1_000);
+    return () => clearInterval(sweep);
+  }, [status]);
 
   // Proctoring: tab-focus tracking, armed only while the call is live so time
   // spent on the intro or review screens is never counted against the candidate.
@@ -351,6 +501,21 @@ export default function VideoInterview({
           );
         }
       });
+
+      // Detection boxes from the agent worker's proctoring pass. Display only:
+      // nothing here feeds the report, which is assembled server-side from the
+      // worker's own readings — a candidate blocking or faking these packets
+      // changes what they see, not what is recorded about them.
+      room.on(
+        RoomEvent.DataReceived,
+        (payload: Uint8Array, _p?: unknown, _k?: unknown, topic?: string) => {
+          if (topic !== OVERLAY_TOPIC) return;
+          const packet = parseOverlayPacket(payload);
+          if (!packet) return;
+          overlayAtRef.current = Date.now();
+          setOverlayBoxes(packet.boxes);
+        },
+      );
 
       // Live transcription segments, published by the agent for both sides.
       room.registerTextStreamHandler(TRANSCRIPTION_TOPIC, async (reader, participant) => {
@@ -591,8 +756,11 @@ export default function VideoInterview({
             autoPlay
             playsInline
             muted
-            className="h-full w-full object-cover [transform:scaleX(-1)]"
+            className={`h-full w-full object-cover ${
+              SELF_VIEW_MIRRORED ? "[transform:scaleX(-1)]" : ""
+            }`}
           />
+          <DetectionOverlay videoRef={selfViewRef} boxes={overlayBoxes} />
           <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/50 px-2.5 py-1 text-xs font-medium text-white">
             <span className={`inline-block h-2 w-2 rounded-full ${live ? "bg-red-500" : "bg-amber-400 animate-pulse"}`} aria-hidden />
             You

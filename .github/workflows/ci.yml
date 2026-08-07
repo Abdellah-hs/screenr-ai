@@ -54,3 +54,36 @@ jobs:
           # next build peaks past Node's default heap on the CI runner and OOMs
           # (JavaScript heap out of memory). Raise the limit; runners have 16GB.
           NODE_OPTIONS: --max-old-space-size=6144
+
+  interview-agent:
+    name: interview agent — typecheck / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The agent workers are separate pnpm projects with their own lockfiles, so
+    # the app's job never installs or compiles them. The proctoring detector's
+    # decode/threshold maths lives here, and it is the kind of code that fails
+    # silently — without this job those tests would simply never run.
+    defaults:
+      run:
+        working-directory: agents/interview
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
