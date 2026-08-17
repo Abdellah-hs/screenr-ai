@@ -10,7 +10,10 @@ import {
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
 import { transitionApplication } from "@/lib/data/transitions";
-import { assertRecruiterSettableTarget } from "@/lib/rules/manual-stage-change";
+import {
+  assertRecruiterSettableTarget,
+  manualStageDisposition,
+} from "@/lib/rules/manual-stage-change";
 import { sendTransitionNotification } from "./transition-notifications";
 import { sendScreeningQuestionsToCandidate } from "./screening-questions";
 import { assertCampaignActiveById } from "./campaign-guards";
@@ -344,7 +347,12 @@ export async function updateCandidateStage(
   // Fetch campaign_id before updating so we can revalidate the right paths
   const campaignId = await fetchApplicationCampaignId(applicationId);
 
-  await updateApplicationStage(applicationId, validState, validRationale);
+  await updateApplicationStage(
+    applicationId,
+    validState,
+    validRationale,
+    manualStageDisposition(validState, validRationale),
+  );
 
   await sendTransitionNotification(applicationId, validState, userId);
 
@@ -442,7 +450,12 @@ export async function scoreUnscoredCampaignCandidates(
       const scored = await scoreApplicationResume(app.id, campaignId, candidateId, userId, parsedResume);
       if (scored) {
         const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
-        await advanceApplicationStatus(app.id, decision.toState as CandidateStageEnum, decision.rationale);
+        await advanceApplicationStatus(
+          app.id,
+          decision.toState as CandidateStageEnum,
+          decision.rationale,
+          decision.disposition,
+        );
         await sendTransitionNotification(app.id, decision.toState, userId);
         await autoSendScreeningIfApproved(app.id, decision.toState);
       }
@@ -567,6 +580,13 @@ export async function decideHitlReview(input: {
     toState,
     actor: "recruiter",
     rationale: parsed.rationale,
+    // A HITL rejection is by definition a human overruling the automated
+    // route — the resume rule sent this application to review rather than
+    // rejecting it, and the recruiter is closing it anyway.
+    disposition:
+      parsed.decision === "reject"
+        ? { code: "OVERRIDE_REJECTED", description: parsed.rationale }
+        : undefined,
   });
 
   await sendTransitionNotification(parsed.applicationId, toState, userId);

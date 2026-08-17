@@ -445,6 +445,9 @@ describe("decideHitlReview", () => {
       toState: "rejected",
       actor: "recruiter",
       rationale: VALID_RATIONALE,
+      // A recruiter closing an application the rule sent to review is an
+      // override, and the audit log has to be able to count those.
+      disposition: { code: "OVERRIDE_REJECTED", description: VALID_RATIONALE },
     });
     expect(result).toEqual({
       success: true,
@@ -589,6 +592,19 @@ describe("updateCandidateStage", () => {
       VALID_APP_ID,
       "screening_approved",
       "Strong fit, advancing.",
+      // Mid-pipeline, so nothing closed and there is no reason to record.
+      undefined,
+    );
+  });
+
+  it("records an override disposition when a recruiter closes an application by hand", async () => {
+    await updateCandidateStage(VALID_APP_ID, "rejected", "  Withdrew after the offer talk.  ");
+
+    expect(vi.mocked(updateApplicationStage)).toHaveBeenCalledWith(
+      VALID_APP_ID,
+      "rejected",
+      "Withdrew after the offer talk.",
+      { code: "OVERRIDE_REJECTED", description: "Withdrew after the offer talk." },
     );
   });
 
@@ -670,6 +686,7 @@ describe("scoreUnscoredCampaignCandidates", () => {
       "app-unscored",
       expect.any(String),
       expect.any(String),
+      undefined,
     );
   });
 

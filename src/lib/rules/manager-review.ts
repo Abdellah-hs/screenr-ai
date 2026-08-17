@@ -1,4 +1,4 @@
-import type { ApplicationState } from "@/lib/constants";
+import type { ApplicationState, Disposition } from "@/lib/constants";
 
 /**
  * Rules for the manager review stage — the human decision point that closes the
@@ -46,6 +46,47 @@ export function managerDecisionTarget(
   decision: ManagerReviewDecision,
 ): ApplicationState {
   return DECISION_TARGETS[decision];
+}
+
+/**
+ * The codes a manager may reject under.
+ *
+ * Deliberately two, and the distinction is the point: `FAILED_INTERVIEW` says
+ * the evidence itself was weak, `OVERRIDE_REJECTED` says the evidence looked
+ * fine and the manager disagreed anyway. That second case is the one CLAUDE.md
+ * calls a manual override, and it is worth counting separately — a hiring
+ * process where managers routinely overrule passing scores has something wrong
+ * with either its rubric or its managers, and no free-text rationale would
+ * ever surface that.
+ *
+ * The other codes are unreachable here: score-driven rejection happens
+ * automatically upstream, and a candidate at manager review has by definition
+ * already attended.
+ */
+export const MANAGER_REJECTION_CODES = [
+  "FAILED_INTERVIEW",
+  "OVERRIDE_REJECTED",
+] as const;
+
+export type ManagerRejectionCode = (typeof MANAGER_REJECTION_CODES)[number];
+
+/**
+ * The disposition to record for a manager's decision, or `undefined` when the
+ * decision doesn't close the application.
+ *
+ * The manager's own rationale becomes the description rather than a canned
+ * string — they have just written the most specific account of this rejection
+ * that will ever exist, and duplicating it into boilerplate would throw that
+ * away.
+ */
+export function managerDecisionDisposition(
+  decision: ManagerReviewDecision,
+  rejectionCode: ManagerRejectionCode,
+  rationale: string,
+): Disposition | undefined {
+  if (decision !== "reject") return undefined;
+
+  return { code: rejectionCode, description: rationale };
 }
 
 /**

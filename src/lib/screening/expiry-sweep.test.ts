@@ -41,11 +41,13 @@ describe("sweepExpiredScreenings", () => {
       "app-1",
       "screening_expired",
       expect.stringContaining("sweep"),
+      { code: "EXPIRED", description: expect.stringContaining("sweep") },
     );
     expect(mockTransition).toHaveBeenCalledWith(
       "app-2",
       "screening_expired",
       expect.any(String),
+      expect.objectContaining({ code: "EXPIRED" }),
     );
     expect(mockMark).toHaveBeenCalledWith("app-1");
     expect(mockMark).toHaveBeenCalledWith("app-2");

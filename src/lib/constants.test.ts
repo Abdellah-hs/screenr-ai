@@ -4,6 +4,9 @@ import {
   APPLICATION_STAGE_BUCKET,
   toCandidateStage,
   pipelineDisplayScore,
+  requiresDisposition,
+  DISPOSITION_CODES,
+  DISPOSITION_LABELS,
   TIER_COLORS,
   TIER_LABELS,
   type ApplicationState,
@@ -274,5 +277,43 @@ describe("screening tier display config", () => {
 
   it.each(DB_TIERS)("gives %s badge colors", (tier) => {
     expect(TIER_COLORS[tier]).toBeDefined();
+  });
+});
+
+describe("disposition codes", () => {
+  it("requires a disposition on the states that close without saying why", () => {
+    expect(requiresDisposition("rejected")).toBe(true);
+    expect(requiresDisposition("archived")).toBe(true);
+  });
+
+  it("does not require a disposition on a hire", () => {
+    expect(requiresDisposition("hired")).toBe(false);
+  });
+
+  it("does not require a disposition on a self-describing failure state", () => {
+    // These close an application too, but the state name already carries the
+    // reason — `screening_expired` cannot have closed for any cause other
+    // than expiry. Demanding a code here would collect a field whose value is
+    // determined by the column next to it. Callers may still pass one.
+    const selfDescribing: ApplicationState[] = [
+      "screening_expired",
+      "interview_expired",
+      "interview_no_show",
+      "processing_failed",
+    ];
+
+    expect(selfDescribing.some(requiresDisposition)).toBe(false);
+  });
+
+  it("does not require a disposition on a mid-pipeline transition", () => {
+    expect(requiresDisposition("screening_sent")).toBe(false);
+    expect(requiresDisposition("manager_review")).toBe(false);
+  });
+
+  it.each(DISPOSITION_CODES)("gives %s a human-readable label", (code) => {
+    const label = DISPOSITION_LABELS[code];
+
+    expect(label).toBeDefined();
+    expect(label).not.toMatch(/_/);
   });
 });

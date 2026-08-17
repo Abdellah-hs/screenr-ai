@@ -1,4 +1,4 @@
-import type { ScoreFactor, ApplicationState, AutomationMode } from "@/lib/constants";
+import type { ScoreFactor, ApplicationState, AutomationMode, Disposition } from "@/lib/constants";
 
 /**
  * Shape of the AI's resume-scoring output. Defined here (not in the action
@@ -50,6 +50,13 @@ export interface CampaignScoringConfig {
 export interface TransitionDescriptor {
   toState: ApplicationState;
   rationale: string;
+  /**
+   * Set whenever `toState` closes the application. The rule decides the code
+   * because the rule is what knows *why* — the action executing the
+   * transition sees only a target state, and would have to re-derive the
+   * reason to label it.
+   */
+  disposition?: Disposition;
 }
 
 /**
@@ -103,7 +110,11 @@ export function evaluateResumeScoringOutcome(
     const failedList = failedRequired.join(", ");
     return {
       toState: "rejected",
-      rationale: `${scoreLine} — failed required criteria below their min_score: ${failedList} [LOW_SCORE]`,
+      rationale: `${scoreLine} — failed required criteria below their min_score: ${failedList}`,
+      disposition: {
+        code: "LOW_SCORE",
+        description: `Failed required criteria: ${failedList}`,
+      },
     };
   }
 
@@ -124,6 +135,10 @@ export function evaluateResumeScoringOutcome(
   return {
     toState: "rejected",
     rationale: `${scoreLine} — below threshold`,
+    disposition: {
+      code: "LOW_SCORE",
+      description: `Resume scored ${result.overall_score}, threshold ${config.screening_threshold}`,
+    },
   };
 }
 

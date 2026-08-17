@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { decodeStatusSelection } from "@/lib/rules/campaign-status";
+import { MANAGER_REJECTION_CODES } from "@/lib/rules/manager-review";
 
 // ─── Campaign Validation ────────────────────────────────────────────────────
 
@@ -492,4 +493,9 @@ export const managerReviewDecisionSchema = z.object({
     .trim()
     .min(20, "Please explain the decision (20+ characters) — this is the permanent record")
     .max(2000, "Rationale is too long"),
+  // Only meaningful on a reject; ignored otherwise. Defaulted rather than
+  // required so a decision can never be lost to a missing field — but the
+  // manager picks it in the UI, because "we disagreed with a passing score"
+  // and "the interview was weak" are different facts and only they know which.
+  rejectionCode: z.enum(MANAGER_REJECTION_CODES).default("FAILED_INTERVIEW"),
 });

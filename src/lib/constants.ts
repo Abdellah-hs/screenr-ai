@@ -431,6 +431,59 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
 
 export type TransitionActor = "system" | "ai" | "recruiter";
 
+// ─── Disposition Codes ──────────────────────────────────────────────────────
+
+/**
+ * Why an application closed. Required on every terminal transition (see
+ * CLAUDE.md → Disposition Codes).
+ *
+ * These exist because free-text rationale is not countable. "How many did we
+ * reject on resume score this quarter?" is unanswerable when the automatic
+ * paths say "below threshold" and a manager says "not strong enough" — the
+ * same outcome, worded differently every time. The code is the queryable half;
+ * the description stays free text and carries the specifics.
+ *
+ * Codes are deliberately coarse. A long tail of narrow codes would push the
+ * recruiter back into judgement calls at the exact moment we want a
+ * mechanical answer, and the detail belongs in the description anyway.
+ */
+export const DISPOSITION_CODES = [
+  "LOW_SCORE",
+  "FAILED_INTERVIEW",
+  "NO_SHOW",
+  "EXPIRED",
+  "OVERRIDE_REJECTED",
+] as const;
+
+export type DispositionCode = (typeof DISPOSITION_CODES)[number];
+
+export interface Disposition {
+  code: DispositionCode;
+  description: string;
+}
+
+export const DISPOSITION_LABELS: Record<DispositionCode, string> = {
+  LOW_SCORE: "Score below threshold",
+  FAILED_INTERVIEW: "Did not pass interview",
+  NO_SHOW: "Did not attend",
+  EXPIRED: "Deadline passed",
+  OVERRIDE_REJECTED: "Recruiter decision",
+};
+
+/**
+ * The states that close an application for good. Entering one requires a
+ * disposition; every other transition may omit it.
+ *
+ * `hired` is deliberately absent. It is terminal, but "why did this close?"
+ * has one answer there and it is the outcome itself — asking a recruiter to
+ * categorise a hire would be bureaucracy with no query behind it.
+ */
+export const DISPOSITION_REQUIRED_STATES: ApplicationState[] = ["rejected", "archived"];
+
+export function requiresDisposition(toState: ApplicationState): boolean {
+  return DISPOSITION_REQUIRED_STATES.includes(toState);
+}
+
 /**
  * Collapses a granular `ApplicationState` into one of the six coarse
  * `CandidateStage` buckets the pipeline UI renders (funnel cards, stage

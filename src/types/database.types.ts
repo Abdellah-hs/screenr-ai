@@ -110,6 +110,8 @@ export type Database = {
           actor: string
           application_id: string
           created_at: string
+          disposition_code: string | null
+          disposition_description: string | null
           from_state: Database["public"]["Enums"]["candidate_stage_enum"] | null
           id: string
           rationale: string | null
@@ -119,6 +121,8 @@ export type Database = {
           actor: string
           application_id: string
           created_at?: string
+          disposition_code?: string | null
+          disposition_description?: string | null
           from_state?:
             | Database["public"]["Enums"]["candidate_stage_enum"]
             | null
@@ -130,6 +134,8 @@ export type Database = {
           actor?: string
           application_id?: string
           created_at?: string
+          disposition_code?: string | null
+          disposition_description?: string | null
           from_state?:
             | Database["public"]["Enums"]["candidate_stage_enum"]
             | null
@@ -981,6 +987,8 @@ export type Database = {
         Args: {
           p_actor: string
           p_application_id: string
+          p_disposition_code?: string
+          p_disposition_description?: string
           p_rationale?: string
           p_to_state: Database["public"]["Enums"]["candidate_stage_enum"]
         }
@@ -989,6 +997,8 @@ export type Database = {
       transition_application_system: {
         Args: {
           p_application_id: string
+          p_disposition_code?: string
+          p_disposition_description?: string
           p_rationale?: string
           p_to_state: Database["public"]["Enums"]["candidate_stage_enum"]
         }

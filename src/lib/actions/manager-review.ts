@@ -8,7 +8,9 @@ import { transitionApplication } from "@/lib/data/transitions";
 import { fetchCandidateById } from "@/lib/data/candidates";
 import {
   assertReviewable,
+  managerDecisionDisposition,
   managerDecisionTarget,
+  type ManagerRejectionCode,
   type ManagerReviewDecision,
 } from "@/lib/rules/manager-review";
 import { sendTransitionNotification } from "./transition-notifications";
@@ -34,6 +36,7 @@ export async function decideManagerReview(input: {
   applicationId: string;
   decision: ManagerReviewDecision;
   rationale: string;
+  rejectionCode?: ManagerRejectionCode;
 }): Promise<{ toState: ApplicationState }> {
   const userId = await requireUserId();
 
@@ -62,6 +65,11 @@ export async function decideManagerReview(input: {
     toState,
     actor: "recruiter",
     rationale: parsed.rationale,
+    disposition: managerDecisionDisposition(
+      parsed.decision,
+      parsed.rejectionCode,
+      parsed.rationale,
+    ),
   });
 
   // Best-effort, exactly like the HITL path: the candidate email is a courtesy

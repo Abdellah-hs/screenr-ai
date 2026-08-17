@@ -45,7 +45,12 @@ export async function sweepExpiredScreenings(
       await transitionApplicationAsSystem(
         applicationId,
         "screening_expired",
-        SWEEP_RATIONALE
+        SWEEP_RATIONALE,
+        // `screening_expired` doesn't demand a disposition — the state says
+        // why on its own — but recording one anyway puts sweep closures in
+        // the same countable bucket as every other EXPIRED outcome, instead
+        // of making them the one cause you have to go and count differently.
+        { code: "EXPIRED", description: SWEEP_RATIONALE }
       );
       await markScreeningResponseExpiredAsSystem(applicationId);
       expired += 1;

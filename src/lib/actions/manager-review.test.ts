@@ -67,6 +67,8 @@ describe("decideManagerReview", () => {
       toState: "final_interview_scheduling",
       actor: "recruiter",
       rationale: VALID_RATIONALE,
+      // Nothing closed, so there is no reason to record.
+      disposition: undefined,
     });
   });
 
@@ -83,6 +85,36 @@ describe("decideManagerReview", () => {
     const result = await decide({ decision: "reject" });
 
     expect(result).toEqual({ toState: "rejected" });
+  });
+
+  it("records the manager's chosen rejection code as the disposition", async () => {
+    await decide({ decision: "reject", rejectionCode: "OVERRIDE_REJECTED" });
+
+    expect(mockTransitionApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: { code: "OVERRIDE_REJECTED", description: VALID_RATIONALE },
+      }),
+    );
+  });
+
+  it("falls back to a weak-evidence rejection when no code is supplied", async () => {
+    // The field is optional on the wire, and a decision must never be lost to
+    // a missing one — a stale client posting the old shape still records.
+    await decide({ decision: "reject" });
+
+    expect(mockTransitionApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: expect.objectContaining({ code: "FAILED_INTERVIEW" }),
+      }),
+    );
+  });
+
+  it("does not attach a rejection code to a decision that keeps the candidate", async () => {
+    await decide({ decision: "hire", rejectionCode: "OVERRIDE_REJECTED" });
+
+    expect(mockTransitionApplication).toHaveBeenCalledWith(
+      expect.objectContaining({ disposition: undefined }),
+    );
   });
 
   // Anonymous callers must never reach the state machine. requireUserId throws
