@@ -1,6 +1,14 @@
 {
   "crons": [
     {
+      "path": "/api/cron/expire-screenings",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/expire-interviews",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/cron/renew-calendar-watches",
       "schedule": "0 3 * * *"
     }
