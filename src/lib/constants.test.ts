@@ -73,8 +73,27 @@ describe("APPLICATION_STATE_TRANSITIONS", () => {
     }
   });
 
-  it("keeps archived a terminal state with no outbound transitions", () => {
-    expect(APPLICATION_STATE_TRANSITIONS.archived).toEqual([]);
+  /**
+   * Archiving became reversible in #144 (PRD 3.12.4 requires a manager can
+   * bring someone back), so `archived` is no longer a dead end. The property
+   * that replaces "terminal" is symmetry: un-archiving is an UNDO, so the only
+   * exits are the states that could have archived in the first place. Without
+   * this, `archived` would quietly become a shortcut into any state.
+   */
+  it("keeps archived out of the active pipeline buckets", () => {
+    // The overview funnel sums applied+screening+interview+final_interview, so
+    // an archived candidate leaves the active count purely by bucketing —
+    // no extra filter needed, and none to forget.
+    expect(toCandidateStage("archived")).toBe("rejected");
+  });
+
+  it("lets archived return only to states that can archive", () => {
+    const canArchive = Object.entries(APPLICATION_STATE_TRANSITIONS)
+      .filter(([state, targets]) => state !== "archived" && targets.includes("archived"))
+      .map(([state]) => state)
+      .sort();
+
+    expect([...APPLICATION_STATE_TRANSITIONS.archived].sort()).toEqual(canArchive);
   });
 
   it("routes the on-demand interview invite to completed or expired only", () => {

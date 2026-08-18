@@ -5,6 +5,7 @@ import type { Database, Json } from "@/types/database.types";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
+import { AUTO_ARCHIVABLE_STATES } from "@/lib/rules/auto-archive";
 import type {
   ApplicationState,
   AutomationMode,
@@ -694,4 +695,81 @@ export async function fetchApplicationEmailContext(
     candidateEmail: row.candidates.email,
     campaignTitle: row.campaigns?.title ?? "the role",
   };
+}
+
+/** An application sitting in a non-responsive failure state, with its window. */
+export interface ArchivableApplication {
+  application_id: string;
+  status: string;
+  entered_at: string | null;
+  auto_archive_after_days: number | null;
+}
+
+/**
+ * Applications in a non-responsive failure state whose campaign has opted into
+ * auto-archiving. The window comparison itself is the rule layer's job
+ * (`shouldAutoArchive`) — this only narrows to rows worth considering, and
+ * excludes campaigns with a NULL window so an un-opted-in campaign never even
+ * reaches the decision.
+ *
+ * `updated_at` stands in for "when it entered this state", matching how the SLA
+ * timers already measure time-in-stage.
+ */
+export async function fetchArchivableApplications(
+  db: SupabaseDb,
+): Promise<ArchivableApplication[]> {
+  const q = db as unknown as {
+    from: (t: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      select: (s: string) => any;
+    };
+  };
+
+  const { data, error } = await q
+    .from("applications")
+    .select("id, status, updated_at, campaigns!inner(auto_archive_after_days, deleted_at)")
+    .in("status", [...AUTO_ARCHIVABLE_STATES])
+    .not("campaigns.auto_archive_after_days", "is", null)
+    .is("campaigns.deleted_at", null);
+
+  if (error) {
+    throw new Error(
+      `Failed to load archivable applications: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+
+  return ((data ?? []) as Array<{
+    id: string;
+    status: string;
+    updated_at: string | null;
+    campaigns: { auto_archive_after_days: number | null } | null;
+  }>).map((r) => ({
+    application_id: r.id,
+    status: r.status,
+    entered_at: r.updated_at,
+    auto_archive_after_days: r.campaigns?.auto_archive_after_days ?? null,
+  }));
+}
+
+/**
+ * The state an application was in immediately before it was archived, read off
+ * the transitions log. Un-archive restores exactly this — there is no
+ * `previous_status` column, and adding one would duplicate a fact the immutable
+ * log already records.
+ */
+export async function fetchPreArchiveState(
+  applicationId: string,
+  db?: SupabaseDb,
+): Promise<string | null> {
+  const supabase = db ?? (await createClient());
+  const { data, error } = await supabase
+    .from("application_transitions")
+    .select("from_state, created_at")
+    .eq("application_id", applicationId)
+    .eq("to_state", "archived")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+  return (data[0] as { from_state: string | null }).from_state;
 }

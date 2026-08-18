@@ -1,3 +1,4 @@
+import { APPLICATION_STATE_TRANSITIONS } from "@/lib/constants";
 import { describe, it, expect } from "vitest";
 import {
   isRecruiterSettableTarget,
@@ -80,7 +81,15 @@ describe("recruiterStageOptions", () => {
     ]);
   });
 
-  it("returns an empty list for a terminal state", () => {
+  /**
+   * `archived` gained legal exits in #144 so a manager can bring someone back,
+   * but un-archiving must restore the state the application ACTUALLY held —
+   * only `unarchiveApplication` can know that, by reading the transitions log.
+   * Offering the exits as a free dropdown would let a recruiter pick `hired`
+   * for someone who never got past screening.
+   */
+  it("offers no dropdown options from archived, despite the graph permitting exits", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.archived.length).toBeGreaterThan(0);
     expect(recruiterStageOptions("archived")).toEqual([]);
   });
 });
