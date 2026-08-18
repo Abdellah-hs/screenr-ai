@@ -4,7 +4,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockIs = vi.fn();
 const mockEqUser = vi.fn(() => ({ is: mockIs }));
 const mockEqStatus = vi.fn(() => ({ eq: mockEqUser }));
-const mockSelect = vi.fn(() => ({ eq: mockEqStatus }));
+// `fetchAwaitingDecisionNotifications` filters on a SET of states, so it enters
+// the chain through .in() where the single-status reads use .eq().
+const mockInStatus = vi.fn(() => ({ eq: mockEqUser }));
+const mockSelect = vi.fn(() => ({ eq: mockEqStatus, in: mockInStatus }));
 // Return type widened so the SLA describe can override with table-specific chains.
 const mockFrom = vi.fn((): Record<string, unknown> => ({ select: mockSelect }));
 
@@ -13,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  fetchAwaitingDecisionNotifications,
   fetchExpiredInterviewNotifications,
   fetchPendingReviewNotifications,
   fetchSlaBreachNotifications,
@@ -90,6 +94,47 @@ describe("fetchExpiredInterviewNotifications", () => {
     mockIs.mockResolvedValue({ data: null, error: { message: "boom" } });
 
     expect(await fetchExpiredInterviewNotifications("user-1")).toEqual([]);
+  });
+});
+
+describe("fetchAwaitingDecisionNotifications", () => {
+  it("counts both post-interview human-decision states together", async () => {
+    // interview_scored (HITL, recruiter must advance) and manager_review (a
+    // manager owes a decision) are the same problem for the recruiter: someone
+    // finished their interview and is waiting on us.
+    mockIs.mockResolvedValue({ data: [], error: null });
+
+    await fetchAwaitingDecisionNotifications("user-1");
+
+    expect(mockInStatus).toHaveBeenCalledWith("status", [
+      "interview_scored",
+      "manager_review",
+    ]);
+    expect(mockEqUser).toHaveBeenCalledWith("campaigns.user_id", "user-1");
+  });
+
+  it("groups per campaign with counts, busiest first", async () => {
+    mockIs.mockResolvedValue({
+      data: [
+        { campaign_id: "c2", campaigns: { title: "Designer" } },
+        { campaign_id: "c1", campaigns: { title: "AI Engineer" } },
+        { campaign_id: "c1", campaigns: { title: "AI Engineer" } },
+      ],
+      error: null,
+    });
+
+    const result = await fetchAwaitingDecisionNotifications("user-1");
+
+    expect(result).toEqual([
+      { campaign_id: "c1", campaign_title: "AI Engineer", awaiting_count: 2 },
+      { campaign_id: "c2", campaign_title: "Designer", awaiting_count: 1 },
+    ]);
+  });
+
+  it("returns an empty list on a query error rather than throwing", async () => {
+    mockIs.mockResolvedValue({ data: null, error: { message: "boom" } });
+
+    expect(await fetchAwaitingDecisionNotifications("user-1")).toEqual([]);
   });
 });
 

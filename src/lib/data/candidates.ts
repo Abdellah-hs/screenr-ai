@@ -7,6 +7,7 @@ import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
 import type {
   ApplicationState,
+  AutomationMode,
   CampaignStatus,
   Disposition,
   InterviewPersona,
@@ -564,6 +565,8 @@ export interface InterviewScoringContext {
   resume_summary: string | null;
   /** Recorded as scoring evidence — which stance produced this transcript. */
   interview_persona: InterviewPersona;
+  /** Drives whether a scored interview advances to `manager_review` on its own. */
+  automation_mode: AutomationMode;
 }
 
 export async function fetchInterviewScoringContext(
@@ -573,7 +576,7 @@ export async function fetchInterviewScoringContext(
   const supabase = db ?? (await createClient());
   // `parsed_data` is an APPLICATION column (see above) — not a candidate one.
   const select =
-    "candidate_id, campaign_id, parsed_data, campaigns!inner(user_id, description, interview_persona)";
+    "candidate_id, campaign_id, parsed_data, campaigns!inner(user_id, description, interview_persona, automation_mode)";
   const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -594,6 +597,9 @@ export async function fetchInterviewScoringContext(
     description: campaign.description ?? null,
     resume_summary: buildResumeSummary(row.parsed_data ?? null),
     interview_persona: (campaign.interview_persona ?? "neutral") as InterviewPersona,
+    // Falls back to the cautious mode: a missing setting should leave the
+    // application for a human, never auto-advance it.
+    automation_mode: (campaign.automation_mode ?? "human_in_loop") as AutomationMode,
   };
 }
 

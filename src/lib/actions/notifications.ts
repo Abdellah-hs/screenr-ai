@@ -2,6 +2,7 @@
 
 import { requireUserId } from "@/lib/auth/guards";
 import {
+  fetchAwaitingDecisionNotifications,
   fetchExpiredInterviewNotifications,
   fetchPendingReviewNotifications,
   fetchSlaBreachNotifications,
@@ -17,10 +18,11 @@ import {
 export async function getRecruiterNotifications(): Promise<RecruiterNotification[]> {
   const userId = await requireUserId();
 
-  const [reviews, breaches, expiredInterviews] = await Promise.all([
+  const [reviews, breaches, expiredInterviews, awaitingDecision] = await Promise.all([
     fetchPendingReviewNotifications(userId),
     fetchSlaBreachNotifications(userId),
     fetchExpiredInterviewNotifications(userId),
+    fetchAwaitingDecisionNotifications(userId),
   ]);
 
   const slaItems: RecruiterNotification[] = breaches.map((b) => ({
@@ -49,8 +51,18 @@ export async function getRecruiterNotifications(): Promise<RecruiterNotification
     count: r.pending_review_count,
   }));
 
+  const awaitingItems: RecruiterNotification[] = awaitingDecision.map((a) => ({
+    id: `awaiting-decision:${a.campaign_id}`,
+    kind: "awaiting_decision",
+    campaignId: a.campaign_id,
+    campaignTitle: a.campaign_title,
+    count: a.awaiting_count,
+  }));
+
   // SLA breaches are time-sensitive — surface them above the rest. Expired
   // interviews sit above review reminders: a review is waiting for the
-  // recruiter, an expiry already happened without them.
-  return [...slaItems, ...expiredItems, ...reviewItems];
+  // recruiter, an expiry already happened without them. Post-interview
+  // decisions come last of the actionable items: the candidate has done
+  // everything asked of them and is waiting on us, but nothing is decaying.
+  return [...slaItems, ...expiredItems, ...reviewItems, ...awaitingItems];
 }

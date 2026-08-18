@@ -1,18 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockRequireUserId, mockFetchReviews, mockFetchBreaches, mockFetchExpired } =
-  vi.hoisted(() => ({
-    mockRequireUserId: vi.fn(),
-    mockFetchReviews: vi.fn(),
-    mockFetchBreaches: vi.fn(),
-    mockFetchExpired: vi.fn(),
-  }));
+const {
+  mockRequireUserId,
+  mockFetchReviews,
+  mockFetchBreaches,
+  mockFetchExpired,
+  mockFetchAwaiting,
+} = vi.hoisted(() => ({
+  mockRequireUserId: vi.fn(),
+  mockFetchReviews: vi.fn(),
+  mockFetchBreaches: vi.fn(),
+  mockFetchExpired: vi.fn(),
+  mockFetchAwaiting: vi.fn(),
+}));
 
 vi.mock("@/lib/auth/guards", () => ({ requireUserId: mockRequireUserId }));
 vi.mock("@/lib/data/notifications", () => ({
   fetchPendingReviewNotifications: mockFetchReviews,
   fetchSlaBreachNotifications: mockFetchBreaches,
   fetchExpiredInterviewNotifications: mockFetchExpired,
+  fetchAwaitingDecisionNotifications: mockFetchAwaiting,
 }));
 
 import { getRecruiterNotifications } from "./notifications";
@@ -23,6 +30,7 @@ beforeEach(() => {
   mockFetchReviews.mockResolvedValue([]);
   mockFetchBreaches.mockResolvedValue([]);
   mockFetchExpired.mockResolvedValue([]);
+  mockFetchAwaiting.mockResolvedValue([]);
 });
 
 describe("getRecruiterNotifications", () => {
@@ -131,5 +139,48 @@ describe("getRecruiterNotifications", () => {
       "interview_expired",
       "pending_review",
     ]);
+  });
+
+  /**
+   * A scored interview used to send no signal in either automation mode, so a
+   * candidate who had done everything asked of them could wait indefinitely
+   * with nobody aware they were the bottleneck.
+   */
+  it("surfaces interviewed candidates waiting on a decision", async () => {
+    mockFetchAwaiting.mockResolvedValue([
+      { campaign_id: "c1", campaign_title: "AI Engineer", awaiting_count: 3 },
+    ]);
+
+    const result = await getRecruiterNotifications();
+
+    expect(result).toEqual([
+      {
+        id: "awaiting-decision:c1",
+        kind: "awaiting_decision",
+        campaignId: "c1",
+        campaignTitle: "AI Engineer",
+        count: 3,
+      },
+    ]);
+  });
+
+  it("ranks decisions last — nothing is decaying, but someone is waiting on us", async () => {
+    mockFetchBreaches.mockResolvedValue([
+      {
+        campaign_id: "c1",
+        campaign_title: "AI Engineer",
+        stage: "screening",
+        stage_label: "Screening",
+        level: "alert",
+        count: 1,
+      },
+    ]);
+    mockFetchAwaiting.mockResolvedValue([
+      { campaign_id: "c1", campaign_title: "AI Engineer", awaiting_count: 2 },
+    ]);
+
+    const result = await getRecruiterNotifications();
+
+    expect(result.map((n) => n.kind)).toEqual(["sla_breach", "awaiting_decision"]);
   });
 });

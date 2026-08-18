@@ -464,6 +464,7 @@ async function autoScoreInterview(applicationId: string): Promise<void> {
       description: ctx.description,
       resumeSummary: ctx.resume_summary,
       persona: ctx.interview_persona,
+      automationMode: ctx.automation_mode,
     });
   } catch (err) {
     console.error(

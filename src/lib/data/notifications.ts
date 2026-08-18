@@ -23,11 +23,17 @@ export interface ExpiredInterviewNotification {
   expired_count: number;
 }
 
+export interface AwaitingDecisionNotification {
+  campaign_id: string;
+  campaign_title: string;
+  awaiting_count: number;
+}
+
 /** Unified bell view-model — pending reviews and SLA breaches share one list. */
 export interface RecruiterNotification {
   /** Stable per (kind, campaign, stage) so a single item can be dismissed. */
   id: string;
-  kind: "pending_review" | "sla_breach" | "interview_expired";
+  kind: "pending_review" | "sla_breach" | "interview_expired" | "awaiting_decision";
   campaignId: string;
   campaignTitle: string;
   count: number;
@@ -115,6 +121,56 @@ export async function fetchExpiredInterviewNotifications(
       expired_count: v.count,
     }))
     .sort((a, b) => b.expired_count - a.expired_count);
+}
+
+/**
+ * The post-interview states where an application is waiting on a **person**:
+ * `interview_scored` (HITL — the recruiter must advance it) and `manager_review`
+ * (a manager owes a decision).
+ *
+ * Both are surfaced regardless of automation mode, because the failure they
+ * guard against is the same in either: a scored interview that nobody looks at.
+ * Under `human_in_loop` the application rests at `interview_scored` by design;
+ * under `fully_auto` it lands in `manager_review` on its own. Neither state sent
+ * any signal before, so a finished interview could sit indefinitely with the
+ * candidate waiting and nobody aware they were the bottleneck.
+ */
+const AWAITING_DECISION_STATES = ["interview_scored", "manager_review"] as const;
+
+/**
+ * Campaigns owned by `userId` with applications parked in a post-interview
+ * human-decision state. Grouped one row per campaign, busiest first. SELECT-only.
+ */
+export async function fetchAwaitingDecisionNotifications(
+  userId: string,
+): Promise<AwaitingDecisionNotification[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("applications")
+    .select("campaign_id, campaigns!inner(title, user_id, deleted_at)")
+    .in("status", [...AWAITING_DECISION_STATES])
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return [];
+
+  const byCampaign = new Map<string, { title: string; count: number }>();
+  for (const row of data as unknown as Array<{
+    campaign_id: string;
+    campaigns: { title: string };
+  }>) {
+    const existing = byCampaign.get(row.campaign_id);
+    if (existing) existing.count += 1;
+    else byCampaign.set(row.campaign_id, { title: row.campaigns.title, count: 1 });
+  }
+
+  return [...byCampaign.entries()]
+    .map(([campaign_id, v]) => ({
+      campaign_id,
+      campaign_title: v.title,
+      awaiting_count: v.count,
+    }))
+    .sort((a, b) => b.awaiting_count - a.awaiting_count);
 }
 
 const STAGE_LABEL: Record<SlaStage, string> = Object.fromEntries(
