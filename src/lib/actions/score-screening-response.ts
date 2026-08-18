@@ -9,7 +9,11 @@ import {
 } from "@/lib/services/screening-questions";
 import { analyzeTranscriptCadence } from "@/lib/screening/transcript-cadence";
 import { fetchActiveRubricVersion } from "@/lib/data/campaigns";
-import { transitionApplication } from "@/lib/data/transitions";
+import {
+  transitionApplication,
+  transitionApplicationAsSystem,
+} from "@/lib/data/transitions";
+import type { SupabaseDb } from "@/lib/supabase/types";
 import { sendTransitionNotification } from "./transition-notifications";
 import { evaluateScreeningScoringOutcome } from "@/lib/rules/screening-response";
 import {
@@ -28,6 +32,14 @@ export interface RunScreeningScoringInput {
   description: string;
   automation_mode: "fully_auto" | "human_in_loop";
   screening_threshold: number;
+  /**
+   * Service-role client, supplied by the candidate-side auto-score: that path
+   * runs on a verified screening token with no recruiter session, and every
+   * table below is owner-only RLS. Omitted by the recruiter-triggered path,
+   * which keeps its cookie-scoped session client and the ownership checks that
+   * come with it.
+   */
+  db?: SupabaseDb;
 }
 
 /**
@@ -48,11 +60,11 @@ export interface RunScreeningScoringInput {
 export async function runScreeningScoring(
   input: RunScreeningScoringInput
 ): Promise<{ overall_score: number }> {
-  const { applicationId, campaignId, candidateId, ownerUserId } = input;
+  const { applicationId, campaignId, candidateId, ownerUserId, db } = input;
 
   const [response, questions] = await Promise.all([
-    fetchScreeningResponseByApplicationId(applicationId),
-    fetchScreeningQuestionsByCampaignId(campaignId),
+    fetchScreeningResponseByApplicationId(applicationId, db),
+    fetchScreeningQuestionsByCampaignId(campaignId, db),
   ]);
 
   if (!response) throw new Error("No screening response to score");
@@ -89,7 +101,7 @@ export async function runScreeningScoring(
           questions: questionsForScoring,
           answers: answerInputs,
         }),
-    fetchActiveRubricVersion(campaignId, "screening_q"),
+    fetchActiveRubricVersion(campaignId, "screening_q", db),
   ]);
 
   // Soft "reads-as-scripted" cadence signal (#84): evidence for the recruiter,
@@ -134,6 +146,7 @@ export async function runScreeningScoring(
       rawOutput: evidence.rawOutput,
       inputSnapshot,
     },
+    db,
   });
 
   // Rule layer decides the chain of transitions from the persisted score.
@@ -150,13 +163,27 @@ export async function runScreeningScoring(
 
   for (const decision of decisions) {
     try {
-      await transitionApplication({
-        applicationId,
-        toState: decision.toState,
-        actor: "system",
-        rationale: decision.rationale,
-        disposition: decision.disposition,
-      });
+      // A candidate-side auto-score (injected `db`, no recruiter session) must
+      // use the system transition: `transitionApplication` reads through the
+      // cookie client and its RPC enforces an owner check that an anonymous
+      // request cannot satisfy. The actor is `system` either way — what differs
+      // is only which client carries the write.
+      if (db) {
+        await transitionApplicationAsSystem(
+          applicationId,
+          decision.toState,
+          decision.rationale,
+          decision.disposition,
+        );
+      } else {
+        await transitionApplication({
+          applicationId,
+          toState: decision.toState,
+          actor: "system",
+          rationale: decision.rationale,
+          disposition: decision.disposition,
+        });
+      }
       await sendTransitionNotification(applicationId, decision.toState, ownerUserId);
     } catch (err) {
       console.error(

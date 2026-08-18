@@ -82,9 +82,10 @@ export interface ScreeningScoringContext {
  * recruiter-triggered path still uses the user-scoped `fetchCampaignScoringConfig`.
  */
 export async function fetchScoringContextByApplicationId(
-  applicationId: string
+  applicationId: string,
+  db?: SupabaseDb
 ): Promise<ScreeningScoringContext | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
 
   const selectWithCampaign = `
     candidate_id,
@@ -220,9 +221,10 @@ export interface ScreeningResponseRow {
 }
 
 export async function fetchScreeningQuestionsByCampaignId(
-  campaignId: string
+  campaignId: string,
+  dbClient?: SupabaseDb
 ): Promise<ScreeningQuestionRow[]> {
-  const supabase = await createClient();
+  const supabase = dbClient ?? (await createClient());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
   const { data, error } = await db
@@ -284,9 +286,10 @@ export async function replaceScreeningQuestions(
 }
 
 export async function fetchScreeningResponseByApplicationId(
-  applicationId: string
+  applicationId: string,
+  dbClient?: SupabaseDb
 ): Promise<ScreeningResponseRow | null> {
-  const supabase = await createClient();
+  const supabase = dbClient ?? (await createClient());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
   const { data, error } = await db
@@ -375,9 +378,10 @@ export async function upsertPendingScreeningResponse(
 
 export async function saveCandidateAnswers(
   applicationId: string,
-  answers: { question_id: string; prompt: string; answer_text: string }[]
+  answers: { question_id: string; prompt: string; answer_text: string }[],
+  dbClient?: SupabaseDb
 ): Promise<void> {
-  const supabase = await createClient();
+  const supabase = dbClient ?? (await createClient());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
@@ -412,9 +416,10 @@ export async function saveCandidateAnswers(
  */
 export async function saveVoiceTranscript(
   applicationId: string,
-  transcript: VoiceTranscriptTurn[]
+  transcript: VoiceTranscriptTurn[],
+  dbClient?: SupabaseDb
 ): Promise<void> {
-  const supabase = await createClient();
+  const supabase = dbClient ?? (await createClient());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
@@ -499,9 +504,10 @@ export async function saveVoiceTranscriptDraft(
  * `screening_expired` is the action's job — this only flips the response row.
  */
 export async function markScreeningResponseExpired(
-  applicationId: string
+  applicationId: string,
+  dbClient?: SupabaseDb
 ): Promise<void> {
-  const supabase = await createClient();
+  const supabase = dbClient ?? (await createClient());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
@@ -600,12 +606,20 @@ export async function saveAnswerScores(args: {
   perAnswer: { question_id: string; score: number; rationale: string }[];
   rubricVersion: number | null;
   audit: ScreeningScoreAuditFields;
+  /**
+   * Injected for the candidate-side auto-score, which runs in a token-verified
+   * request with no recruiter session. Defaults to the session client.
+   */
+  db?: SupabaseDb;
 }): Promise<void> {
-  const supabase = await createClient();
+  const supabase = args.db ?? (await createClient());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  const existing = await fetchScreeningResponseByApplicationId(args.applicationId);
+  const existing = await fetchScreeningResponseByApplicationId(
+    args.applicationId,
+    args.db
+  );
   if (!existing) throw new Error("Screening response not found");
 
   const scoreById = new Map(args.perAnswer.map((a) => [a.question_id, a]));
