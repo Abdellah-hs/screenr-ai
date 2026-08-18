@@ -460,13 +460,22 @@ Both are exposed as guarded GET routes, `Authorization: Bearer ${CRON_SECRET}` (
 - **`GET /api/cron/expire-screenings`**
 - **`GET /api/cron/expire-interviews`**
 
-Wire any scheduler to hit them on whatever cadence you want (daily is plenty):
+**Both are scheduled in `vercel.json`**, daily and staggered so they never overlap each other or the calendar-watch renewal:
 
-- **Vercel Cron** — add the path + schedule to `vercel.json` (Vercel injects the `CRON_SECRET` bearer automatically).
-- **Supabase pg_cron + pg_net** — schedule an HTTP POST/GET to the deployed URL with the bearer header.
+| Path | Schedule (UTC) |
+| --- | --- |
+| `/api/cron/expire-screenings` | `0 2 * * *` |
+| `/api/cron/expire-interviews` | `30 2 * * *` |
+| `/api/cron/renew-calendar-watches` | `0 3 * * *` |
+
+Vercel injects the `CRON_SECRET` bearer automatically for paths listed in `vercel.json`, so **`CRON_SECRET` must be set in the deployed environment** — the routes fail closed without it, which shows up as a 500 in the cron log rather than an open endpoint. Daily is deliberate: a 7-day TTL doesn't need finer granularity, and Vercel's Hobby plan permits only one run per day per path anyway.
+
+Other schedulers work equally well if you ever move off Vercel:
+
+- **Supabase pg_cron + pg_net** — schedule an HTTP GET to the deployed URL with the bearer header.
 - **External cron / GitHub Actions** — `curl -H "Authorization: Bearer $CRON_SECRET" <origin>/api/cron/expire-screenings`.
 
-**There is no scheduler wired by default** — `vercel.json` schedules only `renew-calendar-watches`, so both sweeps are inert in production until one is pointed at them (tracked in #131). Until then expiry is detected **lazily only**, when a candidate reopens a dead link — which is precisely the population least likely to come back. Recruiters see lapsed interviews in the notification bell (`fetchExpiredInterviewNotifications`).
+Expiry is therefore detected **both** ways: proactively on the schedule above, and lazily when a candidate reopens a dead link. The lazy path alone was never enough — the candidates who never return are exactly the ones who need sweeping. Recruiters see lapsed interviews in the notification bell (`fetchExpiredInterviewNotifications`).
 
 ## Notes for Future Work
 
