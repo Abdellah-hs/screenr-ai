@@ -461,16 +461,35 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   manager_review: ["final_interview_scheduling", "hired", "rejected"],
   final_interview_scheduling: ["hired", "rejected"],
 
-  // Failure states — observable dead-ends, archived is the only exit.
+  // Failure states — observable dead-ends; archiving is the only exit, and
+  // it is reversible (see `archived` below).
   screening_expired: ["archived"],
   interview_no_show: ["archived"],
   interview_expired: ["archived"],
   processing_failed: ["archived"],
 
-  // Terminal — only `archived` is reachable from them (for housekeeping).
+  // Terminal — only `archived` is reachable from them (for housekeeping),
+  // and an archive can be undone back to here.
   rejected: ["archived"],
   hired: ["archived"],
-  archived: [],
+  /**
+   * Archiving is reversible (PRD 3.12.4): a manager can bring someone back.
+   *
+   * The exits are exactly the states that can archive, so un-archiving is an
+   * undo rather than a new route through the machine. This map only says the
+   * shape is legal — `unarchiveApplication` additionally requires the target to
+   * be the state the application ACTUALLY came from, read back off the
+   * transitions log, so archived can never be used as a shortcut into a state
+   * the candidate never reached.
+   */
+  archived: [
+    "screening_expired",
+    "interview_no_show",
+    "interview_expired",
+    "processing_failed",
+    "rejected",
+    "hired",
+  ],
 };
 
 export type TransitionActor = "system" | "ai" | "recruiter";

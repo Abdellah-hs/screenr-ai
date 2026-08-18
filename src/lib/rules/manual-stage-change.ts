@@ -55,10 +55,20 @@ export function isRecruiterSettableTarget(toState: ApplicationState): boolean {
  * The manual-override targets offered from `currentState`: the legal graph
  * transitions minus the system-produced states a recruiter can't fabricate.
  * Pure — drives both the stage-changer dropdown and the server-side guard.
+ *
+ * `archived` is deliberately excluded even though the graph now permits exits
+ * from it (#144). Un-archiving must restore the state the application ACTUALLY
+ * held before it was archived, which only `unarchiveApplication` can determine
+ * by reading the transitions log. Offering the six legal exits as a free
+ * dropdown would let a recruiter pick `hired` for someone who never got past
+ * screening — a shortcut into a stage the candidate never reached, recorded in
+ * the log as though they had.
  */
 export function recruiterStageOptions(
   currentState: ApplicationState,
 ): ApplicationState[] {
+  if (currentState === "archived") return [];
+
   return (APPLICATION_STATE_TRANSITIONS[currentState] ?? []).filter(
     isRecruiterSettableTarget,
   );

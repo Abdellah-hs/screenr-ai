@@ -9,6 +9,7 @@ import {
 } from "@/lib/validations";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { requireUserId } from "@/lib/auth/guards";
+import { resolveRestoreTarget } from "@/lib/rules/auto-archive";
 import { transitionApplication } from "@/lib/data/transitions";
 import {
   assertRecruiterSettableTarget,
@@ -33,6 +34,7 @@ import {
   getResumeSignedUrl,
   saveResumeScore,
   fetchApplicationCampaignId,
+  fetchPreArchiveState,
 } from "@/lib/data/candidates";
 import {
   fetchCampaignScoringConfig,
@@ -355,6 +357,54 @@ export async function updateCandidateStage(
   );
 
   await sendTransitionNotification(applicationId, validState, userId);
+
+  if (campaignId) {
+    revalidatePath(`/campaigns/${campaignId}`);
+    revalidatePath(`/campaigns/${campaignId}/candidates/${applicationId}`);
+  }
+}
+
+/**
+ * Bring an archived candidate back into the pipeline (PRD 3.12.4).
+ *
+ * Restores the state the application was in *immediately before* it was
+ * archived, read back off the immutable transitions log rather than from a
+ * `previous_status` column — the log already records the fact, and a second copy
+ * could disagree with it.
+ *
+ * The target is validated by `resolveRestoreTarget`, so an archive whose origin
+ * is missing or is not a legal exit from `archived` is refused rather than
+ * guessed at. Putting a candidate back into a stage they never reached would be
+ * worse than leaving them archived, and the transitions log would show it as
+ * though they had been there.
+ *
+ * Logged as a recruiter action with a mandatory written rationale: un-archiving
+ * reverses an automatic decision, and that is exactly the case CLAUDE.md's
+ * manual-override rule exists for.
+ */
+export async function unarchiveApplication(
+  applicationId: string,
+  rationale: string,
+) {
+  await requireUserId();
+  uuidSchema.parse(applicationId);
+  const validRationale = stageChangeRationaleSchema.parse(rationale);
+
+  const fromState = await fetchPreArchiveState(applicationId);
+  const target = resolveRestoreTarget(fromState);
+  if (!target) {
+    throw new Error(
+      "Can't restore this application — no archive step is recorded for it, so there is no state to return it to.",
+    );
+  }
+
+  const campaignId = await fetchApplicationCampaignId(applicationId);
+
+  await updateApplicationStage(
+    applicationId,
+    target,
+    `Un-archived: ${validRationale}`,
+  );
 
   if (campaignId) {
     revalidatePath(`/campaigns/${campaignId}`);

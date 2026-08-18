@@ -352,6 +352,7 @@ export type Database = {
       campaigns: {
         Row: {
           accepting_applications: boolean
+          auto_archive_after_days: number | null
           automation_mode: Database["public"]["Enums"]["automation_mode_enum"]
           created_at: string
           deadline: string | null
@@ -376,6 +377,7 @@ export type Database = {
         }
         Insert: {
           accepting_applications?: boolean
+          auto_archive_after_days?: number | null
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null
@@ -400,6 +402,7 @@ export type Database = {
         }
         Update: {
           accepting_applications?: boolean
+          auto_archive_after_days?: number | null
           automation_mode?: Database["public"]["Enums"]["automation_mode_enum"]
           created_at?: string
           deadline?: string | null

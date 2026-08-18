@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/renew-calendar-watches",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/auto-archive",
+      "schedule": "0 4 * * *"
     }
   ]
 }
