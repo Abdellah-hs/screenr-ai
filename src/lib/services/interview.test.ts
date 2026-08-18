@@ -8,6 +8,7 @@ import {
 } from "./interview";
 import {
   INTERVIEW_DURATION_MINUTES,
+  INTERVIEW_PERSONAS,
   INTERVIEW_TARGET_QUESTIONS,
 } from "@/lib/constants";
 
@@ -100,6 +101,89 @@ describe("buildInterviewInstructions", () => {
     }).toLowerCase();
 
     expect(out).toContain("behavioral");
+  });
+});
+
+/**
+ * A campaign could always store an `interview_persona`, but the value never
+ * reached the interviewer — every interview ran identically, so the stored
+ * setting was a false record of how the candidate was actually interviewed.
+ * These tests hold the wire open.
+ */
+describe("interview persona", () => {
+  const PERSONAS = INTERVIEW_PERSONAS.map((p) => p.value);
+
+  it("runs a materially different interview for each persona", () => {
+    const outputs = PERSONAS.map((persona) =>
+      buildInterviewInstructions({ resume: FULL_RESUME, persona }),
+    );
+
+    // Every stance must be distinguishable — a persona that collapses onto
+    // another is the bug this issue was filed for, one layer down.
+    expect(new Set(outputs).size).toBe(PERSONAS.length);
+  });
+
+  it("leaves the default neutral interview byte-identical to the pre-persona prompt", () => {
+    // `neutral` was always the baseline stance. If it drifts, every transcript
+    // scored before personas shipped stops being comparable with a new one.
+    const withoutPersona = buildInterviewInstructions({
+      jobTitle: "Backend Engineer",
+      resume: FULL_RESUME,
+    });
+    const explicitlyNeutral = buildInterviewInstructions({
+      jobTitle: "Backend Engineer",
+      resume: FULL_RESUME,
+      persona: "neutral",
+    });
+
+    expect(explicitlyNeutral).toBe(withoutPersona);
+  });
+
+  it("tells a pressure interviewer to push back on comfortable answers", () => {
+    const out = buildInterviewInstructions({
+      resume: FULL_RESUME,
+      persona: "pressure",
+    }).toLowerCase();
+
+    expect(out).toContain("push back");
+  });
+
+  it("forbids a socratic interviewer from supplying the answer", () => {
+    const out = buildInterviewInstructions({
+      resume: FULL_RESUME,
+      persona: "socratic",
+    }).toLowerCase();
+
+    expect(out).toContain("do not explain");
+  });
+
+  it("keeps every persona bound by the no-feedback rule", () => {
+    // A stance changes how the interviewer probes, never what it discloses.
+    // "Pressure" must not become licence to tell a candidate they're wrong.
+    for (const persona of PERSONAS) {
+      const out = buildInterviewInstructions({
+        resume: FULL_RESUME,
+        persona,
+      }).toLowerCase();
+
+      expect(out).toContain("do not reveal");
+      expect(out).toContain("do not give feedback");
+    }
+  });
+
+  it("still respects the shared question budget under every persona", () => {
+    // The directives are prose the model reads alongside the pacing rules; a
+    // persona that dropped the budget would blow the 10-minute cap.
+    for (const persona of PERSONAS) {
+      const out = buildInterviewInstructions({ resume: FULL_RESUME, persona });
+
+      expect(out).toContain(`about ${INTERVIEW_TARGET_QUESTIONS} main questions`);
+
+      const minuteFigures = [...out.matchAll(/(\d+)(?:\s*[–-]\s*\d+)?\s*minutes?/g)];
+      for (const [, figure] of minuteFigures) {
+        expect(Number(figure)).toBe(INTERVIEW_DURATION_MINUTES);
+      }
+    }
   });
 });
 

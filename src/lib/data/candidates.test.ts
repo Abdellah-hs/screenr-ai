@@ -322,6 +322,45 @@ describe("interview context reads", () => {
 
       await expect(fetchInterviewContextByApplicationId("app-1")).resolves.toBeNull();
     });
+
+    it("reads the campaign's interview persona so the interviewer can be told the stance", async () => {
+      stubApplicationsSingle({
+        data: {
+          id: "app-1",
+          campaign_id: "camp-1",
+          parsed_data: RESUME,
+          campaigns: {
+            id: "camp-1",
+            title: "Data scientist",
+            status: "active",
+            interview_persona: "pressure",
+          },
+          candidates: { first_name: "Abdellah", last_name: "Hasnaoui" },
+        },
+        error: null,
+      });
+
+      const ctx = await fetchInterviewContextByApplicationId("app-1");
+
+      expect(ctx?.interview_persona).toBe("pressure");
+    });
+
+    it("falls back to a neutral stance rather than failing the link when none is stored", async () => {
+      stubApplicationsSingle({
+        data: {
+          id: "app-1",
+          campaign_id: "camp-1",
+          parsed_data: RESUME,
+          campaigns: { id: "camp-1", title: "Data scientist", status: "active" },
+          candidates: { first_name: "Abdellah", last_name: "Hasnaoui" },
+        },
+        error: null,
+      });
+
+      const ctx = await fetchInterviewContextByApplicationId("app-1");
+
+      expect(ctx?.interview_persona).toBe("neutral");
+    });
   });
 
   describe("fetchInterviewScoringContext", () => {
@@ -348,6 +387,26 @@ describe("interview context reads", () => {
       await fetchInterviewScoringContext("app-1");
 
       expect(candidatesJoinColumns(select)).not.toContain("parsed_data");
+    });
+
+    it("carries the persona through so the score records which stance produced the transcript", async () => {
+      stubApplicationsSingle({
+        data: {
+          candidate_id: "cand-1",
+          campaign_id: "camp-1",
+          parsed_data: RESUME,
+          campaigns: {
+            user_id: "user-1",
+            description: "Build models",
+            interview_persona: "socratic",
+          },
+        },
+        error: null,
+      });
+
+      const ctx = await fetchInterviewScoringContext("app-1");
+
+      expect(ctx?.interview_persona).toBe("socratic");
     });
   });
 });

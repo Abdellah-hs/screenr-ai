@@ -5,6 +5,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { InterviewPersona } from "@/lib/constants";
+import { INTERVIEW_PROMPT_VERSION } from "@/lib/services/interview";
 import { scoreInterview } from "@/lib/services/interview-scoring";
 import { evaluateInterviewScoringOutcome } from "@/lib/rules/interview-scoring";
 import { fetchActiveRubricVersion } from "@/lib/data/campaigns";
@@ -25,6 +27,13 @@ export interface RunInterviewScoringInput {
   description: string;
   /** Short résumé summary for scoring context (optional). */
   resumeSummary?: string | null;
+  /**
+   * The stance the interview was actually conducted under. Recorded as evidence
+   * only — it does NOT change how the transcript is scored. A "pressure"
+   * transcript reads differently from a "collaborative" one, so a later reviewer
+   * needs to know which conversation produced the score (PRD 3.5.8).
+   */
+  persona?: InterviewPersona;
 }
 
 /**
@@ -93,6 +102,11 @@ export async function runInterviewScoring(
         inputSnapshot: {
           transcript_turns: transcript.length,
           job_description_length: input.description.length,
+          // Which conversation produced this transcript. `prompt_version` on the
+          // audit row is the SCORER's version; these two describe the interview
+          // itself, without which a score can't be read back in context.
+          interview_persona: input.persona ?? "neutral",
+          interview_prompt_version: INTERVIEW_PROMPT_VERSION,
         },
       },
     },
