@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 import { MANAGER_REJECTION_CODES } from "@/lib/rules/manager-review";
+import { AI_AUDIT_STAGE_VALUES } from "@/lib/constants";
 
 // ─── Campaign Validation ────────────────────────────────────────────────────
 
@@ -498,4 +499,23 @@ export const managerReviewDecisionSchema = z.object({
   // manager picks it in the UI, because "we disagreed with a passing score"
   // and "the interview was weak" are different facts and only they know which.
   rejectionCode: z.enum(MANAGER_REJECTION_CODES).default("FAILED_INTERVIEW"),
+});
+
+/**
+ * Audit Log filters (PRD 3.7.3). Every field optional — an unfiltered view is
+ * the legitimate default, since "show me everything for this campaign" is the
+ * most common compliance question.
+ *
+ * Dates arrive from `<input type="date">` as `YYYY-MM-DD`; the action widens the
+ * upper bound to the end of that day so "to: today" includes today's rows
+ * rather than silently excluding everything after midnight.
+ */
+export const auditLogFilterSchema = z.object({
+  campaignId: uuidSchema.optional(),
+  candidateId: uuidSchema.optional(),
+  stage: z.enum(AI_AUDIT_STAGE_VALUES).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date").optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date").optional(),
+  overriddenOnly: z.boolean().optional(),
+  page: z.number().int().min(0).max(10_000).optional(),
 });

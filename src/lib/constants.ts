@@ -214,6 +214,41 @@ export const SLA_STAGES: { name: string; key: SlaStage }[] = [
   { name: "Final Interview", key: "final_interview" },
 ];
 
+// ─── AI Audit Trail ─────────────────────────────────────────────────────────
+
+/**
+ * The `stage` values written to `ai_audit_log`, one per sanctioned writer.
+ *
+ * This is a plain text column, so the list is a convention rather than a DB
+ * constraint — it exists to drive the Audit Log filter without hard-coding
+ * strings in the UI. Adding a new AI call means adding its stage here too, or
+ * its rows become unfilterable (still logged, just harder to find).
+ */
+export const AI_AUDIT_STAGE_VALUES = [
+  "resume_parsing",
+  "resume_resubmission",
+  "resume_scoring",
+  "screening_scoring",
+  "interview_scoring",
+] as const;
+
+export type AiAuditStage = (typeof AI_AUDIT_STAGE_VALUES)[number];
+
+/**
+ * Audit rows per page. Lives here rather than in the action module because a
+ * `"use server"` file may only export async functions, and both the page and the
+ * client table need this number to size their pager.
+ */
+export const AUDIT_PAGE_SIZE = 50;
+
+export const AI_AUDIT_STAGES: { value: AiAuditStage; label: string }[] = [
+  { value: "resume_parsing", label: "Résumé parsing" },
+  { value: "resume_resubmission", label: "Résumé resubmission" },
+  { value: "resume_scoring", label: "Résumé scoring" },
+  { value: "screening_scoring", label: "Screening scoring" },
+  { value: "interview_scoring", label: "Interview scoring" },
+];
+
 // ─── AI Video Interview ─────────────────────────────────────────────────────
 
 /**
