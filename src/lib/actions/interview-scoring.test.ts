@@ -122,6 +122,46 @@ describe("runInterviewScoring", () => {
     );
   });
 
+  /**
+   * `manager_review` had no automated entry path at all: every earlier stage
+   * auto-advances on a rule and this one stopped, so a fully_auto campaign left
+   * scored interviews parked forever.
+   */
+  it("advances a fully_auto campaign to manager_review after recording the score", async () => {
+    await runInterviewScoring({ ...INPUT, automationMode: "fully_auto" });
+
+    expect(mockTransitionSystem).toHaveBeenNthCalledWith(
+      1,
+      "app-1",
+      "interview_scored",
+      expect.any(String),
+    );
+    expect(mockTransitionSystem).toHaveBeenNthCalledWith(
+      2,
+      "app-1",
+      "manager_review",
+      expect.any(String),
+    );
+  });
+
+  it("rests at interview_scored for a human-in-the-loop campaign", async () => {
+    await runInterviewScoring({ ...INPUT, automationMode: "human_in_loop" });
+
+    expect(mockTransitionSystem).toHaveBeenCalledOnce();
+    expect(mockTransitionSystem).toHaveBeenCalledWith(
+      "app-1",
+      "interview_scored",
+      expect.any(String),
+    );
+  });
+
+  it("does not auto-advance when the mode is missing", async () => {
+    // Defaulting the other way would silently push candidates past a human.
+    await runInterviewScoring(INPUT);
+
+    expect(mockTransitionSystem).toHaveBeenCalledOnce();
+  });
+
   it("records a neutral stance when the campaign never set one", async () => {
     await runInterviewScoring(INPUT);
 

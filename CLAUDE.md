@@ -175,6 +175,22 @@ ELSE:
   transition(app, 'screening_rejected', actor='system', rationale='score<threshold', disposition='LOW_SCORE')
 ```
 
+#### Interview scoring is not a gate (decision 2026-08-18)
+
+`evaluateInterviewScoringOutcome` always records `interview_scored` first, then follows `automation_mode`:
+
+- `human_in_loop` → `[interview_scored]` (rests; the recruiter advances it)
+- `fully_auto` → `[interview_scored, manager_review]`
+
+**The interview score never gates and never auto-rejects**, at any threshold. Two reasons, both deliberate:
+
+1. `manager_review` is not an outcome — it is the handoff point where a person takes ownership. Advancing into it is exactly what "the AI took this as far as it can without a human" means, which is safe in a way auto-rejecting after a full interview would not be.
+2. The PRD wants managers inspecting stage-specific evidence rather than a rollup gate. Rejecting someone who sat a whole interview on the strength of one number is the decision most worth keeping human.
+
+Before this, the rule returned `interview_scored` unconditionally and **nothing in the codebase ever moved an application into `manager_review`** — every earlier stage auto-advanced on a rule and this one silently stopped, so a `fully_auto` campaign parked scored interviews forever, contradicting the mode the recruiter chose.
+
+Both post-interview waiting states (`interview_scored` under HITL, `manager_review` under either mode) are surfaced in the notification bell by `fetchAwaitingDecisionNotifications`, so a finished interview cannot sit unseen in either mode. **The candidate is sent nothing between submitting their interview and the final outcome** — the submit confirmation is the acknowledgement, and the next contact is the decision. Adding a "we're reviewing" email is deliberately left to the email-templates work (#134 / #147) rather than bolted on here.
+
 ### Disposition Codes
 
 Every terminal transition (`rejected`, `archived`) requires a structured disposition `{ code, description }`. Allowed codes include: `LOW_SCORE`, `FAILED_INTERVIEW`, `NO_SHOW`, `EXPIRED`, `OVERRIDE_REJECTED`.

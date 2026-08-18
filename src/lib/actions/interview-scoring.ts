@@ -5,7 +5,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { InterviewPersona } from "@/lib/constants";
+import type { AutomationMode, InterviewPersona } from "@/lib/constants";
 import { INTERVIEW_PROMPT_VERSION } from "@/lib/services/interview";
 import { scoreInterview } from "@/lib/services/interview-scoring";
 import { evaluateInterviewScoringOutcome } from "@/lib/rules/interview-scoring";
@@ -34,6 +34,12 @@ export interface RunInterviewScoringInput {
    * needs to know which conversation produced the score (PRD 3.5.8).
    */
   persona?: InterviewPersona;
+  /**
+   * Campaign automation mode. Decides whether a scored interview advances to
+   * `manager_review` on its own or rests for the recruiter. Defaults to the
+   * cautious mode so an omitted value can never auto-advance anyone.
+   */
+  automationMode?: AutomationMode;
 }
 
 /**
@@ -116,9 +122,10 @@ export async function runInterviewScoring(
   // Rule layer decides the transition from the persisted score. Best-effort:
   // the score is durable; a failed transition just leaves a recruiter to
   // advance manually.
-  const decisions = evaluateInterviewScoringOutcome({
-    overall_score: evidence.result.overall_score,
-  });
+  const decisions = evaluateInterviewScoringOutcome(
+    { overall_score: evidence.result.overall_score },
+    { automation_mode: input.automationMode ?? "human_in_loop" },
+  );
   for (const decision of decisions) {
     try {
       await transitionApplicationAsSystem(applicationId, decision.toState, decision.rationale);
