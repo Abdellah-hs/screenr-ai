@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { restoreCampaign } from "@/lib/actions/campaigns";
+import { TIER_LABELS } from "@/lib/constants";
 import type {
   CandidateStage,
   ScreeningTier,
@@ -253,7 +254,7 @@ function ApplicationRow({ app }: { app: TalentPoolApplication }) {
                 tierColors[app.score.tier],
               )}
             >
-              {app.score.tier === "no_match" ? "No Match" : app.score.tier.charAt(0).toUpperCase() + app.score.tier.slice(1)}
+              {TIER_LABELS[app.score.tier]}
             </span>
           )}
         </div>
