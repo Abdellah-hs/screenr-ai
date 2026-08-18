@@ -5,7 +5,12 @@ import type { Database, Json } from "@/types/database.types";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
-import type { ApplicationState, CampaignStatus, Disposition } from "@/lib/constants";
+import type {
+  ApplicationState,
+  CampaignStatus,
+  Disposition,
+  InterviewPersona,
+} from "@/lib/constants";
 import {
   findCandidateByEmail,
   findCandidateByPhone,
@@ -501,6 +506,8 @@ export interface InterviewCandidateContext {
   candidate_last_name: string | null;
   /** The candidate's parsed résumé (null if never ingested). */
   resume: ParsedResumeData | null;
+  /** The campaign's configured interviewing stance (PRD 3.5.8). */
+  interview_persona: InterviewPersona;
 }
 
 export async function fetchInterviewContextByApplicationId(
@@ -512,7 +519,7 @@ export async function fetchInterviewContextByApplicationId(
   // only (CLAUDE.md → Entities). Selecting `parsed_data` off the candidate join
   // makes PostgREST reject the whole query, which reads as "no such application".
   const select =
-    "id, campaign_id, parsed_data, campaigns!inner(id, title, status), candidates!inner(first_name, last_name)";
+    "id, campaign_id, parsed_data, campaigns!inner(id, title, status, interview_persona), candidates!inner(first_name, last_name)";
   const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -536,6 +543,9 @@ export async function fetchInterviewContextByApplicationId(
     candidate_first_name: row.candidates?.first_name ?? null,
     candidate_last_name: row.candidates?.last_name ?? null,
     resume: (row.parsed_data ?? null) as ParsedResumeData | null,
+    // Falls back to the column default rather than throwing: a missing stance
+    // should run a neutral interview, not deny the candidate their link.
+    interview_persona: (row.campaigns?.interview_persona ?? "neutral") as InterviewPersona,
   };
 }
 
@@ -552,6 +562,8 @@ export interface InterviewScoringContext {
   owner_user_id: string;
   description: string | null;
   resume_summary: string | null;
+  /** Recorded as scoring evidence — which stance produced this transcript. */
+  interview_persona: InterviewPersona;
 }
 
 export async function fetchInterviewScoringContext(
@@ -561,7 +573,7 @@ export async function fetchInterviewScoringContext(
   const supabase = db ?? (await createClient());
   // `parsed_data` is an APPLICATION column (see above) — not a candidate one.
   const select =
-    "candidate_id, campaign_id, parsed_data, campaigns!inner(user_id, description)";
+    "candidate_id, campaign_id, parsed_data, campaigns!inner(user_id, description, interview_persona)";
   const { data, error } = await supabase
     .from("applications")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -581,6 +593,7 @@ export async function fetchInterviewScoringContext(
     owner_user_id: campaign.user_id,
     description: campaign.description ?? null,
     resume_summary: buildResumeSummary(row.parsed_data ?? null),
+    interview_persona: (campaign.interview_persona ?? "neutral") as InterviewPersona,
   };
 }
 

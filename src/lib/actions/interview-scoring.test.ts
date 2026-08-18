@@ -28,6 +28,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 // The pure rule stays real so the record-only decision is actually exercised.
 import { runInterviewScoring } from "./interview-scoring";
+import { INTERVIEW_PROMPT_VERSION } from "@/lib/services/interview";
 
 const COMPLETED_SESSION = {
   status: "completed",
@@ -97,5 +98,40 @@ describe("runInterviewScoring", () => {
       expect.stringContaining("82"),
     );
     expect(result).toEqual({ overall_score: 82 });
+  });
+
+  /**
+   * A "pressure" transcript reads very differently from a "collaborative" one.
+   * Without the stance on the evidence row, a reviewer reading the score months
+   * later can't tell which conversation produced it — and the campaign setting
+   * may have been changed since.
+   */
+  it("records the stance the interview was actually conducted under", async () => {
+    await runInterviewScoring({ ...INPUT, persona: "pressure" });
+
+    expect(mockSaveScore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          inputSnapshot: expect.objectContaining({
+            interview_persona: "pressure",
+            interview_prompt_version: INTERVIEW_PROMPT_VERSION,
+          }),
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("records a neutral stance when the campaign never set one", async () => {
+    await runInterviewScoring(INPUT);
+
+    expect(mockSaveScore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          inputSnapshot: expect.objectContaining({ interview_persona: "neutral" }),
+        }),
+      }),
+      expect.anything(),
+    );
   });
 });

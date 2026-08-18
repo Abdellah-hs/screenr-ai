@@ -92,6 +92,7 @@ const RESUME_CTX = {
   campaign_status: "active",
   candidate_first_name: "Ada",
   candidate_last_name: "Lovelace",
+  interview_persona: "neutral",
   resume: {
     first_name: "Ada",
     last_name: "Lovelace",
@@ -177,6 +178,32 @@ describe("startCandidateInterview", () => {
 
     await expect(startCandidateInterview("tok")).rejects.toThrow();
     expect(mockCreateGrant).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The campaign's persona was stored and displayed but never sent to the
+   * worker, so a recruiter who picked "Pressure" got a neutral interview and a
+   * stored setting that misdescribed it. Room metadata is the only path to the
+   * interviewer, so asserting it here is asserting the fix.
+   */
+  it("sends the campaign's configured persona to the interviewer", async () => {
+    mockFetchInterviewContext.mockResolvedValue({
+      ...RESUME_CTX,
+      interview_persona: "pressure",
+    });
+
+    await startCandidateInterview("tok");
+
+    const { instructions } = mockCreateGrant.mock.calls[0][0];
+    expect(instructions).toContain("PRESSURE");
+    expect(instructions.toLowerCase()).toContain("push back");
+  });
+
+  it("runs the unchanged neutral interview for a default campaign", async () => {
+    await startCandidateInterview("tok");
+
+    const { instructions } = mockCreateGrant.mock.calls[0][0];
+    expect(instructions).not.toContain("Your interviewing stance");
   });
 
   it("reads and writes through the admin client (no recruiter session exists)", async () => {

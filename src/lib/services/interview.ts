@@ -15,6 +15,7 @@
 import {
   INTERVIEW_DURATION_MINUTES,
   INTERVIEW_TARGET_QUESTIONS,
+  type InterviewPersona,
 } from "@/lib/constants";
 
 /**
@@ -24,8 +25,14 @@ import {
  * question budget rather than a time budget, since a realtime model has no
  * clock). Transcripts scored under v1 came from a longer, looser conversation
  * and aren't directly comparable.
+ *
+ * v3: the campaign's `interview_persona` now reaches the interviewer (it was
+ * stored and displayed but never sent). A `neutral` interview is byte-identical
+ * to v2 — the baseline stance always was neutral — so v2 and v3 neutral
+ * transcripts remain comparable; the bump exists because a v3 row can no longer
+ * be assumed neutral, and the audit row records which stance was actually run.
  */
-export const INTERVIEW_PROMPT_VERSION = "iv-v2";
+export const INTERVIEW_PROMPT_VERSION = "iv-v3";
 
 /**
  * Configurable interview shapes (PRD 3.5). Phase A ships `general` as the
@@ -64,6 +71,8 @@ export interface InterviewInstructionContext {
   resume?: InterviewResume | null;
   /** Defaults to `general`. */
   format?: InterviewFormat;
+  /** The campaign's configured interviewing stance. Defaults to `neutral`. */
+  persona?: InterviewPersona;
 }
 
 /** How many résumé items to surface — enough to anchor questions, not a data dump. */
@@ -150,6 +159,29 @@ const FORMAT_FOCUS: Record<InterviewFormat, string> = {
 };
 
 /**
+ * How each persona changes the interviewer's stance (PRD 3.5.8).
+ *
+ * `neutral` is deliberately `null`, not prose: the base instructions already
+ * describe a warm, professional, strictly neutral interviewer, so the default
+ * campaign emits exactly the instruction string it did before personas existed.
+ * That keeps every pre-persona transcript comparable with a neutral one instead
+ * of splitting the corpus on a no-op reword.
+ *
+ * Each directive shifts HOW the interviewer probes, never WHAT it discloses —
+ * the neutrality rules below (no scores, no feedback, no right/wrong) bind all
+ * four stances, so a persona can't be used to leak an assessment.
+ */
+const PERSONA_DIRECTIVE: Record<InterviewPersona, string | null> = {
+  neutral: null,
+  pressure:
+    "Your interviewing stance — PRESSURE: test composure. Press hard on every claim: ask for the specific numbers, the option they rejected and why, the part that went wrong. When an answer sounds comfortable or well-rehearsed, push back on it directly — ask what they would say to someone who argued the opposite, and follow a thread to its limit before moving on. Stay courteous throughout: challenge the reasoning, never the person, and never tell them an answer is wrong. Press until the reasoning either holds up or runs out.",
+  collaborative:
+    "Your interviewing stance — COLLABORATIVE: work the problem together. Treat each question as a shared discussion — think aloud with them, build on what they just said, and invite them to explore alternatives they didn't take. Keep the warmth high and the challenge conversational. This is not leniency: still probe for concrete specifics, but reach them by exploring alongside the candidate rather than interrogating.",
+  socratic:
+    "Your interviewing stance — SOCRATIC: lead with questions, never answers. Do not explain, do not confirm, and do not supply the term the candidate is reaching for — let them find it. When they assert something, ask what it rests on; when they reach a conclusion, ask what would have to be true for it to fail. Go one layer deeper with each follow-up, so the depth of their understanding shows through their own reasoning rather than your prompting.",
+};
+
+/**
  * Compose the interview agent's instructions.
  *
  * The anti-gaming design mirrors screening: the résumé is given as reference so
@@ -162,7 +194,7 @@ const FORMAT_FOCUS: Record<InterviewFormat, string> = {
 export function buildInterviewInstructions(
   ctx: InterviewInstructionContext,
 ): string {
-  const { jobTitle, resume, format = "general" } = ctx;
+  const { jobTitle, resume, format = "general", persona = "neutral" } = ctx;
   const role = jobTitle ? ` for the ${jobTitle} role` : "";
   const resumeSummary = summarizeResumeForInterview(resume);
 
@@ -175,10 +207,16 @@ export function buildInterviewInstructions(
       ].join("\n")
     : "\n(No résumé was available — open by asking the candidate to walk you through their background, then probe from there.)\n";
 
+  const personaDirective = PERSONA_DIRECTIVE[persona];
+  // `neutral` contributes no lines at all, so its output is byte-identical to
+  // the pre-persona instructions.
+  const personaBlock = personaDirective ? ["", personaDirective] : [];
+
   return [
     `You are a warm, professional AI interviewer${role} for Screenr AI, running a live video interview. Speak naturally and conversationally, never robotically. This is a real two-way conversation on camera.`,
     resumeBlock,
     `Focus of this interview: ${FORMAT_FOCUS[format]}.`,
+    ...personaBlock,
     "",
     "How to run the interview:",
     "- Open by referencing something specific from their résumé (a role, a project, a skill) — show you've read it. Never say you're reading from a script.",

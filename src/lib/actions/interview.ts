@@ -195,6 +195,7 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
   const instructions = buildInterviewInstructions({
     jobTitle: ctx.campaign_title,
     resume: toInterviewResume(ctx),
+    persona: ctx.interview_persona,
   });
 
   // The candidate's video is never recorded or stored: it exists only as a live
@@ -405,6 +406,7 @@ async function autoScoreInterview(applicationId: string): Promise<void> {
       ownerUserId: ctx.owner_user_id,
       description: ctx.description,
       resumeSummary: ctx.resume_summary,
+      persona: ctx.interview_persona,
     });
   } catch (err) {
     console.error(
