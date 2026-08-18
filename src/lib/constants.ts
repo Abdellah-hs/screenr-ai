@@ -359,9 +359,18 @@ export const TIER_COLORS: Record<ScreeningTier, string> = {
   no_match: "bg-red-200 text-red-800",
 };
 
+/**
+ * Human-facing tier names. The DB enum value stays `moderate` — only the label
+ * changes, so no migration is involved and stored rows are untouched.
+ *
+ * "Potential Match" is PRD language: `moderate` reads like a verdict on the
+ * candidate, where the tier is only a band derived from a score. Every surface
+ * MUST render through this map rather than prettifying the raw enum, or a
+ * rename like this one silently misses that surface.
+ */
 export const TIER_LABELS: Record<ScreeningTier, string> = {
   strong: "Strong",
-  moderate: "Moderate",
+  moderate: "Potential Match",
   weak: "Weak",
   no_match: "No Match",
 };

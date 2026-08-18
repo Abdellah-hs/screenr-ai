@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   APPLICATION_STATE_TRANSITIONS,
@@ -277,6 +279,29 @@ describe("screening tier display config", () => {
 
   it.each(DB_TIERS)("gives %s badge colors", (tier) => {
     expect(TIER_COLORS[tier]).toBeDefined();
+  });
+
+  it("calls the middle tier Potential Match, not Moderate", () => {
+    // PRD language. `moderate` reads as a verdict on the candidate, where the
+    // tier is only a band derived from a score. The DB enum value is unchanged.
+    expect(TIER_LABELS.moderate).toBe("Potential Match");
+  });
+
+  it("is the only place a tier label is written", () => {
+    // The real failure mode this rename exposed: talent-pool-table prettified
+    // the raw enum itself (`tier.charAt(0).toUpperCase() + ...`), so it kept
+    // rendering "Moderate" while every other surface changed. A component that
+    // derives its own label silently opts out of the next rename too.
+    const sources = [
+      "src/components/candidates/talent-pool-table.tsx",
+      "src/components/campaigns/candidate-table.tsx",
+    ];
+
+    for (const file of sources) {
+      const src = readFileSync(join(process.cwd(), file), "utf8");
+      expect(src).toContain("TIER_LABELS");
+      expect(src).not.toMatch(/tier\.charAt\(0\)\.toUpperCase\(\)/);
+    }
   });
 });
 
