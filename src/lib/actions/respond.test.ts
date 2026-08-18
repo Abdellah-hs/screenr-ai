@@ -34,10 +34,18 @@ vi.mock("@/lib/data/screening-questions", () => ({
   markScreeningResponseExpired: vi.fn(),
   saveScreeningProctoringReport: vi.fn(),
 }));
-vi.mock("@/lib/supabase/admin", () => ({
-  createAdminClient: () => ({ __brand: "admin-client" }),
+// A stable singleton, so a test can assert not just "an admin client" but
+// "the same admin client", and count how many were created per request.
+const { ADMIN_DB } = vi.hoisted(() => ({
+  ADMIN_DB: { __brand: "admin-client" } as unknown,
 }));
-vi.mock("@/lib/data/transitions", () => ({ transitionApplication: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: vi.fn(() => ADMIN_DB),
+}));
+vi.mock("@/lib/data/transitions", () => ({
+  transitionApplication: vi.fn(),
+  transitionApplicationAsSystem: vi.fn(),
+}));
 // Auto-scoring core is exercised by its own callers' tests; here we only assert
 // the voice submit path triggers it. (Also avoids the OpenAI client this module
 // instantiates at import.)
@@ -48,6 +56,7 @@ vi.mock("@/lib/services/livekit", () => ({ createScreeningRoomGrant: vi.fn() }))
 
 import {
   loadResponseContext,
+  submitScreeningAnswers,
   startCandidateVoiceScreening,
   submitVoiceScreening,
   reportVoiceScreeningFailure,
@@ -59,14 +68,19 @@ import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
   fetchScoringContextByApplicationId,
+  saveCandidateAnswers,
   saveVoiceTranscript,
   saveScreeningProctoringReport,
   markScreeningResponseExpired,
   type ScreeningResponseRow,
   type VoiceTranscriptTurn,
 } from "@/lib/data/screening-questions";
-import { transitionApplication } from "@/lib/data/transitions";
+import {
+  transitionApplication,
+  transitionApplicationAsSystem,
+} from "@/lib/data/transitions";
 import { createScreeningRoomGrant } from "@/lib/services/livekit";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { runScreeningScoring } from "./score-screening-response";
 
 const mockCheckRateLimit = vi.mocked(checkRateLimit);
@@ -77,7 +91,9 @@ const mockFetchResponse = vi.mocked(fetchScreeningResponseByApplicationId);
 const mockSaveTranscript = vi.mocked(saveVoiceTranscript);
 const mockSaveScreeningProctoring = vi.mocked(saveScreeningProctoringReport);
 const mockMarkExpired = vi.mocked(markScreeningResponseExpired);
+const mockSaveAnswers = vi.mocked(saveCandidateAnswers);
 const mockTransition = vi.mocked(transitionApplication);
+const mockSystemTransition = vi.mocked(transitionApplicationAsSystem);
 const mockCreateGrant = vi.mocked(createScreeningRoomGrant);
 const mockFetchScoringContext = vi.mocked(fetchScoringContextByApplicationId);
 const mockRunScoring = vi.mocked(runScreeningScoring);
@@ -143,6 +159,7 @@ beforeEach(() => {
   mockFetchQuestions.mockResolvedValue([{ id: "q1", prompt: "Describe a scaling problem you solved.", is_required: true } as any]);
   mockCreateGrant.mockResolvedValue(GRANT);
   mockTransition.mockResolvedValue(undefined);
+  mockSystemTransition.mockResolvedValue(undefined);
   mockFetchScoringContext.mockResolvedValue(SCORING_CONTEXT);
   mockRunScoring.mockResolvedValue({ overall_score: 72 });
 });
@@ -209,9 +226,11 @@ describe("startCandidateVoiceScreening", () => {
     mockFetchResponse.mockResolvedValue(responseRow({ expires_at: "2020-01-01T00:00:00.000Z" }));
 
     await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow(/expired/i);
-    expect(mockMarkExpired).toHaveBeenCalledWith(APP_ID);
-    expect(mockTransition).toHaveBeenCalledWith(
-      expect.objectContaining({ toState: "screening_expired", actor: "system" }),
+    expect(mockMarkExpired).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockSystemTransition).toHaveBeenCalledWith(
+      APP_ID,
+      "screening_expired",
+      expect.any(String),
     );
     expect(mockCreateGrant).not.toHaveBeenCalled();
   });
@@ -250,9 +269,11 @@ describe("submitVoiceScreening", () => {
   it("promotes the agent-reported draft and advances to screening_completed", async () => {
     await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
 
-    expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript);
-    expect(mockTransition).toHaveBeenCalledWith(
-      expect.objectContaining({ toState: "screening_completed", actor: "system" }),
+    expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript, ADMIN_DB);
+    expect(mockSystemTransition).toHaveBeenCalledWith(
+      APP_ID,
+      "screening_completed",
+      expect.any(String),
     );
   });
 
@@ -352,7 +373,7 @@ describe("submitVoiceScreening", () => {
   });
 
   it("still succeeds for the candidate when the state transition fails", async () => {
-    mockTransition.mockRejectedValue(new Error("Illegal transition"));
+    mockSystemTransition.mockRejectedValue(new Error("Illegal transition"));
 
     await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
     expect(mockSaveTranscript).toHaveBeenCalled();
@@ -383,7 +404,7 @@ describe("submitVoiceScreening", () => {
 
     await expect(submitVoiceScreening({ token: TOKEN })).resolves.toEqual({ ok: true });
     await expect(flushAfter()).resolves.toBeUndefined();
-    expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript);
+    expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript, ADMIN_DB);
   });
 
   it("skips auto-scoring when the campaign has no job description", async () => {
@@ -407,13 +428,17 @@ describe("reportVoiceScreeningFailure", () => {
   it("records completion then processing_failed, in that order", async () => {
     await expect(reportVoiceScreeningFailure({ token: TOKEN })).resolves.toEqual({ ok: true });
 
-    expect(mockTransition).toHaveBeenNthCalledWith(
+    expect(mockSystemTransition).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ toState: "screening_completed" }),
+      APP_ID,
+      "screening_completed",
+      expect.any(String),
     );
-    expect(mockTransition).toHaveBeenNthCalledWith(
+    expect(mockSystemTransition).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ toState: "processing_failed" }),
+      APP_ID,
+      "processing_failed",
+      expect.any(String),
     );
   });
 
@@ -421,6 +446,142 @@ describe("reportVoiceScreeningFailure", () => {
     mockFetchResponse.mockResolvedValue(responseRow({ status: "scored" }));
 
     await expect(reportVoiceScreeningFailure({ token: TOKEN })).rejects.toThrow(/already been submitted/i);
+    expect(mockSystemTransition).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Anonymous-candidate authorization contract (#162) ──────────────────────
+//
+// Candidates have no Screenr account, and every table this flow touches is
+// owner-only RLS scoped on `campaigns.user_id = auth.uid()`. A cookie-scoped
+// client therefore reads NOTHING for an anonymous visitor, which turns a valid
+// screening link into a dead end.
+//
+// These tests pin the boundary the interview flow already observes: verify the
+// signed token FIRST, then do the privileged work on one service-role client.
+// They assert the `db` argument every candidate-facing helper receives, because
+// that argument is the only thing standing between a working screening link and
+// a silent empty result. Deleting the injection makes them fail.
+//
+// They do not prove the SQL policies themselves — that needs a live database
+// with both keys, which CI has no credentials for (see the issue's integration
+// checklist). What they do guarantee is that no candidate-facing read or write
+// silently falls back to the session client again.
+describe("anonymous candidate authorization (#162)", () => {
+  it("loads the response page entirely on the admin client", async () => {
+    await loadResponseContext(TOKEN);
+
+    expect(mockFetchApp).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockFetchResponse).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockFetchQuestions).toHaveBeenCalledWith("camp-1", ADMIN_DB);
+  });
+
+  it("reuses one admin client per request rather than minting one per query", async () => {
+    await loadResponseContext(TOKEN);
+
+    expect(vi.mocked(createAdminClient)).toHaveBeenCalledTimes(1);
+  });
+
+  it("verifies the token before creating any admin client", async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error("Invalid or expired link");
+    });
+
+    await expect(loadResponseContext(TOKEN)).rejects.toThrow(/invalid or expired/i);
+    expect(vi.mocked(createAdminClient)).not.toHaveBeenCalled();
+    expect(mockFetchApp).not.toHaveBeenCalled();
+  });
+
+  it("starts a voice screening on the admin client", async () => {
+    await startCandidateVoiceScreening(TOKEN);
+
+    expect(mockFetchApp).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockFetchResponse).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockFetchQuestions).toHaveBeenCalledWith("camp-1", ADMIN_DB);
+  });
+
+  it("expires a dead link on the admin client, via a system transition", async () => {
+    mockFetchResponse.mockResolvedValue(
+      responseRow({ expires_at: "2020-01-01T00:00:00.000Z" }),
+    );
+
+    await expect(startCandidateVoiceScreening(TOKEN)).rejects.toThrow(/expired/i);
+
+    expect(mockMarkExpired).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockSystemTransition).toHaveBeenCalledWith(
+      APP_ID,
+      "screening_expired",
+      expect.any(String),
+    );
+    expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a voice screening on the admin client, via a system transition", async () => {
+    mockFetchResponse.mockResolvedValue(responseRow({ transcript }));
+
+    await submitVoiceScreening({ token: TOKEN });
+
+    expect(mockSaveTranscript).toHaveBeenCalledWith(APP_ID, transcript, ADMIN_DB);
+    expect(mockSystemTransition).toHaveBeenCalledWith(
+      APP_ID,
+      "screening_completed",
+      expect.any(String),
+    );
+    expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it("auto-scores on the admin client, since the candidate has no session", async () => {
+    mockFetchResponse.mockResolvedValue(responseRow({ transcript }));
+
+    await submitVoiceScreening({ token: TOKEN });
+    await flushAfter();
+
+    expect(mockFetchScoringContext).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockRunScoring).toHaveBeenCalledWith(
+      expect.objectContaining({ applicationId: APP_ID, db: ADMIN_DB }),
+    );
+  });
+
+  it("submits typed answers on the admin client, via a system transition", async () => {
+    const questionId = "22222222-2222-4222-8222-222222222222";
+    mockFetchQuestions.mockResolvedValue([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { id: questionId, prompt: "Describe a scaling problem you solved.", is_required: true } as any,
+    ]);
+
+    await submitScreeningAnswers({
+      token: TOKEN,
+      answers: [{ question_id: questionId, answer_text: "We sharded by tenant." }],
+    });
+
+    expect(mockFetchResponse).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockFetchApp).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockFetchQuestions).toHaveBeenCalledWith("camp-1", ADMIN_DB);
+    expect(mockSaveAnswers).toHaveBeenCalledWith(APP_ID, expect.any(Array), ADMIN_DB);
+    expect(mockSystemTransition).toHaveBeenCalledWith(
+      APP_ID,
+      "screening_completed",
+      expect.any(String),
+    );
+    expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed call on the admin client, via system transitions", async () => {
+    await reportVoiceScreeningFailure({ token: TOKEN });
+
+    expect(mockFetchResponse).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
+    expect(mockSystemTransition).toHaveBeenNthCalledWith(
+      1,
+      APP_ID,
+      "screening_completed",
+      expect.any(String),
+    );
+    expect(mockSystemTransition).toHaveBeenNthCalledWith(
+      2,
+      APP_ID,
+      "processing_failed",
+      expect.any(String),
+    );
     expect(mockTransition).not.toHaveBeenCalled();
   });
 });

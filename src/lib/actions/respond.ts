@@ -33,9 +33,10 @@ import {
   createScreeningRoomGrant,
   type ScreeningRoomGrant,
 } from "@/lib/services/livekit";
-import { transitionApplication } from "@/lib/data/transitions";
+import { transitionApplicationAsSystem } from "@/lib/data/transitions";
 import { summarizeProctoring } from "@/lib/proctoring/incidents";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseDb } from "@/lib/supabase/types";
 
 const VOICE_RATE_LIMIT = {
   maxRequests: 10,
@@ -67,6 +68,35 @@ function assertCampaignAcceptingResponses(status: CampaignStatus): void {
   }
 }
 
+/**
+ * The authorization boundary for every action in this module (#162).
+ *
+ * Candidates have no Screenr account, so there is no session behind these
+ * requests — and every table the screening flow touches (`applications`,
+ * `campaigns`, `screening_questions`, `screening_question_responses`) is
+ * owner-only RLS scoped on `campaigns.user_id = auth.uid()`. Read through the
+ * cookie client as an anonymous visitor and the policies match nothing: the
+ * queries succeed and return empty, so a perfectly valid link surfaces as
+ * "we couldn't find this application".
+ *
+ * So the signed token IS the authorization, and the service-role client is what
+ * acts on it — the same boundary `src/lib/actions/interview.ts` already draws.
+ * Two rules keep that honest:
+ *
+ *   1. `verifyResponseToken` throws BEFORE this is called, so an invalid or
+ *      expired token never reaches a privileged client.
+ *   2. Every candidate-facing read and write in the request takes the returned
+ *      client explicitly, so a helper cannot quietly fall back to the session
+ *      client and start returning nothing again.
+ *
+ * The narrowing that keeps this safe is the token itself: it names one
+ * application, and every query below is keyed to that id. Recruiter-facing
+ * actions stay on the cookie client and keep their ownership checks.
+ */
+function candidateDb(): SupabaseDb {
+  return createAdminClient();
+}
+
 export interface VerifiedResponseContext {
   application_id: string;
   status: "pending" | "sent" | "responded" | "scored" | "expired";
@@ -88,15 +118,16 @@ export async function loadResponseContext(
   token: string
 ): Promise<VerifiedResponseContext> {
   const { application_id, expires_at } = verifyResponseToken(token);
+  const db = candidateDb();
 
-  const app = await fetchApplicationForResponse(application_id);
+  const app = await fetchApplicationForResponse(application_id, db);
   if (!app) {
     throw new Error(
       "We couldn't find this application. Please contact the hiring team."
     );
   }
 
-  const response = await fetchScreeningResponseByApplicationId(application_id);
+  const response = await fetchScreeningResponseByApplicationId(application_id, db);
   if (!response) {
     throw new Error(
       "This link is no longer active. Please contact the hiring team for a new one."
@@ -125,7 +156,7 @@ export async function loadResponseContext(
 
   assertResponseIsOpen(response.status);
 
-  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
+  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id, db);
 
   const existing: Record<string, string> = {};
   for (const a of response.answers ?? []) {
@@ -162,6 +193,7 @@ export async function submitScreeningAnswers(input: {
   }
 
   const { application_id } = verifyResponseToken(parsed.token);
+  const db = candidateDb();
 
   // IP rate limit — prevents abuse from an actor who has scraped a token.
   const ip = await getClientIp();
@@ -171,7 +203,7 @@ export async function submitScreeningAnswers(input: {
     windowMs: 10 * 60 * 1000,
   });
 
-  const existing = await fetchScreeningResponseByApplicationId(application_id);
+  const existing = await fetchScreeningResponseByApplicationId(application_id, db);
   if (!existing) {
     throw new Error(
       "This link is no longer active. Please contact the hiring team for a new one."
@@ -183,12 +215,12 @@ export async function submitScreeningAnswers(input: {
   // Look up the application's campaign so we can reload the authoritative
   // question set (with is_required flags) — and freeze the submission if the
   // campaign is no longer Active.
-  const app = await fetchApplicationForResponse(application_id);
+  const app = await fetchApplicationForResponse(application_id, db);
   if (!app) {
     throw new Error("This application no longer exists.");
   }
   assertCampaignAcceptingResponses(app.campaign_status);
-  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
+  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id, db);
   if (questions.length === 0) {
     throw new Error("No screening questions are configured for this role.");
   }
@@ -211,25 +243,17 @@ export async function submitScreeningAnswers(input: {
 
   validateRequiredAnswersPresent(questions, answers);
 
-  await saveCandidateAnswers(application_id, answers);
+  await saveCandidateAnswers(application_id, answers, db);
 
   // Best-effort: the candidate's answers are durable; a transition failure
   // (illegal source state, RPC error) shouldn't surface as a submission
   // failure to the candidate. A recruiter sees the response and can advance
   // manually.
-  try {
-    await transitionApplication({
-      applicationId: application_id,
-      toState: "screening_completed",
-      actor: "system",
-      rationale: "Candidate submitted screening answers",
-    });
-  } catch (err) {
-    console.error(
-      `Failed to transition ${application_id} → screening_completed:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
+  await tryTransition(
+    application_id,
+    "screening_completed",
+    "Candidate submitted screening answers",
+  );
 
   return { ok: true };
 }
@@ -240,14 +264,18 @@ export async function submitScreeningAnswers(input: {
  * Best-effort transition. The candidate has already left (call ended, or page
  * unloaded), so a transition failure must never surface to them — it's logged
  * and the recruiter can advance the application manually.
+ *
+ * Always the SYSTEM transition: these fire in a token-verified request with no
+ * recruiter session, and the owner-scoped `transition_application` RPC would
+ * reject them. Actor stays `system`, so the transitions log is unchanged.
  */
 async function tryTransition(
   applicationId: string,
-  toState: Parameters<typeof transitionApplication>[0]["toState"],
+  toState: Parameters<typeof transitionApplicationAsSystem>[1],
   rationale: string,
 ): Promise<void> {
   try {
-    await transitionApplication({ applicationId, toState, actor: "system", rationale });
+    await transitionApplicationAsSystem(applicationId, toState, rationale);
   } catch (err) {
     console.error(
       `Failed to transition ${applicationId} → ${toState}:`,
@@ -265,9 +293,12 @@ async function tryTransition(
  * stays `responded`, so a recruiter can still score manually. The advancement
  * decision stays rule-driven inside `runScreeningScoring` (Control > AI > Data).
  */
-async function autoScoreScreening(applicationId: string): Promise<void> {
+async function autoScoreScreening(
+  applicationId: string,
+  db: SupabaseDb,
+): Promise<void> {
   try {
-    const ctx = await fetchScoringContextByApplicationId(applicationId);
+    const ctx = await fetchScoringContextByApplicationId(applicationId, db);
     if (!ctx?.description) {
       console.warn(
         `autoScoreScreening: skipping ${applicationId} — campaign has no job description to score against.`,
@@ -282,6 +313,7 @@ async function autoScoreScreening(applicationId: string): Promise<void> {
       description: ctx.description,
       automation_mode: ctx.automation_mode,
       screening_threshold: ctx.screening_threshold,
+      db,
     });
   } catch (err) {
     console.error(
@@ -306,18 +338,19 @@ export async function startCandidateVoiceScreening(
   token: string,
 ): Promise<ScreeningRoomGrant> {
   const { application_id } = verifyResponseToken(token);
+  const db = candidateDb();
 
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "voice-screening-start", ...VOICE_RATE_LIMIT });
 
-  const app = await fetchApplicationForResponse(application_id);
+  const app = await fetchApplicationForResponse(application_id, db);
   if (!app) {
     throw new ScreeningResponseError(
       "This link is no longer active. Please contact the hiring team for a new one.",
     );
   }
 
-  const response = await fetchScreeningResponseByApplicationId(application_id);
+  const response = await fetchScreeningResponseByApplicationId(application_id, db);
   if (!response) {
     throw new ScreeningResponseError(
       "This link is no longer active. Please contact the hiring team for a new one.",
@@ -330,7 +363,7 @@ export async function startCandidateVoiceScreening(
       new Date(),
     )
   ) {
-    await expireScreeningResponse(application_id);
+    await expireScreeningResponse(application_id, db);
     throw new ScreeningResponseError(
       "This link has expired. Please contact the hiring team for a new one.",
     );
@@ -341,7 +374,7 @@ export async function startCandidateVoiceScreening(
 
   assertResponseIsOpen(response.status);
 
-  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id);
+  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id, db);
   if (questions.length === 0) {
     throw new ScreeningResponseError(
       "No screening questions are configured for this role.",
@@ -357,8 +390,11 @@ export async function startCandidateVoiceScreening(
 }
 
 /** Expire the response row and best-effort transition the application. */
-async function expireScreeningResponse(applicationId: string): Promise<void> {
-  await markScreeningResponseExpired(applicationId);
+async function expireScreeningResponse(
+  applicationId: string,
+  db: SupabaseDb,
+): Promise<void> {
+  await markScreeningResponseExpired(applicationId, db);
   await tryTransition(
     applicationId,
     "screening_expired",
@@ -384,11 +420,12 @@ export async function submitVoiceScreening(input: {
   proctoringEvents?: unknown;
 }): Promise<{ ok: true }> {
   const { application_id } = verifyResponseToken(input.token);
+  const db = candidateDb();
 
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "voice-screening-submit", ...VOICE_RATE_LIMIT });
 
-  const existing = await fetchScreeningResponseByApplicationId(application_id);
+  const existing = await fetchScreeningResponseByApplicationId(application_id, db);
   if (!existing) {
     throw new ScreeningResponseError(
       "This link is no longer active. Please contact the hiring team for a new one.",
@@ -410,14 +447,14 @@ export async function submitVoiceScreening(input: {
 
   // Freeze the submission (and the auto-score that follows) unless the campaign
   // is Active.
-  const app = await fetchApplicationForResponse(application_id);
+  const app = await fetchApplicationForResponse(application_id, db);
   if (app) assertCampaignAcceptingResponses(app.campaign_status);
 
   // Before saveVoiceTranscript — the proctoring write is guarded to `sent`, and
   // saving the transcript is what flips the row to `responded`.
-  await tryRecordScreeningProctoring(application_id, input.proctoringEvents);
+  await tryRecordScreeningProctoring(application_id, input.proctoringEvents, db);
 
-  await saveVoiceTranscript(application_id, transcript);
+  await saveVoiceTranscript(application_id, transcript, db);
 
   await tryTransition(
     application_id,
@@ -429,7 +466,7 @@ export async function submitVoiceScreening(input: {
   // the response: AI scoring takes seconds and the candidate's "done" screen
   // must not wait on it. Best-effort; failures are logged, never surfaced
   // (the transcript is durable and a recruiter can still score manually).
-  after(() => autoScoreScreening(application_id));
+  after(() => autoScoreScreening(application_id, db));
 
   return { ok: true };
 }
@@ -454,6 +491,7 @@ export async function submitVoiceScreening(input: {
 async function tryRecordScreeningProctoring(
   applicationId: string,
   rawEvents: unknown,
+  db: SupabaseDb,
 ): Promise<void> {
   if (rawEvents === undefined || rawEvents === null) return;
 
@@ -468,7 +506,7 @@ async function tryRecordScreeningProctoring(
 
   try {
     const report = summarizeProctoring(parsed.data);
-    await saveScreeningProctoringReport(applicationId, report, createAdminClient());
+    await saveScreeningProctoringReport(applicationId, report, db);
   } catch (err) {
     console.error(
       `Failed to save screening proctoring report for ${applicationId}:`,
@@ -488,11 +526,12 @@ export async function reportVoiceScreeningFailure(input: {
   token: string;
 }): Promise<{ ok: true }> {
   const { application_id } = verifyResponseToken(input.token);
+  const db = candidateDb();
 
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "voice-screening-submit", ...VOICE_RATE_LIMIT });
 
-  const existing = await fetchScreeningResponseByApplicationId(application_id);
+  const existing = await fetchScreeningResponseByApplicationId(application_id, db);
   if (!existing) {
     throw new ScreeningResponseError(
       "This link is no longer active. Please contact the hiring team for a new one.",

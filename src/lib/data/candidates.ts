@@ -443,6 +443,12 @@ export async function fetchApplicationCampaignId(
  * an application + its owning campaign's title without any user scoping — the
  * caller must have already verified a signed token, since RLS alone is not
  * enough to gate this join.
+ *
+ * Takes an injected `db` for the same reason the interview reads below do:
+ * `applications` and `campaigns` are owner-only RLS, so on the cookie client an
+ * anonymous candidate reads NOTHING and a valid link looks like a missing
+ * application. Candidate-facing callers pass the admin client after verifying
+ * the token; the default keeps recruiter-session callers unchanged.
  */
 export interface ApplicationForResponse {
   application_id: string;
@@ -452,9 +458,10 @@ export interface ApplicationForResponse {
 }
 
 export async function fetchApplicationForResponse(
-  applicationId: string
+  applicationId: string,
+  db?: SupabaseDb
 ): Promise<ApplicationForResponse | null> {
-  const supabase = await createClient();
+  const supabase = db ?? (await createClient());
   const { data } = await supabase
     .from("applications")
     .select("id, campaign_id, campaigns!inner(id, title, status)")
