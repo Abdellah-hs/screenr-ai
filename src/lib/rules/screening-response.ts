@@ -120,34 +120,6 @@ export function isResponseExpired(
   return now.getTime() > expiresAt.getTime();
 }
 
-interface QuestionWithRequiredFlag {
-  id: string;
-  is_required: boolean;
-}
-
-interface AnswerRef {
-  question_id: string;
-}
-
-/**
- * Ensures every required question has a corresponding answer in the
- * submission. Non-empty-string validation is Zod's responsibility
- * upstream; this rule only cares about presence.
- */
-export function validateRequiredAnswersPresent(
-  questions: QuestionWithRequiredFlag[],
-  answers: AnswerRef[],
-): void {
-  const answered = new Set(answers.map((a) => a.question_id));
-  const missingRequired = questions.filter(
-    (q) => q.is_required && !answered.has(q.id),
-  );
-  if (missingRequired.length > 0) {
-    throw new ScreeningResponseError(
-      `Please answer every required question before submitting (${missingRequired.length} missing).`,
-    );
-  }
-}
 
 /**
  * Config slice the rule needs. Declared inline (rather than imported from

@@ -3,7 +3,6 @@ import {
   uuidSchema,
   campaignFormSchema,
   availabilityRuleSchema,
-  screeningAnswerSubmissionSchema,
   parseCampaignFormData,
   applicationStateSchema,
   stageChangeRationaleSchema,
@@ -170,47 +169,6 @@ describe('availabilityRuleSchema', () => {
   it('rejects minutes outside the 0-1440 day', () => {
     expect(availabilityRuleSchema.safeParse({ ...validRule, start_minute: -1 }).success).toBe(false);
     expect(availabilityRuleSchema.safeParse({ ...validRule, end_minute: 1441 }).success).toBe(false);
-  });
-});
-
-describe('screeningAnswerSubmissionSchema', () => {
-  const validSubmission = {
-    token: 'a'.repeat(32),
-    answers: [
-      {
-        question_id: '550e8400-e29b-41d4-a716-446655440000',
-        answer_text: 'This is my answer.',
-      },
-    ],
-  };
-
-  it('accepts a valid submission', () => {
-    const result = screeningAnswerSubmissionSchema.safeParse(validSubmission);
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects an empty answers array', () => {
-    const result = screeningAnswerSubmissionSchema.safeParse({
-      ...validSubmission,
-      answers: [],
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects an answer with a non-UUID question_id', () => {
-    const result = screeningAnswerSubmissionSchema.safeParse({
-      ...validSubmission,
-      answers: [{ question_id: 'nope', answer_text: 'hi' }],
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects a submission with a short token', () => {
-    const result = screeningAnswerSubmissionSchema.safeParse({
-      ...validSubmission,
-      token: 'short',
-    });
-    expect(result.success).toBe(false);
   });
 });
 

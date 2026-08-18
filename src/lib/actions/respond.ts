@@ -2,10 +2,9 @@
 
 import { after } from "next/server";
 import { headers } from "next/headers";
-import { z } from "zod/v4";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import { screeningAnswerSubmissionSchema, proctoringEventsSchema } from "@/lib/validations";
+import { proctoringEventsSchema } from "@/lib/validations";
 import { fetchApplicationForResponse } from "@/lib/data/candidates";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import type { CampaignStatus } from "@/lib/constants";
@@ -13,7 +12,6 @@ import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
   fetchScoringContextByApplicationId,
-  saveCandidateAnswers,
   saveVoiceTranscript,
   markScreeningResponseExpired,
   type ScreeningQuestionRow,
@@ -25,7 +23,6 @@ import {
   assertResponseIsOpen,
   assertResponseNotResubmitted,
   isResponseExpired,
-  validateRequiredAnswersPresent,
   ScreeningResponseError,
 } from "@/lib/rules/screening-response";
 import { buildScreeningInstructions } from "@/lib/services/realtime";
@@ -171,91 +168,6 @@ export async function loadResponseContext(
     existing_answers: existing,
     expires_at,
   };
-}
-
-/**
- * Public submit action called from the candidate form. Verifies the token,
- * rate-limits by IP, validates answers, and persists them with status
- * 'responded'. The recruiter's score action picks up from there.
- */
-export async function submitScreeningAnswers(input: {
-  token: string;
-  answers: { question_id: string; answer_text: string }[];
-}): Promise<{ ok: true }> {
-  let parsed;
-  try {
-    parsed = screeningAnswerSubmissionSchema.parse(input);
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      throw new Error(err.issues[0]?.message ?? "Invalid submission");
-    }
-    throw err;
-  }
-
-  const { application_id } = verifyResponseToken(parsed.token);
-  const db = candidateDb();
-
-  // IP rate limit — prevents abuse from an actor who has scraped a token.
-  const ip = await getClientIp();
-  checkRateLimit(ip, {
-    name: "screening-submit",
-    maxRequests: 10,
-    windowMs: 10 * 60 * 1000,
-  });
-
-  const existing = await fetchScreeningResponseByApplicationId(application_id, db);
-  if (!existing) {
-    throw new Error(
-      "This link is no longer active. Please contact the hiring team for a new one."
-    );
-  }
-
-  assertResponseNotResubmitted(existing.status);
-
-  // Look up the application's campaign so we can reload the authoritative
-  // question set (with is_required flags) — and freeze the submission if the
-  // campaign is no longer Active.
-  const app = await fetchApplicationForResponse(application_id, db);
-  if (!app) {
-    throw new Error("This application no longer exists.");
-  }
-  assertCampaignAcceptingResponses(app.campaign_status);
-  const questions = await fetchScreeningQuestionsByCampaignId(app.campaign_id, db);
-  if (questions.length === 0) {
-    throw new Error("No screening questions are configured for this role.");
-  }
-
-  const questionById = new Map(questions.map((q) => [q.id, q]));
-
-  // Reject answers that reference unknown question ids — someone tampering
-  // with the form in devtools should not be able to plant fake ones.
-  const answers = parsed.answers.map((a) => {
-    const q = questionById.get(a.question_id);
-    if (!q) {
-      throw new Error("An answer was submitted for a question we don't recognise.");
-    }
-    return {
-      question_id: a.question_id,
-      prompt: q.prompt,
-      answer_text: a.answer_text,
-    };
-  });
-
-  validateRequiredAnswersPresent(questions, answers);
-
-  await saveCandidateAnswers(application_id, answers, db);
-
-  // Best-effort: the candidate's answers are durable; a transition failure
-  // (illegal source state, RPC error) shouldn't surface as a submission
-  // failure to the candidate. A recruiter sees the response and can advance
-  // manually.
-  await tryTransition(
-    application_id,
-    "screening_completed",
-    "Candidate submitted screening answers",
-  );
-
-  return { ok: true };
 }
 
 // ─── Voice Screening (#83) ──────────────────────────────────────────────────

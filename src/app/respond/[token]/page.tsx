@@ -1,14 +1,11 @@
 import { loadResponseContext } from "@/lib/actions/respond";
-import RespondForm from "./respond-form";
 import VoiceScreening from "@/components/realtime/voice-screening";
 
 export const dynamic = "force-dynamic";
 
-// Voice is the canonical screening modality (#80). The legacy text form stays
-// available as a fallback behind NEXT_PUBLIC_SCREENING_MODE=text until the
-// voice path clears QA — see docs/voice-screening.md.
-const TEXT_FALLBACK = process.env.NEXT_PUBLIC_SCREENING_MODE === "text";
-
+// Voice is the ONLY screening modality (#80, #161). The legacy text form was
+// retired: it was a second, unexercised path into the same scoring pipeline,
+// and a typed answer is the copy-paste-gameable input voice exists to remove.
 export default async function RespondPage({
   params,
 }: {
@@ -76,22 +73,6 @@ export default async function RespondPage({
           </p>
         </div>
       </div>
-    );
-  }
-
-  if (TEXT_FALLBACK) {
-    return (
-      <RespondForm
-        token={token}
-        campaignTitle={ctx.campaign_title}
-        questions={ctx.questions.map((q) => ({
-          id: q.id,
-          prompt: q.prompt,
-          is_required: q.is_required,
-        }))}
-        initialAnswers={ctx.existing_answers}
-        expiresAt={ctx.expires_at.toISOString()}
-      />
     );
   }
 
