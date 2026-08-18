@@ -3,6 +3,11 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { AnchoredMenu } from "@/components/ui";
+import {
+  NotificationIcon,
+  notificationCaption,
+  notificationSummary,
+} from "@/components/notification-item";
 import type { RecruiterNotification } from "@/lib/data/notifications";
 
 // Dismissed notifications persist per-device in localStorage as { [id]: count },
@@ -125,7 +130,7 @@ export function NotificationBell({
           <div className="px-4 py-8 text-center">
             <p className="text-sm text-[#6B7280]">You&apos;re all caught up.</p>
             <p className="text-xs text-[#9CA3AF] mt-1">
-              Pending reviews and SLA alerts will show up here.
+              Pending reviews, SLA alerts, and expired interviews will show up here.
             </p>
           </div>
         ) : (
@@ -144,22 +149,11 @@ export function NotificationBell({
                   <NotificationIcon notification={n} />
                   <span className="min-w-0">
                     <span className="block text-sm text-[#111827]">
-                      {n.kind === "sla_breach" ? (
-                        <>
-                          <span className="font-medium">{n.campaignTitle}</span>: {n.count}{" "}
-                          candidate{n.count === 1 ? "" : "s"} over SLA in {n.stageLabel}
-                        </>
-                      ) : (
-                        <>
-                          <span className="font-medium">{n.campaignTitle}</span> has {n.count}{" "}
-                          candidate{n.count === 1 ? "" : "s"} awaiting review
-                        </>
-                      )}
+                      <span className="font-medium">{n.campaignTitle}</span>
+                      {notificationSummary(n)}
                     </span>
                     <span className="block text-xs text-[#6B7280] mt-0.5">
-                      {n.kind === "sla_breach"
-                        ? `${n.level === "escalation" ? "Escalation" : "Alert"} · tap to review`
-                        : "Human-in-the-loop · tap to review"}
+                      {notificationCaption(n)}
                     </span>
                   </span>
                 </Link>
@@ -172,24 +166,3 @@ export function NotificationBell({
   );
 }
 
-function NotificationIcon({ notification }: { notification: RecruiterNotification }) {
-  // SLA escalation = red, SLA alert + pending review = amber.
-  const tone =
-    notification.kind === "sla_breach" && notification.level === "escalation"
-      ? "bg-[#FEF2F2] text-[#DC2626]"
-      : "bg-[#FFFBEB] text-[#B45309]";
-
-  return (
-    <span className={`mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${tone}`}>
-      {notification.kind === "sla_breach" ? (
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      ) : (
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m6 2.25a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      )}
-    </span>
-  );
-}

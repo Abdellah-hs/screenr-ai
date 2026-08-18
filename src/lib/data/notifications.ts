@@ -17,11 +17,17 @@ export interface SlaBreachNotification {
   count: number;
 }
 
+export interface ExpiredInterviewNotification {
+  campaign_id: string;
+  campaign_title: string;
+  expired_count: number;
+}
+
 /** Unified bell view-model — pending reviews and SLA breaches share one list. */
 export interface RecruiterNotification {
   /** Stable per (kind, campaign, stage) so a single item can be dismissed. */
   id: string;
-  kind: "pending_review" | "sla_breach";
+  kind: "pending_review" | "sla_breach" | "interview_expired";
   campaignId: string;
   campaignTitle: string;
   count: number;
@@ -67,6 +73,48 @@ export async function fetchPendingReviewNotifications(
       pending_review_count: v.count,
     }))
     .sort((a, b) => b.pending_review_count - a.pending_review_count);
+}
+
+/**
+ * Campaigns owned by `userId` with applications in `interview_expired` — AI
+ * interviews the candidate was invited to and never completed.
+ *
+ * Without this the expiry is invisible: the sweep quietly moves an application
+ * out of the active funnel and nothing tells the recruiter their candidate
+ * lapsed. It's the one pipeline exit that happens with no human in the loop at
+ * all, so it's the one most worth surfacing. Grouped to one row per campaign,
+ * busiest first. SELECT-only.
+ */
+export async function fetchExpiredInterviewNotifications(
+  userId: string,
+): Promise<ExpiredInterviewNotification[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("applications")
+    .select("campaign_id, campaigns!inner(title, user_id, deleted_at)")
+    .eq("status", "interview_expired")
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return [];
+
+  const byCampaign = new Map<string, { title: string; count: number }>();
+  for (const row of data as unknown as Array<{
+    campaign_id: string;
+    campaigns: { title: string };
+  }>) {
+    const existing = byCampaign.get(row.campaign_id);
+    if (existing) existing.count += 1;
+    else byCampaign.set(row.campaign_id, { title: row.campaigns.title, count: 1 });
+  }
+
+  return [...byCampaign.entries()]
+    .map(([campaign_id, v]) => ({
+      campaign_id,
+      campaign_title: v.title,
+      expired_count: v.count,
+    }))
+    .sort((a, b) => b.expired_count - a.expired_count);
 }
 
 const STAGE_LABEL: Record<SlaStage, string> = Object.fromEntries(

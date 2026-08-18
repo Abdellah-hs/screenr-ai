@@ -12,7 +12,12 @@ import {
   type ProctoringSnapshot,
   type VisionObservation,
 } from "@/lib/proctoring/incidents";
-import { verifyResponseToken } from "@/lib/auth/screening-token";
+import {
+  peekResponseToken,
+  TOKEN_EXPIRED_MESSAGE,
+  verifyResponseToken,
+  type VerifiedToken,
+} from "@/lib/auth/screening-token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import {
@@ -26,6 +31,7 @@ import { runInterviewScoring } from "./interview-scoring";
 import {
   fetchInterviewSessionByApplicationId,
   ensureInterviewSession,
+  markInterviewExpired,
   markInterviewStarted,
   saveProctoringReport,
   saveProctoringSnapshots,
@@ -44,7 +50,7 @@ import {
 } from "@/lib/services/livekit";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import { transitionApplicationAsSystem } from "@/lib/data/transitions";
-import type { ApplicationState, CampaignStatus } from "@/lib/constants";
+import type { ApplicationState, CampaignStatus, Disposition } from "@/lib/constants";
 
 /**
  * Public server actions for the on-demand AI video interview
@@ -95,15 +101,64 @@ async function tryTransition(
   applicationId: string,
   toState: ApplicationState,
   rationale: string,
+  disposition?: Disposition,
 ): Promise<void> {
   try {
-    await transitionApplicationAsSystem(applicationId, toState, rationale);
+    await transitionApplicationAsSystem(applicationId, toState, rationale, disposition);
   } catch (err) {
     console.error(
       `Failed to transition ${applicationId} → ${toState}:`,
       err instanceof Error ? err.message : err,
     );
   }
+}
+
+const LAZY_EXPIRY_RATIONALE =
+  "Interview deadline passed before the candidate completed the AI interview";
+
+/**
+ * Close out a lapsed invitation: move the application to `interview_expired` and
+ * flip the session row. Best-effort on both halves — the candidate is being told
+ * their link is dead either way, and a failure here must not turn into a stack
+ * trace on their screen.
+ */
+async function expireInterviewInvitation(applicationId: string): Promise<void> {
+  await tryTransition(applicationId, "interview_expired", LAZY_EXPIRY_RATIONALE, {
+    code: "EXPIRED",
+    description: LAZY_EXPIRY_RATIONALE,
+  });
+
+  try {
+    await markInterviewExpired(applicationId, createAdminClient());
+  } catch (err) {
+    console.error(
+      `Failed to expire interview session for ${applicationId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * Token gate for the candidate's interview pages, with lazy expiry.
+ *
+ * The deadline lives in the token itself, so a plain `verifyResponseToken`
+ * throws on a lapsed link and the application never learns it went stale — which
+ * is why an invited no-show could sit in `interview_invited` forever. Peeking
+ * authenticates the token first (a forged one still throws), then uses the
+ * application id it recovers to close the invitation out before reporting the
+ * same expired message to the candidate.
+ *
+ * The candidate sees no difference; the pipeline does.
+ */
+async function verifyLiveInterviewToken(token: string): Promise<VerifiedToken> {
+  const { application_id, expires_at, expired } = peekResponseToken(token);
+
+  if (expired) {
+    await expireInterviewInvitation(application_id);
+    throw new Error(TOKEN_EXPIRED_MESSAGE);
+  }
+
+  return { application_id, expires_at };
 }
 
 function assertCampaignAcceptingInterview(status: CampaignStatus): void {
@@ -147,7 +202,7 @@ export interface InterviewPageContext {
  * confirmation, or the expired notice. Reads only — safe on every page load.
  */
 export async function loadInterviewContext(token: string): Promise<InterviewPageContext> {
-  const { application_id, expires_at } = verifyResponseToken(token);
+  const { application_id, expires_at } = await verifyLiveInterviewToken(token);
 
   const db = createAdminClient();
 
@@ -172,10 +227,12 @@ export async function loadInterviewContext(token: string): Promise<InterviewPage
  * worker, which reads the instructions off the room metadata.
  */
 export async function startCandidateInterview(token: string): Promise<InterviewRoomGrant> {
-  const { application_id, expires_at } = verifyResponseToken(token);
-
   const ip = await getClientIp();
   checkRateLimit(ip, { name: "interview-start", ...INTERVIEW_RATE_LIMIT });
+
+  // Rate-limited BEFORE the peek: the expiry path writes, so an unthrottled
+  // caller could otherwise hammer it with one dead token.
+  const { application_id, expires_at } = await verifyLiveInterviewToken(token);
 
   const db = createAdminClient();
 
