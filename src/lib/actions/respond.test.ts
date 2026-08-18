@@ -29,7 +29,6 @@ vi.mock("@/lib/data/screening-questions", () => ({
   fetchScreeningQuestionsByCampaignId: vi.fn(),
   fetchScreeningResponseByApplicationId: vi.fn(),
   fetchScoringContextByApplicationId: vi.fn(),
-  saveCandidateAnswers: vi.fn(),
   saveVoiceTranscript: vi.fn(),
   markScreeningResponseExpired: vi.fn(),
   saveScreeningProctoringReport: vi.fn(),
@@ -56,7 +55,6 @@ vi.mock("@/lib/services/livekit", () => ({ createScreeningRoomGrant: vi.fn() }))
 
 import {
   loadResponseContext,
-  submitScreeningAnswers,
   startCandidateVoiceScreening,
   submitVoiceScreening,
   reportVoiceScreeningFailure,
@@ -68,7 +66,6 @@ import {
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
   fetchScoringContextByApplicationId,
-  saveCandidateAnswers,
   saveVoiceTranscript,
   saveScreeningProctoringReport,
   markScreeningResponseExpired,
@@ -91,7 +88,6 @@ const mockFetchResponse = vi.mocked(fetchScreeningResponseByApplicationId);
 const mockSaveTranscript = vi.mocked(saveVoiceTranscript);
 const mockSaveScreeningProctoring = vi.mocked(saveScreeningProctoringReport);
 const mockMarkExpired = vi.mocked(markScreeningResponseExpired);
-const mockSaveAnswers = vi.mocked(saveCandidateAnswers);
 const mockTransition = vi.mocked(transitionApplication);
 const mockSystemTransition = vi.mocked(transitionApplicationAsSystem);
 const mockCreateGrant = vi.mocked(createScreeningRoomGrant);
@@ -540,30 +536,6 @@ describe("anonymous candidate authorization (#162)", () => {
     expect(mockRunScoring).toHaveBeenCalledWith(
       expect.objectContaining({ applicationId: APP_ID, db: ADMIN_DB }),
     );
-  });
-
-  it("submits typed answers on the admin client, via a system transition", async () => {
-    const questionId = "22222222-2222-4222-8222-222222222222";
-    mockFetchQuestions.mockResolvedValue([
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { id: questionId, prompt: "Describe a scaling problem you solved.", is_required: true } as any,
-    ]);
-
-    await submitScreeningAnswers({
-      token: TOKEN,
-      answers: [{ question_id: questionId, answer_text: "We sharded by tenant." }],
-    });
-
-    expect(mockFetchResponse).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
-    expect(mockFetchApp).toHaveBeenCalledWith(APP_ID, ADMIN_DB);
-    expect(mockFetchQuestions).toHaveBeenCalledWith("camp-1", ADMIN_DB);
-    expect(mockSaveAnswers).toHaveBeenCalledWith(APP_ID, expect.any(Array), ADMIN_DB);
-    expect(mockSystemTransition).toHaveBeenCalledWith(
-      APP_ID,
-      "screening_completed",
-      expect.any(String),
-    );
-    expect(mockTransition).not.toHaveBeenCalled();
   });
 
   it("reports a failed call on the admin client, via system transitions", async () => {

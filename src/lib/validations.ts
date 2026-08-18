@@ -302,11 +302,6 @@ export const screeningAnswerSchema = z.object({
   answer_text: z.string().min(1, "Answer cannot be empty").max(5000, "Answer is too long"),
 });
 
-export const screeningAnswerSubmissionSchema = z.object({
-  token: z.string().min(10).max(2000),
-  answers: z.array(screeningAnswerSchema).min(1, "No answers submitted").max(15),
-});
-
 // ─── Voice Screening (#83) ──────────────────────────────────────────────────
 
 // Shape of one agent-reported transcript turn (the agent worker posts these to

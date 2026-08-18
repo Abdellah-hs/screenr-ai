@@ -221,7 +221,7 @@ Non-negotiable product behaviors from `docs/prd.md`. Do not assume a feature is 
 
 ### Screening Questions (PRD 3.4.3)
 
-- Candidate responses are **video/audio recordings**, not text answers. The current text-form implementation is a legacy shortcut.
+- Candidate responses are **spoken**, captured as a live voice call and stored as a server-side transcript. **The text form was retired in #161** — there is no typed-answer path left, and no env flag re-enables one. Video responses remain an accepted divergence (#48); audio is what ships.
 - The flow includes a **practice question** before scored questions.
 - Candidates may re-record before final submission.
 - AI transcribes responses; per-question scores and the overall screening score must be traceable to transcript excerpts — persist the transcript alongside the score.

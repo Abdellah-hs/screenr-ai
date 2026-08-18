@@ -5,7 +5,6 @@ import {
   assertEligibleForScreeningSend,
   isEligibleForScreeningSend,
   isResponseExpired,
-  validateRequiredAnswersPresent,
   evaluateScreeningScoringOutcome,
   ScreeningResponseError,
   SCREENING_SEND_ELIGIBLE_STATES,
@@ -127,53 +126,6 @@ describe("isEligibleForScreeningSend", () => {
 
   it("returns false for a terminal state", () => {
     expect(isEligibleForScreeningSend("rejected")).toBe(false);
-  });
-});
-
-describe("validateRequiredAnswersPresent", () => {
-  const q = (id: string, is_required: boolean) => ({ id, is_required });
-  const a = (question_id: string) => ({ question_id });
-
-  it("passes when no questions are configured", () => {
-    expect(() => validateRequiredAnswersPresent([], [])).not.toThrow();
-  });
-
-  it("passes when optional questions are unanswered", () => {
-    const questions = [q("q1", false), q("q2", false)];
-    expect(() => validateRequiredAnswersPresent(questions, [])).not.toThrow();
-  });
-
-  it("passes when every required question has an answer", () => {
-    const questions = [q("q1", true), q("q2", true), q("q3", false)];
-    const answers = [a("q1"), a("q2")];
-    expect(() => validateRequiredAnswersPresent(questions, answers)).not.toThrow();
-  });
-
-  it("throws when a single required question is missing", () => {
-    const questions = [q("q1", true), q("q2", true)];
-    const answers = [a("q1")];
-
-    expect(() => validateRequiredAnswersPresent(questions, answers)).toThrow(
-      ScreeningResponseError,
-    );
-    expect(() => validateRequiredAnswersPresent(questions, answers)).toThrow(
-      "Please answer every required question before submitting (1 missing).",
-    );
-  });
-
-  it("throws with the correct count when multiple required questions are missing", () => {
-    const questions = [q("q1", true), q("q2", true), q("q3", true)];
-    const answers = [a("q1")];
-
-    expect(() => validateRequiredAnswersPresent(questions, answers)).toThrow(
-      "Please answer every required question before submitting (2 missing).",
-    );
-  });
-
-  it("ignores answers to unknown questions (caller is responsible for rejecting them)", () => {
-    const questions = [q("q1", true)];
-    const answers = [a("q1"), a("q-unknown")];
-    expect(() => validateRequiredAnswersPresent(questions, answers)).not.toThrow();
   });
 });
 

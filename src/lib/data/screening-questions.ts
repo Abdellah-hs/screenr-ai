@@ -206,7 +206,7 @@ export interface ScreeningResponseRow {
   application_id: string;
   status: "pending" | "sent" | "responded" | "scored" | "expired";
   answers: ScoredAnswerRow[];
-  /** Voice-screening transcript (#83); empty for legacy text-form responses. */
+  /** Voice-screening transcript (#83) — the only response format since #161. */
   transcript: VoiceTranscriptTurn[];
   /** Optional recorded-audio pointer in Supabase Storage; null until wired. */
   audio_url: string | null;
@@ -376,43 +376,11 @@ export async function upsertPendingScreeningResponse(
   return data as unknown as ScreeningResponseRow;
 }
 
-export async function saveCandidateAnswers(
-  applicationId: string,
-  answers: { question_id: string; prompt: string; answer_text: string }[],
-  dbClient?: SupabaseDb
-): Promise<void> {
-  const supabase = dbClient ?? (await createClient());
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabase as any;
-
-  const normalized = answers.map((a) => ({
-    question_id: a.question_id,
-    prompt: a.prompt,
-    answer_text: a.answer_text,
-    score: null,
-    rationale: null,
-  }));
-
-  const { error } = await db
-    .from("screening_question_responses")
-    .update({
-      status: "responded",
-      answers: normalized,
-      responded_at: new Date().toISOString(),
-    })
-    .eq("application_id", applicationId);
-
-  if (error) {
-    throw new Error(
-      `Failed to save candidate answers: ${error.message ?? JSON.stringify(error)}`
-    );
-  }
-}
-
 /**
  * Persist a completed voice-screening call (#83): the captured transcript and
- * a `responded` status. The voice equivalent of `saveCandidateAnswers` — the
- * recruiter's score action (#84) reads the transcript instead of typed text.
+ * a `responded` status. Since #161 retired the text form this is the ONLY way a
+ * candidate response is written — the recruiter's score action (#84) reads the
+ * transcript.
  */
 export async function saveVoiceTranscript(
   applicationId: string,
