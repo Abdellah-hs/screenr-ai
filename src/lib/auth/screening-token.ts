@@ -95,15 +95,34 @@ export interface VerifiedToken {
   expires_at: Date;
 }
 
+export const TOKEN_INVALID_MESSAGE =
+  "This link is not valid. Please check your email and try again.";
+export const TOKEN_EXPIRED_MESSAGE =
+  "This link has expired. Please contact the hiring team for a new one.";
+
+export interface PeekedToken extends VerifiedToken {
+  /** Signature is good, but the deadline has passed. */
+  expired: boolean;
+}
+
 /**
- * Verify a screening response token. Returns the application_id if valid,
- * or throws with a user-facing message if the token is malformed, tampered
- * with, or expired.
+ * Authenticate a token WITHOUT rejecting it for being past its deadline.
+ *
+ * The signature check is identical to `verifyResponseToken` — a forged or
+ * tampered token still throws — so the only extra power this grants a caller is
+ * learning which application an *authentic, lapsed* link belongs to. That is
+ * exactly what the expiry paths need: the deadline lives in the token itself, so
+ * by the time a candidate returns to a dead link, `verifyResponseToken` throws
+ * and nothing ever gets the chance to move the application out of the active
+ * funnel. It sat in `interview_invited` forever precisely because the only
+ * caller that knew the link was dead also refused to say whose link it was.
+ *
+ * Callers must treat `expired: true` as "close this out", never as access.
  */
-export function verifyResponseToken(token: string): VerifiedToken {
+export function peekResponseToken(token: string): PeekedToken {
   const parts = token.split(".");
   if (parts.length !== 2) {
-    throw new Error("This link is not valid. Please check your email and try again.");
+    throw new Error(TOKEN_INVALID_MESSAGE);
   }
   const [payloadStr, sig] = parts;
 
@@ -114,26 +133,36 @@ export function verifyResponseToken(token: string): VerifiedToken {
     sigBuf.length !== expectedBuf.length ||
     !timingSafeEqual(sigBuf, expectedBuf)
   ) {
-    throw new Error("This link is not valid. Please check your email and try again.");
+    throw new Error(TOKEN_INVALID_MESSAGE);
   }
 
   let payload: TokenPayload;
   try {
     payload = JSON.parse(base64urlDecode(payloadStr).toString("utf-8")) as TokenPayload;
   } catch {
-    throw new Error("This link is not valid. Please check your email and try again.");
+    throw new Error(TOKEN_INVALID_MESSAGE);
   }
 
   if (!payload.aid || typeof payload.exp !== "number") {
-    throw new Error("This link is not valid. Please check your email and try again.");
-  }
-
-  if (Date.now() > payload.exp) {
-    throw new Error("This link has expired. Please contact the hiring team for a new one.");
+    throw new Error(TOKEN_INVALID_MESSAGE);
   }
 
   return {
     application_id: payload.aid,
     expires_at: new Date(payload.exp),
+    expired: Date.now() > payload.exp,
   };
+}
+
+/**
+ * Verify a screening response token. Returns the application_id if valid,
+ * or throws with a user-facing message if the token is malformed, tampered
+ * with, or expired.
+ */
+export function verifyResponseToken(token: string): VerifiedToken {
+  const { application_id, expires_at, expired } = peekResponseToken(token);
+  if (expired) {
+    throw new Error(TOKEN_EXPIRED_MESSAGE);
+  }
+  return { application_id, expires_at };
 }

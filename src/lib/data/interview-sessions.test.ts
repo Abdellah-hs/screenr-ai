@@ -11,6 +11,8 @@ function makeChain(result: Result) {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
     in: vi.fn(() => chain),
+    not: vi.fn(() => chain),
+    lt: vi.fn(() => chain),
     maybeSingle: vi.fn(() => Promise.resolve(result)),
     then: (resolve: (r: Result) => void) => resolve(result),
   };
@@ -30,6 +32,7 @@ import {
   saveInterviewTranscriptDraft,
   saveVisionObservationsDraft,
   finalizeInterviewTranscript,
+  fetchOverdueInterviewSessions,
   markInterviewExpired,
   markInterviewFailed,
   saveInterviewScore,
@@ -369,5 +372,48 @@ describe("saveVisionObservationsDraft", () => {
     await expect(
       saveVisionObservationsDraft("app-1", observations, db as never),
     ).rejects.toThrow("nope");
+  });
+});
+
+describe("fetchOverdueInterviewSessions", () => {
+  const NOW = new Date("2026-08-18T12:00:00.000Z");
+
+  it("selects only open sessions with a deadline already in the past", async () => {
+    useResult({ data: [], error: null });
+
+    await fetchOverdueInterviewSessions(NOW, db as never);
+
+    expect(db.from).toHaveBeenCalledWith("interview_sessions");
+    expect(chain.in).toHaveBeenCalledWith("status", ["invited", "in_progress"]);
+    // A session with no deadline is excluded rather than swept — guessing one
+    // would close an invitation nobody ever dated.
+    expect(chain.not).toHaveBeenCalledWith("expires_at", "is", null);
+    expect(chain.lt).toHaveBeenCalledWith("expires_at", NOW.toISOString());
+  });
+
+  it("returns the status and start time the abandonment rule needs", async () => {
+    const row = {
+      application_id: "app-1",
+      status: "in_progress",
+      expires_at: "2026-08-17T12:00:00.000Z",
+      started_at: "2026-08-17T11:55:00.000Z",
+    };
+    useResult({ data: [row], error: null });
+
+    const rows = await fetchOverdueInterviewSessions(NOW, db as never);
+
+    // Without started_at the sweep can't tell an abandoned call from a live one.
+    expect(rows).toEqual([row]);
+    expect(chain.select).toHaveBeenCalledWith(
+      "application_id, status, expires_at, started_at",
+    );
+  });
+
+  it("throws when the query fails, so the sweep reports rather than sweeping nothing", async () => {
+    useResult({ data: null, error: { message: "column does not exist" } });
+
+    await expect(fetchOverdueInterviewSessions(NOW, db as never)).rejects.toThrow(
+      /column does not exist/,
+    );
   });
 });

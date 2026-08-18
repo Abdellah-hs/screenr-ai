@@ -13,6 +13,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  fetchExpiredInterviewNotifications,
   fetchPendingReviewNotifications,
   fetchSlaBreachNotifications,
 } from "./notifications";
@@ -53,6 +54,42 @@ describe("fetchPendingReviewNotifications", () => {
     mockIs.mockResolvedValue({ data: null, error: { message: "boom" } });
 
     expect(await fetchPendingReviewNotifications("user-1")).toEqual([]);
+  });
+});
+
+describe("fetchExpiredInterviewNotifications", () => {
+  it("groups expired interviews per campaign with counts, busiest first", async () => {
+    mockIs.mockResolvedValue({
+      data: [
+        { campaign_id: "c2", campaigns: { title: "Designer" } },
+        { campaign_id: "c1", campaigns: { title: "AI Engineer" } },
+        { campaign_id: "c1", campaigns: { title: "AI Engineer" } },
+      ],
+      error: null,
+    });
+
+    const result = await fetchExpiredInterviewNotifications("user-1");
+
+    expect(result).toEqual([
+      { campaign_id: "c1", campaign_title: "AI Engineer", expired_count: 2 },
+      { campaign_id: "c2", campaign_title: "Designer", expired_count: 1 },
+    ]);
+  });
+
+  it("reads exactly the interview_expired state, scoped to the owner", async () => {
+    mockIs.mockResolvedValue({ data: [], error: null });
+
+    await fetchExpiredInterviewNotifications("user-1");
+
+    expect(mockEqStatus).toHaveBeenCalledWith("status", "interview_expired");
+    expect(mockEqUser).toHaveBeenCalledWith("campaigns.user_id", "user-1");
+  });
+
+  it("returns an empty list on a query error rather than throwing", async () => {
+    // The bell must degrade to "nothing to show", never take the navbar down.
+    mockIs.mockResolvedValue({ data: null, error: { message: "boom" } });
+
+    expect(await fetchExpiredInterviewNotifications("user-1")).toEqual([]);
   });
 });
 

@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockAdminDb,
   mockVerifyToken,
+  mockPeekToken,
+  mockMarkExpired,
   mockCheckRateLimit,
   mockHeaders,
   mockFetchInterviewContext,
@@ -20,6 +22,8 @@ const {
   // cookie-scoped one (which RLS blanks when there is no recruiter session).
   mockAdminDb: { __brand: "admin-client" },
   mockVerifyToken: vi.fn(),
+  mockPeekToken: vi.fn(),
+  mockMarkExpired: vi.fn(),
   mockCheckRateLimit: vi.fn(),
   mockHeaders: vi.fn(),
   mockFetchInterviewContext: vi.fn(),
@@ -36,7 +40,9 @@ const {
 
 vi.mock("@/lib/auth/screening-token", () => ({
   verifyResponseToken: mockVerifyToken,
+  peekResponseToken: mockPeekToken,
   signResponseToken: vi.fn(),
+  TOKEN_EXPIRED_MESSAGE: "This link has expired. Please contact the hiring team for a new one.",
   INTERVIEW_TOKEN_TTL_MS: 7 * 24 * 60 * 60 * 1000,
 }));
 vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: mockCheckRateLimit }));
@@ -50,6 +56,7 @@ vi.mock("@/lib/data/candidates", () => ({
 vi.mock("@/lib/data/interview-sessions", () => ({
   fetchInterviewSessionByApplicationId: mockFetchSession,
   ensureInterviewSession: mockEnsureSession,
+  markInterviewExpired: mockMarkExpired,
   markInterviewStarted: mockMarkStarted,
   saveProctoringReport: mockSaveProctoring,
   saveProctoringSnapshots: mockSaveSnapshots,
@@ -107,6 +114,11 @@ const RESUME_CTX = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockVerifyToken.mockReturnValue({ application_id: "app-1", expires_at: FUTURE });
+  mockPeekToken.mockReturnValue({
+    application_id: "app-1",
+    expires_at: FUTURE,
+    expired: false,
+  });
   mockHeaders.mockResolvedValue(new Map([["x-forwarded-for", "1.2.3.4"]]));
   mockFetchInterviewContext.mockResolvedValue(RESUME_CTX);
   mockFetchSession.mockResolvedValue(null);
@@ -144,12 +156,15 @@ describe("loadInterviewContext", () => {
   });
 
   it("verifies the token before touching the database", async () => {
-    mockVerifyToken.mockImplementationOnce(() => {
+    // Relaxing the DEADLINE for lazy expiry must not relax AUTHENTICITY: a
+    // forged token still throws out of the peek, before any read or write.
+    mockPeekToken.mockImplementationOnce(() => {
       throw new Error("This link is not valid.");
     });
 
     await expect(loadInterviewContext("forged")).rejects.toThrow("This link is not valid.");
     expect(mockFetchInterviewContext).not.toHaveBeenCalled();
+    expect(mockTransition).not.toHaveBeenCalled();
   });
 });
 
@@ -223,6 +238,76 @@ describe("startCandidateInterview", () => {
   });
 });
 
+/**
+ * The hole this closes: the interview deadline lives in the token, so a lapsed
+ * link threw on verification and nothing ever moved the application. An invited
+ * candidate who never showed sat in `interview_invited` forever — the one stage
+ * with a happy path but no failure path.
+ */
+describe("lazy interview expiry", () => {
+  const EXPIRED_PEEK = {
+    application_id: "app-1",
+    expires_at: new Date(Date.now() - 60 * 60 * 1000),
+    expired: true,
+  };
+
+  it("moves the application to interview_expired when a dead link is opened", async () => {
+    mockPeekToken.mockReturnValue(EXPIRED_PEEK);
+
+    await expect(loadInterviewContext("tok")).rejects.toThrow(/expired/i);
+
+    expect(mockTransition).toHaveBeenCalledWith(
+      "app-1",
+      "interview_expired",
+      expect.any(String),
+      expect.objectContaining({ code: "EXPIRED" }),
+    );
+    expect(mockMarkExpired).toHaveBeenCalledWith("app-1", mockAdminDb);
+  });
+
+  it("closes the invitation when a dead link tries to start a call", async () => {
+    mockPeekToken.mockReturnValue(EXPIRED_PEEK);
+
+    await expect(startCandidateInterview("tok")).rejects.toThrow(/expired/i);
+
+    expect(mockTransition).toHaveBeenCalledWith(
+      "app-1",
+      "interview_expired",
+      expect.any(String),
+      expect.objectContaining({ code: "EXPIRED" }),
+    );
+    expect(mockCreateGrant).not.toHaveBeenCalled();
+  });
+
+  it("rate-limits before the expiry write, so one dead token can't be hammered", async () => {
+    mockPeekToken.mockReturnValue(EXPIRED_PEEK);
+    mockCheckRateLimit.mockImplementationOnce(() => {
+      throw new Error("Too many requests");
+    });
+
+    await expect(startCandidateInterview("tok")).rejects.toThrow("Too many requests");
+    expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it("leaves a live invitation untouched", async () => {
+    mockFetchSession.mockResolvedValue({ status: "invited", transcript: [] });
+
+    await loadInterviewContext("tok");
+
+    expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockMarkExpired).not.toHaveBeenCalled();
+  });
+
+  it("still tells the candidate the link expired even if the transition fails", async () => {
+    // They're locked out either way; a failed bookkeeping write must not become
+    // a stack trace on the candidate's screen.
+    mockPeekToken.mockReturnValue(EXPIRED_PEEK);
+    mockTransition.mockRejectedValueOnce(new Error("Illegal transition"));
+
+    await expect(loadInterviewContext("tok")).rejects.toThrow(/expired/i);
+  });
+});
+
 describe("submitInterview", () => {
   it("rejects a call that captured no candidate speech", async () => {
     mockFetchSession.mockResolvedValue({
@@ -251,6 +336,7 @@ describe("submitInterview", () => {
       "app-1",
       "interview_completed",
       expect.any(String),
+      undefined, // completion is not a closure — no disposition
     );
     expect(result).toEqual({ ok: true });
   });
@@ -485,6 +571,7 @@ describe("submitInterview proctoring", () => {
       "app-1",
       "interview_completed",
       expect.any(String),
+      undefined, // completion is not a closure — no disposition
     );
   });
 

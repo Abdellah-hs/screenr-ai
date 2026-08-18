@@ -451,13 +451,22 @@ Resume text extraction (`src/lib/services/marker.ts`) uses the hosted Datalab Ma
 
 Screening links carry a 7-day deadline (`RESPONSE_TTL_MS`). Expiry is detected two ways: **lazily** when the candidate reopens a dead link (`startCandidateVoiceScreening`), and **proactively** by a scheduled sweep so the pipeline reflects reality even for candidates who never return. The sweep (`sweepExpiredScreenings` in `src/lib/screening/expiry-sweep.ts`) finds every `screening_sent` response past its `expires_at` and moves the application to `screening_expired` via the system transition (admin client — it runs without a recruiter session).
 
-It is exposed at **`GET /api/cron/expire-screenings`**, guarded by `Authorization: Bearer ${CRON_SECRET}` (fails closed if the secret is unset). Wire any scheduler to hit it on whatever cadence you want (daily is plenty):
+The **AI interview** works the same way (`INTERVIEW_TOKEN_TTL_MS`, also 7 days), with one extra wrinkle: the deadline lives *inside* the token, so a lapsed link used to throw on verification before anything could record that it had lapsed — an invited no-show sat in `interview_invited` forever. `peekResponseToken` (`src/lib/auth/screening-token.ts`) authenticates a token **without** enforcing its deadline, so the expiry paths can recover which application a dead link belongs to. It checks the HMAC exactly as `verifyResponseToken` does; only the deadline is relaxed, and callers must treat `expired: true` as "close this out", never as access.
+
+The interview sweep (`sweepExpiredInterviews` in `src/lib/interview/expiry-sweep.ts`) selects open sessions past `expires_at`, then lets the pure rule `isInterviewAbandoned` (`src/lib/rules/interview-expiry.ts`) decide which have truly lapsed. **A session that is `in_progress` is not swept until the call could no longer be running** (`INTERVIEW_DURATION_MINUTES + ABANDONED_GRACE_MINUTES`) — otherwise a candidate whose 7-day deadline falls mid-answer would have their live interview and transcript destroyed by the sweep.
+
+Both are exposed as guarded GET routes, `Authorization: Bearer ${CRON_SECRET}` (failing closed if the secret is unset):
+
+- **`GET /api/cron/expire-screenings`**
+- **`GET /api/cron/expire-interviews`**
+
+Wire any scheduler to hit them on whatever cadence you want (daily is plenty):
 
 - **Vercel Cron** — add the path + schedule to `vercel.json` (Vercel injects the `CRON_SECRET` bearer automatically).
 - **Supabase pg_cron + pg_net** — schedule an HTTP POST/GET to the deployed URL with the bearer header.
 - **External cron / GitHub Actions** — `curl -H "Authorization: Bearer $CRON_SECRET" <origin>/api/cron/expire-screenings`.
 
-There is no scheduler wired by default — the endpoint is inert until one is pointed at it.
+**There is no scheduler wired by default** — `vercel.json` schedules only `renew-calendar-watches`, so both sweeps are inert in production until one is pointed at them (tracked in #131). Until then expiry is detected **lazily only**, when a candidate reopens a dead link — which is precisely the population least likely to come back. Recruiters see lapsed interviews in the notification bell (`fetchExpiredInterviewNotifications`).
 
 ## Notes for Future Work
 

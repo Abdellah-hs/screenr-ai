@@ -2,6 +2,7 @@
 
 import { requireUserId } from "@/lib/auth/guards";
 import {
+  fetchExpiredInterviewNotifications,
   fetchPendingReviewNotifications,
   fetchSlaBreachNotifications,
   type RecruiterNotification,
@@ -9,16 +10,17 @@ import {
 
 /**
  * Actionable items for the recruiter's notification bell, newest concern first:
- * SLA breaches (escalations before alerts) then pending human-in-the-loop
- * reviews. Both are derived live from application state — no notification table
- * to keep in sync.
+ * SLA breaches (escalations before alerts), then expired AI interviews, then
+ * pending human-in-the-loop reviews. All derived live from application state —
+ * no notification table to keep in sync.
  */
 export async function getRecruiterNotifications(): Promise<RecruiterNotification[]> {
   const userId = await requireUserId();
 
-  const [reviews, breaches] = await Promise.all([
+  const [reviews, breaches, expiredInterviews] = await Promise.all([
     fetchPendingReviewNotifications(userId),
     fetchSlaBreachNotifications(userId),
+    fetchExpiredInterviewNotifications(userId),
   ]);
 
   const slaItems: RecruiterNotification[] = breaches.map((b) => ({
@@ -31,6 +33,14 @@ export async function getRecruiterNotifications(): Promise<RecruiterNotification
     level: b.level,
   }));
 
+  const expiredItems: RecruiterNotification[] = expiredInterviews.map((e) => ({
+    id: `interview-expired:${e.campaign_id}`,
+    kind: "interview_expired",
+    campaignId: e.campaign_id,
+    campaignTitle: e.campaign_title,
+    count: e.expired_count,
+  }));
+
   const reviewItems: RecruiterNotification[] = reviews.map((r) => ({
     id: `review:${r.campaign_id}`,
     kind: "pending_review",
@@ -39,6 +49,8 @@ export async function getRecruiterNotifications(): Promise<RecruiterNotification
     count: r.pending_review_count,
   }));
 
-  // SLA breaches are time-sensitive — surface them above review reminders.
-  return [...slaItems, ...reviewItems];
+  // SLA breaches are time-sensitive — surface them above the rest. Expired
+  // interviews sit above review reminders: a review is waiting for the
+  // recruiter, an expiry already happened without them.
+  return [...slaItems, ...expiredItems, ...reviewItems];
 }

@@ -363,6 +363,50 @@ export async function markInterviewExpired(
   }
 }
 
+/** An open, past-deadline session — the raw candidate set for the expiry sweep. */
+export interface OverdueInterviewSession {
+  application_id: string;
+  status: "invited" | "in_progress";
+  expires_at: string | null;
+  started_at: string | null;
+}
+
+/**
+ * Interview sessions still open (`invited` or `in_progress`) but past their
+ * deadline — the input to the proactive expiry sweep. Mirrors
+ * `fetchExpiredSentScreeningAppIds`.
+ *
+ * `in_progress` is included deliberately: a candidate who opened the room and
+ * walked away never submits, so the session stays open forever. But a started
+ * session might also be a live call that crossed its deadline mid-answer, so
+ * this returns `status` + `started_at` and lets `isInterviewAbandoned` decide —
+ * the query selects candidates, the rule closes them.
+ *
+ * Sessions with a null `expires_at` are excluded: no deadline means nothing to
+ * be past, and guessing one would close a live interview.
+ */
+export async function fetchOverdueInterviewSessions(
+  now: Date,
+  db: SupabaseDb,
+): Promise<OverdueInterviewSession[]> {
+  const q = db as AnyDb;
+
+  const { data, error } = await q
+    .from("interview_sessions")
+    .select("application_id, status, expires_at, started_at")
+    .in("status", [...OPEN_STATUSES])
+    .not("expires_at", "is", null)
+    .lt("expires_at", now.toISOString());
+
+  if (error) {
+    throw new Error(
+      `Failed to load expired interview sessions: ${error.message ?? JSON.stringify(error)}`,
+    );
+  }
+
+  return (data ?? []) as OverdueInterviewSession[];
+}
+
 export async function markInterviewFailed(
   applicationId: string,
   db?: SupabaseDb,
