@@ -8,6 +8,7 @@ import {
   selectCandidates,
   type CandidateSortField,
 } from "@/lib/candidates/table-view";
+import { CandidateBulkActions } from "./candidate-bulk-actions";
 import type {
   Candidate,
   CandidateScore,
@@ -93,6 +94,10 @@ export default function CandidateTable({
     // Arriving from the bell, the useful order is worst-first.
     initialOverdue ? "stage_age" : "applied_at",
   );
+  // Ids rather than indices, so a selection survives filtering and sorting —
+  // a recruiter who ticks four people, changes the filter, and comes back has
+  // not lost them.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const stageCounts = useMemo(() => candidateStageCounts(candidates), [candidates]);
 
@@ -149,6 +154,36 @@ export default function CandidateTable({
       }),
     [candidates, search, effectiveFilter, effectiveSort, overdueActive],
   );
+
+  // Select-all applies to the current filter, not the whole campaign — the
+  // header checkbox must promise exactly what the rows underneath it show.
+  const visibleIds = filtered.map((c) => c.id);
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
+
+  // Resolved against the full list, not the filtered one: a selection made
+  // before the filter changed is still a selection, and dropping it silently
+  // would act on fewer people than the toolbar's count promises.
+  const selectedCandidates = candidates.filter((c) => selectedIds.has(c.id));
+
+  function toggleRow(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -241,6 +276,13 @@ export default function CandidateTable({
         </button>
       )}
 
+      {selectedCandidates.length > 0 && (
+        <CandidateBulkActions
+          selected={selectedCandidates}
+          onDone={() => setSelectedIds(new Set())}
+        />
+      )}
+
       {/* Search + Sort */}
       <div className="flex flex-col sm:flex-row items-center gap-3">
         <div className="relative w-full sm:max-w-sm">
@@ -306,6 +348,25 @@ export default function CandidateTable({
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-[#F9FAFB] border-b border-[#E5E7EB] text-xs font-semibold text-[#6B7280] uppercase tracking-wider">
                 <tr>
+                  <th scope="col" className="w-10 pl-6 pr-0 py-4">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      // Indeterminate is the honest state for a partial
+                      // selection: an unchecked box next to four ticked rows
+                      // reads as "nothing selected".
+                      ref={(el) => {
+                        if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected;
+                      }}
+                      onChange={toggleAllVisible}
+                      aria-label={
+                        allVisibleSelected
+                          ? "Deselect all shown candidates"
+                          : "Select all shown candidates"
+                      }
+                      className="h-4 w-4 cursor-pointer accent-[#2563EB]"
+                    />
+                  </th>
                   <th scope="col" className="px-6 py-4">
                     Candidate
                   </th>
@@ -332,8 +393,21 @@ export default function CandidateTable({
                   return (
                     <tr
                       key={candidate.id}
-                      className="hover:bg-[#F9FAFB] transition-colors group"
+                      className={`transition-colors group ${
+                        selectedIds.has(candidate.id)
+                          ? "bg-[#EFF6FF]"
+                          : "hover:bg-[#F9FAFB]"
+                      }`}
                     >
+                      <td className="w-10 pl-6 pr-0 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(candidate.id)}
+                          onChange={() => toggleRow(candidate.id)}
+                          aria-label={`Select ${candidate.name}`}
+                          className="h-4 w-4 cursor-pointer accent-[#2563EB]"
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <Link
                           href={`/campaigns/${campaignId}/candidates/${candidate.id}`}

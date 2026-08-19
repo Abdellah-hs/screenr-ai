@@ -322,6 +322,13 @@ export interface Candidate {
   current_title: string | null;
   current_company: string | null;
   stage: CandidateStage;
+  /**
+   * The raw application state, alongside the coarse `stage` bucket derived from
+   * it. The table needs both: `stage` drives the funnel pills, but any decision
+   * about what a candidate can legally do next — bulk advance, most of all —
+   * has to be made against the exact state, not the bucket six states share.
+   */
+  status: ApplicationState;
   // Derived from raw application.status === "screening_review_pending".
   // Surfaced as a boolean (not a stage value) because HITL-pending is a
   // workflow flag — the HITL review panel resolves it, not the recruiter's
