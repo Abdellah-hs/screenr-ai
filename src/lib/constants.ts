@@ -73,6 +73,14 @@ export interface CampaignReviewer {
 // / interview). Terminal buckets (`hired`, `rejected`) carry no SLA.
 export type SlaStage = "applied" | "screening" | "interview" | "final_interview";
 
+/**
+ * How badly an application has overrun its stage SLA. Defined here rather than
+ * in `rules/sla.ts` so `Candidate` can carry one without the domain types
+ * importing the rules module — `rules/sla.ts` re-exports it, so existing
+ * importers are unaffected.
+ */
+export type SlaBreachLevel = "alert" | "escalation";
+
 export interface SlaTimer {
   stage: SlaStage;
   time_limit_hours: number;
@@ -323,6 +331,16 @@ export interface Candidate {
   // live in the `rejected` coarse bucket, so this flag is what lets the
   // candidate list split them into their own "Archived" group.
   is_archived: boolean;
+  /**
+   * SLA breach for the stage this application is sitting in, or null when the
+   * campaign has no timer for that stage, the stage is terminal, or nothing has
+   * overrun yet.
+   *
+   * Computed server-side, deliberately. `hoursInStage` reads the clock, and a
+   * client component recomputing it after hydration would disagree with what
+   * the server rendered.
+   */
+  sla: { level: SlaBreachLevel; hours: number } | null;
   scores: CandidateScore[];
   resume: {
     skills: string[];

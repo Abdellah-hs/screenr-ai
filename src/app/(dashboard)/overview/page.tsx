@@ -15,6 +15,7 @@ import { FUNNEL_STAGES } from "@/components/campaigns/pipeline-funnel";
 import {
   NotificationIcon,
   notificationCaption,
+  notificationHref,
   notificationSummary,
 } from "@/components/notification-item";
 
@@ -147,7 +148,7 @@ export default async function OverviewPage() {
               {notifications.map((n) => (
                 <li key={n.id}>
                   <Link
-                    href={`/campaigns/${n.campaignId}/candidates`}
+                    href={notificationHref(n)}
                     className="flex items-start gap-3 py-3 -mx-2 px-2 rounded-lg transition-colors hover:bg-[#F9FAFB]"
                   >
                     <NotificationIcon notification={n} />

@@ -38,11 +38,13 @@ import {
 } from "@/lib/data/candidates";
 import {
   fetchCampaignScoringConfig,
+  fetchSlaTimersByCampaignId,
   fetchActiveRubricVersion,
   fetchCampaignStatus,
 } from "@/lib/data/campaigns";
 import { fetchScreeningQuestionsByCampaignId } from "@/lib/data/screening-questions";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
+import { applicationSlaStatus } from "@/lib/rules/sla";
 
 // Rules
 import {
@@ -174,15 +176,22 @@ async function autoSendScreeningIfApproved(
 export async function getCandidatesByCampaignId(campaignId: string): Promise<Candidate[]> {
   uuidSchema.parse(campaignId);
   const userId = await requireUserId();
-  const [data, currentResumeRubricVersion, currentScreeningRubricVersion] = await Promise.all([
-    fetchCandidatesByCampaignId(campaignId, userId),
-    fetchActiveRubricVersion(campaignId, "resume"),
-    fetchActiveRubricVersion(campaignId, "screening_q"),
-  ]);
+  const [data, currentResumeRubricVersion, currentScreeningRubricVersion, slaTimers] =
+    await Promise.all([
+      fetchCandidatesByCampaignId(campaignId, userId),
+      fetchActiveRubricVersion(campaignId, "resume"),
+      fetchActiveRubricVersion(campaignId, "screening_q"),
+      fetchSlaTimersByCampaignId(campaignId),
+    ]);
   if (!data) return [];
+
+  // One clock reading for the whole list, so two rows that entered a stage at
+  // the same moment can never disagree about whether they are overdue.
+  const now = new Date();
 
   return (data as ApplicationWithCandidate[]).map((app) => {
     const parsed = app.parsed_data as ParsedResumeData | null;
+    const stage = toCandidateStage(app.status);
     return {
       id: app.id,
       campaign_id: app.campaign_id,
@@ -191,9 +200,13 @@ export async function getCandidatesByCampaignId(campaignId: string): Promise<Can
       phone: app.candidates.phone,
       current_title: parsed?.experience?.[0]?.title || null,
       current_company: parsed?.experience?.[0]?.company || null,
-      stage: toCandidateStage(app.status),
+      stage,
       awaiting_human_review: app.status === "screening_review_pending",
       is_archived: app.status === "archived",
+      // Terminal buckets (including archived, which files under `rejected`)
+      // resolve to null inside the rule — nobody is waiting on them, so a
+      // badge there would have no action behind it.
+      sla: applicationSlaStatus(stage, app.updated_at, slaTimers, now),
       scores: buildScoresArray(
         app,
         currentResumeRubricVersion,

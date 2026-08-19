@@ -84,6 +84,9 @@ describe("getRecruiterNotifications", () => {
       campaignId: "c1",
       campaignTitle: "AI Engineer",
       count: 4,
+      // The machine-readable stage rides alongside the label so the bell can
+      // deep-link into the filtered table; the label alone is display copy.
+      stage: "screening",
       stageLabel: "Screening",
       level: "escalation",
     });

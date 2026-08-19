@@ -475,6 +475,35 @@ export async function fetchCampaignBySlug(
   };
 }
 
+/**
+ * Just the SLA timers for one campaign.
+ *
+ * The candidate list needs these to flag overdue rows, and `fetchCampaignById`
+ * would drag rubrics, dimensions, reviewers and availability rules along for
+ * three columns. RLS scopes `sla_timers` through its campaign, so no explicit
+ * owner filter is needed — and a campaign the caller cannot see returns an
+ * empty list, which reads as "no SLA configured": no rows leak either way.
+ */
+export async function fetchSlaTimersByCampaignId(
+  campaignId: string,
+): Promise<SlaTimer[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("sla_timers")
+    .select("stage, time_limit_hours, alert_threshold_hours, escalation_threshold_hours")
+    .eq("campaign_id", campaignId);
+
+  if (error || !data) return [];
+
+  return data.map((row) => ({
+    stage: row.stage as SlaTimer["stage"],
+    time_limit_hours: row.time_limit_hours,
+    alert_threshold_hours: row.alert_threshold_hours,
+    escalation_threshold_hours: row.escalation_threshold_hours,
+  }));
+}
+
 // ─── Lightweight query for scoring pipeline (avoids loading rubrics, reviewers, SLAs)
 export async function fetchCampaignScoringConfig(campaignId: string, userId: string, db?: SupabaseDb) {
   const supabase = db ?? (await createClient());
