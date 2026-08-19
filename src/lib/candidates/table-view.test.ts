@@ -16,6 +16,7 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
     current_title: "Backend Engineer",
     current_company: "Analytical Ltd",
     stage: "screening",
+    status: "screening_scored",
     awaiting_human_review: false,
     is_archived: false,
     sla: null,

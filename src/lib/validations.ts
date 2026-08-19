@@ -559,3 +559,43 @@ export const updateTalentPoolEntrySchema = z.object({
   tags: poolTagsSchema.optional().default([]),
   notes: poolNotesSchema,
 });
+
+// ─── Bulk candidate actions (PRD 3.12.1) ────────────────────────────────────
+
+/**
+ * One bulk operation over a selection of applications.
+ *
+ * The 200 ceiling is the point of the schema, not an afterthought: the
+ * expensive mistake here is a mis-clicked select-all emailing an entire
+ * campaign, and there is no undo for a sent email. A recruiter who genuinely
+ * needs to act on more than 200 people can do it in batches, and will notice
+ * they are doing it.
+ *
+ * The rationale floor matches the stage-changer's, because these are the same
+ * kind of recruiter-actor transition and `transitionApplication` rejects an
+ * empty one anyway — better a clear message here than a throw from the data
+ * layer halfway through a batch.
+ */
+export const bulkCandidateActionSchema = z
+  .object({
+    applicationIds: z
+      .array(uuidSchema)
+      .min(1, "Select at least one candidate")
+      .max(200, "Select at most 200 candidates at a time"),
+    action: z.enum(["advance", "reject", "talent_pool"]),
+    rationale: z.string().trim().max(2000, "Rationale is too long").optional(),
+    tags: z
+      .array(z.string().trim().max(MAX_POOL_TAG_LENGTH, "Tag is too long"))
+      .max(MAX_POOL_TAGS, `Up to ${MAX_POOL_TAGS} tags`)
+      .transform((tags) => tags.filter((t) => t.length > 0))
+      .optional(),
+    notes: z.string().trim().max(MAX_POOL_NOTES_LENGTH, "Note is too long").optional(),
+  })
+  .refine(
+    (v) => v.action === "talent_pool" || (v.rationale?.length ?? 0) >= 10,
+    {
+      path: ["rationale"],
+      message:
+        "Give a short reason (10+ characters) — it is recorded against every candidate in this batch",
+    },
+  );
