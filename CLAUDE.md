@@ -204,7 +204,16 @@ Any recruiter action that contradicts an AI recommendation must:
 
 ### Talent Pool
 
-Separate concept from applications. Stores `{candidate_id, historical_scores, notes, tags}`. Old scores are historical context only — new campaigns generate fresh evaluations.
+Separate concept from applications. Old scores are historical context only — new campaigns generate fresh evaluations.
+
+There are **two lists**, and conflating them is the mistake #141 fixed:
+
+- **The directory** (`fetchTalentPoolRows` → `getTalentPool`) — everyone who ever applied to one of the recruiter's campaigns, assembled automatically. Lives at `/candidates?view=all`. A person stays here even after their only campaign is soft-removed, with the removal flagged rather than hiding them.
+- **The curated pool** (`talent_pool_entries` → `getCuratedTalentPool`) — the PRD 3.11 silver medalists: an **opt-in** set a recruiter deliberately marked, carrying `tags text[]` and a free-text `notes`. Lives at `/candidates`. One row per `(added_by, candidate_id)`, owner-scoped RLS on `added_by`, with the INSERT policy additionally requiring the candidate be visible to that recruiter. `source_application_id` / `source_campaign_id` record where the decision was made and are `ON DELETE SET NULL` — **the pool must outlive the campaign that filled it**.
+
+Entry points are the candidate detail page (`TalentPoolButton`, available at any stage) and an opt-in checkbox on the manager's reject modal, which is unchecked by default — pre-ticking it would refill the pool with everyone rejected, i.e. the directory again. The pool add is deliberately **non-fatal and runs after** the rejection transition: the rejection is recorded state, the pool entry is a bookmark.
+
+Search (PRD 3.11.2) is a pure function, `filterTalentPool` in `src/lib/talent-pool/search.ts` — free text over name/email/headline/skills/tags/notes, tags ANDed, original campaign, added-date window, and a `bestScore` range. `bestScore` is the highest number a person reached at **any** stage of **any** application; it is a search axis over history, **not** a composite score and never a decision input. An unscored person is excluded the moment any score bound is set (including a max-only one) — "never scored" is not a low score.
 
 ### Anti-Patterns (FORBIDDEN)
 

@@ -981,6 +981,67 @@ export type Database = {
         }
         Relationships: []
       }
+      talent_pool_entries: {
+        Row: {
+          added_at: string
+          added_by: string
+          candidate_id: string
+          created_at: string
+          id: string
+          notes: string | null
+          source_application_id: string | null
+          source_campaign_id: string | null
+          tags: string[]
+          updated_at: string
+        }
+        Insert: {
+          added_at?: string
+          added_by: string
+          candidate_id: string
+          created_at?: string
+          id?: string
+          notes?: string | null
+          source_application_id?: string | null
+          source_campaign_id?: string | null
+          tags?: string[]
+          updated_at?: string
+        }
+        Update: {
+          added_at?: string
+          added_by?: string
+          candidate_id?: string
+          created_at?: string
+          id?: string
+          notes?: string | null
+          source_application_id?: string | null
+          source_campaign_id?: string | null
+          tags?: string[]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "talent_pool_entries_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "talent_pool_entries_source_application_id_fkey"
+            columns: ["source_application_id"]
+            isOneToOne: false
+            referencedRelation: "applications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "talent_pool_entries_source_campaign_id_fkey"
+            columns: ["source_campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

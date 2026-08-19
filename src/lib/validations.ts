@@ -1,7 +1,12 @@
 import { z } from "zod/v4";
 import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 import { MANAGER_REJECTION_CODES } from "@/lib/rules/manager-review";
-import { AI_AUDIT_STAGE_VALUES } from "@/lib/constants";
+import {
+  AI_AUDIT_STAGE_VALUES,
+  MAX_POOL_NOTES_LENGTH,
+  MAX_POOL_TAGS,
+  MAX_POOL_TAG_LENGTH,
+} from "@/lib/constants";
 
 // ─── Campaign Validation ────────────────────────────────────────────────────
 
@@ -513,4 +518,44 @@ export const auditLogFilterSchema = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date").optional(),
   overriddenOnly: z.boolean().optional(),
   page: z.number().int().min(0).max(10_000).optional(),
+});
+
+// ─── Curated Talent Pool (PRD 3.11) ─────────────────────────────────────────
+
+/**
+ * Tags on a pool entry.
+ *
+ * Bounded on both axes because this is a taxonomy a person has to scan later:
+ * an entry carrying forty tags conveys less than one carrying four, and a
+ * 400-character "tag" is a note wearing the wrong hat. Empty strings are
+ * dropped rather than rejected — a trailing comma in a tag input is a typing
+ * artefact, not something worth an error message.
+ */
+const poolTagsSchema = z
+  .array(z.string().trim().max(MAX_POOL_TAG_LENGTH, "Tag is too long"))
+  .max(MAX_POOL_TAGS, `Up to ${MAX_POOL_TAGS} tags`)
+  .transform((tags) => tags.filter((t) => t.length > 0));
+
+/**
+ * The note is optional and stays optional. Requiring a justification to keep
+ * someone in mind would make the fast path — "mark them, move on" — slow enough
+ * that nobody uses it, and an empty pool is worth less than an unannotated one.
+ */
+const poolNotesSchema = z
+  .string()
+  .trim()
+  .max(MAX_POOL_NOTES_LENGTH, "Note is too long")
+  .optional()
+  .default("");
+
+export const addToTalentPoolSchema = z.object({
+  applicationId: uuidSchema,
+  tags: poolTagsSchema.optional().default([]),
+  notes: poolNotesSchema,
+});
+
+export const updateTalentPoolEntrySchema = z.object({
+  entryId: uuidSchema,
+  tags: poolTagsSchema.optional().default([]),
+  notes: poolNotesSchema,
 });
