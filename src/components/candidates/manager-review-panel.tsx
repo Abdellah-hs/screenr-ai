@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { decideManagerReview } from "@/lib/actions/manager-review";
+import { addToTalentPool } from "@/lib/actions/talent-pool";
 import { Modal, ModalFooter, ModalHeader } from "@/components/ui";
 import type {
   ManagerRejectionCode,
@@ -95,14 +96,20 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
   const [rationale, setRationale] = useState("");
   const [rejectionCode, setRejectionCode] =
     useState<ManagerRejectionCode>("FAILED_INTERVIEW");
+  // Opt-in, unchecked by default (PRD 3.11.1). A pre-ticked box would fill the
+  // pool with everyone who was ever rejected, which is the directory again.
+  const [addToPool, setAddToPool] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function open(d: ManagerReviewDecision) {
     setDecision(d);
     setRationale("");
     setRejectionCode("FAILED_INTERVIEW");
+    setAddToPool(false);
     setError(null);
+    setWarning(null);
   }
 
   function close() {
@@ -115,6 +122,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
   function submit() {
     if (!decision) return;
     setError(null);
+    setWarning(null);
     startTransition(async () => {
       try {
         await decideManagerReview({
@@ -123,6 +131,21 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
           rationale: rationale.trim(),
           rejectionCode,
         });
+
+        // Deliberately after the decision and deliberately non-fatal: the
+        // rejection is recorded state, the pool entry is a bookmark. A failure
+        // here must not read as "the rejection didn't go through" and send the
+        // manager back to press the button a second time.
+        if (decision === "reject" && addToPool) {
+          try {
+            await addToTalentPool({ applicationId, notes: rationale.trim() });
+          } catch {
+            setWarning(
+              "Rejection recorded, but adding them to the talent pool failed. You can add them from their candidate page.",
+            );
+          }
+        }
+
         setDecision(null);
         setRationale("");
         router.refresh();
@@ -187,6 +210,14 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
         </button>
       </div>
 
+      {/* The decision landed; only the bookmark didn't. Shown on the panel
+          because the modal it was chosen in has already closed. */}
+      {warning && (
+        <p className="mt-3 text-xs text-[#B45309] bg-[#FFFBEB] border border-[#FDE68A] rounded-lg px-3 py-2">
+          {warning}
+        </p>
+      )}
+
       <Modal open={decision !== null} onClose={close}>
         {copy && (
           <>
@@ -238,6 +269,42 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
                   })}
                 </div>
               </fieldset>
+            )}
+
+            {/* PRD 3.11.1 — the pool opt-in belongs here because this is the
+                moment the judgement is fresh: the manager has just decided no
+                for *this* role, which is exactly when "but keep them" is a real
+                thought. Asked later, nobody goes back. */}
+            {decision === "reject" && (
+              <label
+                className={`flex items-start gap-2.5 px-3 py-2.5 mb-4 border rounded-lg cursor-pointer transition-colors duration-200 ${
+                  addToPool
+                    ? "border-[#A7F3D0] bg-[#ECFDF5]"
+                    : "border-[#E5E7EB] bg-white hover:bg-[#F9FAFB]"
+                } ${isPending ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={addToPool}
+                  disabled={isPending}
+                  onChange={(e) => setAddToPool(e.target.checked)}
+                  className="mt-0.5 accent-[#059669] cursor-pointer disabled:cursor-not-allowed"
+                />
+                <span className="flex-1">
+                  <span
+                    className={`block text-xs font-medium ${
+                      addToPool ? "text-[#047857]" : "text-[#374151]"
+                    }`}
+                  >
+                    Add to talent pool for future roles
+                  </span>
+                  <span className="block text-xs text-[#6B7280] mt-0.5">
+                    Saves them to your pool with this reasoning as the note. It
+                    changes nothing about the rejection and the candidate is
+                    never told.
+                  </span>
+                </span>
+              </label>
             )}
 
             <label

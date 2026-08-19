@@ -661,3 +661,77 @@ export interface TalentPoolCandidate {
   latestActivityAt: string;
 }
 
+
+// ─── Curated Talent Pool (PRD 3.11) ─────────────────────────────────────────
+//
+// Distinct from `TalentPoolCandidate` above, and the distinction is the whole
+// point of issue #141: that type is the *directory* — everyone who ever applied,
+// assembled automatically. This one is the *pool* — people a recruiter
+// deliberately marked as worth revisiting. A directory answers "who applied";
+// a pool answers "who would I call first when the next role opens".
+
+/** Ceiling on tags per entry — a taxonomy nobody can scan is not a taxonomy. */
+export const MAX_POOL_TAGS = 12;
+export const MAX_POOL_TAG_LENGTH = 40;
+export const MAX_POOL_NOTES_LENGTH = 2000;
+
+/** One curated entry, carrying every field the 3.11.2 filter set searches. */
+export interface TalentPoolEntry {
+  /** The pool entry's own id — not the candidate's, not the application's. */
+  id: string;
+  candidateId: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  location: string | null;
+  /** Role signal lifted from the resume ("Senior Backend Engineer"). */
+  headline: string | null;
+  /** Skills from the most recently parsed resume — the 3.11.2 "skills" axis. */
+  skills: string[];
+  tags: string[];
+  notes: string | null;
+  addedAt: string;
+  /**
+   * Where the recruiter was standing when they pooled this person. Nullable
+   * because the pool outlives the campaign that filled it — a hard-deleted
+   * campaign nulls the reference rather than taking the entry with it.
+   */
+  sourceApplicationId: string | null;
+  sourceCampaignId: string | null;
+  sourceCampaignTitle: string | null;
+  /**
+   * Best score this person reached at ANY stage of ANY application.
+   *
+   * A deliberate exception to "no composite master score": this is not a rollup
+   * used to decide anything — it is a search axis over history, and "show me
+   * everyone who ever scored above 80" is the question 3.11.2 actually asks.
+   * The stage-specific evidence is one click away on the candidate page.
+   */
+  bestScore: number | null;
+  /** Every campaign this person applied to — the "original campaign" axis. */
+  campaigns: { id: string; title: string }[];
+}
+
+/** The 3.11.2 filter set. Every field optional; unfiltered is the default view. */
+export interface TalentPoolFilters {
+  /** Free text across name, email, headline, skills, tags and notes. */
+  query: string;
+  /** Tags that must ALL be present — tags narrow, they do not widen. */
+  tags: string[];
+  campaignId: string | null;
+  minScore: number | null;
+  maxScore: number | null;
+  /** `YYYY-MM-DD`, inclusive on both ends. */
+  addedFrom: string | null;
+  addedTo: string | null;
+}
+
+export const EMPTY_TALENT_POOL_FILTERS: TalentPoolFilters = {
+  query: "",
+  tags: [],
+  campaignId: null,
+  minScore: null,
+  maxScore: null,
+  addedFrom: null,
+  addedTo: null,
+};

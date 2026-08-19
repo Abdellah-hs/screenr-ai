@@ -5,9 +5,11 @@ import { getCandidateById } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { getInterviewBooking } from "@/lib/actions/schedule";
 import { getInterviewSession } from "@/lib/actions/interview";
+import { getCandidatePoolState } from "@/lib/actions/talent-pool";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import { ManagerReviewPanel } from "@/components/candidates/manager-review-panel";
+import { TalentPoolButton } from "@/components/candidates/talent-pool-button";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import InterviewTranscript from "@/components/candidates/interview-transcript";
 import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
@@ -341,7 +343,7 @@ export default async function CandidateDetailPage({
     notFound();
   }
 
-  const [campaign, candidate, screeningState, resumeCriteriaCount, booking, interviewSession] =
+  const [campaign, candidate, screeningState, resumeCriteriaCount, booking, interviewSession, poolState] =
     await Promise.all([
       getCampaignById(id),
       getCandidateById(candidateId),
@@ -353,6 +355,14 @@ export default async function CandidateDetailPage({
       getResumeCriteriaCount(id).catch(() => 0),
       getInterviewBooking(candidateId).catch(() => null),
       getInterviewSession(candidateId).catch(() => null),
+      // Best-effort: the pool is a side note on this page, and a failure here
+      // must not take the candidate record down with it.
+      getCandidatePoolState(candidateId).catch(() => ({
+        pooled: false,
+        entryId: null,
+        tags: [] as string[],
+        notes: "",
+      })),
     ]);
 
   const hasResumeCriteria = resumeCriteriaCount > 0;
@@ -425,6 +435,11 @@ export default async function CandidateDetailPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <TalentPoolButton
+            applicationId={candidateId}
+            candidateName={candidate.name}
+            initialState={poolState}
+          />
           <Link
             href={`/campaigns/${id}/candidates`}
             className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#0C4A6E] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
