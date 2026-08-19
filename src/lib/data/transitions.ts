@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { TransitionRow } from "@/lib/rules/transition-timeline";
 import {
   APPLICATION_STATE_TRANSITIONS,
   requiresDisposition,
@@ -159,4 +160,37 @@ export async function transitionApplicationAsSystem(
     console.error("transition_application_system RPC failed:", error);
     throw new Error(`Transition failed: ${error.message}`);
   }
+}
+
+/**
+ * The full append-only history for one application, oldest-first.
+ *
+ * SELECT-only. RLS on `application_transitions` already scopes reads to the
+ * owning recruiter (the policy joins through applications → campaigns), and the
+ * action re-checks ownership before calling — the same belt-and-braces the rest
+ * of the data layer uses.
+ *
+ * Ordered ascending because the timeline reads as a story and override
+ * detection depends on the order: a recruiter action is only a reversal
+ * relative to what came *before* it.
+ */
+export async function fetchApplicationTimeline(
+  applicationId: string,
+): Promise<TransitionRow[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("application_transitions")
+    .select(
+      "id, from_state, to_state, actor, rationale, disposition_code, disposition_description, created_at",
+    )
+    .eq("application_id", applicationId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("fetchApplicationTimeline failed:", error);
+    throw new Error(`Failed to load candidate history: ${error.message}`);
+  }
+
+  return (data ?? []) as unknown as TransitionRow[];
 }

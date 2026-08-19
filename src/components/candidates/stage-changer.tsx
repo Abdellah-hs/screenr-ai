@@ -2,7 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
-import { type ApplicationState } from "@/lib/constants";
+import {
+  formatApplicationState as formatStateLabel,
+  type ApplicationState,
+} from "@/lib/constants";
 import { recruiterStageOptions } from "@/lib/rules/manual-stage-change";
 import { Modal, ModalFooter, ModalHeader, Textarea } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -12,14 +15,6 @@ const FAILURE_STATES: ApplicationState[] = [
   "interview_no_show",
   "processing_failed",
 ];
-
-/** Turns a canonical enum value into a human label: `screening_approved` → "Screening Approved". */
-function formatStateLabel(state: ApplicationState): string {
-  return state
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
 
 /** Chip colour by state category — negative outcomes red, hired green, idle grey, in-progress sky. */
 function stateTone(state: ApplicationState): string {

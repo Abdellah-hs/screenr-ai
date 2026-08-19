@@ -753,3 +753,30 @@ export const EMPTY_TALENT_POOL_FILTERS: TalentPoolFilters = {
   addedFrom: null,
   addedTo: null,
 };
+
+// ─── Application State Presentation ─────────────────────────────────────────
+
+/**
+ * A canonical enum value as a human label: `screening_approved` → "Screening
+ * Approved".
+ *
+ * Here rather than in a component because two of them now render state names
+ * (the stage changer and the activity timeline), and a candidate whose history
+ * spells a state differently from the control that set it reads as two
+ * different states.
+ */
+export function formatApplicationState(state: ApplicationState): string {
+  return state
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/** Who caused a transition, in the recruiter's words. */
+export const TRANSITION_ACTOR_LABELS: Record<TransitionActor, string> = {
+  // "Automated" rather than "System": from the recruiter's side the difference
+  // between a rule firing and a cron sweep firing is not one they can act on.
+  system: "Automated",
+  ai: "AI",
+  recruiter: "You",
+};
