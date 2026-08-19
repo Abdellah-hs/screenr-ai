@@ -12,6 +12,8 @@ export interface InterviewInviteEmailParams {
   campaignTitle: string;
   /** Token-gated /interview page where the candidate takes the AI interview. */
   interviewUrl: string;
+  /** Web prep-guide page (per the PRD this is a page, not a PDF). */
+  prepGuideUrl?: string;
   /** ISO deadline after which the link lapses. */
   expiresAt?: string;
   companyName?: string;
@@ -37,6 +39,7 @@ export function buildInterviewInviteEmail(params: InterviewInviteEmailParams): B
     candidateName,
     campaignTitle,
     interviewUrl,
+    prepGuideUrl,
     expiresAt,
     companyName = "the hiring team",
   } = params;
@@ -58,6 +61,13 @@ export function buildInterviewInviteEmail(params: InterviewInviteEmailParams): B
     `- Please use a desktop or laptop computer (not a phone).`,
     `- Find a quiet, well-lit space and set aside about ${INTERVIEW_DURATION_MINUTES} minutes.`,
     deadline ? `- Please complete it by ${deadline}.` : ``,
+    ...(prepGuideUrl
+      ? [
+          ``,
+          `Not sure what to expect? Read the prep guide first — it takes two minutes:`,
+          prepGuideUrl,
+        ]
+      : []),
     ``,
     `Thanks,`,
     `${companyName}`,
@@ -81,6 +91,13 @@ export function buildInterviewInviteEmail(params: InterviewInviteEmailParams): B
                   <li>Find a quiet, well-lit space and set aside about ${INTERVIEW_DURATION_MINUTES} minutes.</li>
                   ${deadline ? `<li>Please complete it by <strong>${escapeHtml(deadline)}</strong>.</li>` : ``}
                 </ul>
+                ${
+                  prepGuideUrl
+                    ? `<p style="margin:0 0 16px; font-size:15px; line-height:1.6;">
+                  Not sure what to expect? <a href="${escapeHtml(prepGuideUrl)}" style="color:#0369a1;">Read the prep guide</a> — it takes about two minutes.
+                </p>`
+                    : ``
+                }
                 <p style="margin:24px 0 0; font-size:15px; line-height:1.6;">
                   Thanks,<br>
                   ${escapeHtml(companyName)}

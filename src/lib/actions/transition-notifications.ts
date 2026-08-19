@@ -23,6 +23,7 @@ interface TransitionEmailContext {
   /** Token-gated /schedule link — present only for final_interview_scheduling. */
   scheduleUrl?: string;
   /** Token-gated /interview link + deadline — present only for interview_invited. */
+  prepGuideUrl?: string;
   interviewUrl?: string;
   interviewExpiresAt?: string;
 }
@@ -63,6 +64,7 @@ function buildTransitionEmail(
         candidateName: ctx.candidateName,
         campaignTitle: ctx.campaignTitle,
         interviewUrl: ctx.interviewUrl,
+        prepGuideUrl: ctx.prepGuideUrl,
         expiresAt: ctx.interviewExpiresAt,
       });
     case "final_interview_scheduling":
@@ -120,11 +122,15 @@ export async function sendTransitionNotification(
     // row to land on. Best-effort: a session-ensure failure must not block the
     // email (the candidate can still be re-invited).
     let interviewUrl: string | undefined;
+    let prepGuideUrl: string | undefined;
     let interviewExpiresAt: string | undefined;
     if (toState === "interview_invited") {
       const origin = await getRequestOrigin();
       const token = signResponseToken(applicationId, INTERVIEW_TOKEN_TTL_MS);
       interviewUrl = `${origin}/interview/${encodeURIComponent(token)}`;
+      // Same token, different page. The guide is read-only and transitions
+      // nothing, so it is safe to hand out on the same grant as the interview.
+      prepGuideUrl = `${origin}/prep/${encodeURIComponent(token)}`;
       const expiresAt = new Date(Date.now() + INTERVIEW_TOKEN_TTL_MS);
       interviewExpiresAt = expiresAt.toISOString();
       try {
@@ -142,6 +148,7 @@ export async function sendTransitionNotification(
       campaignTitle: ctx.campaignTitle,
       scheduleUrl,
       interviewUrl,
+      prepGuideUrl,
       interviewExpiresAt,
     });
     if (!email) return; // no notification configured for this state
