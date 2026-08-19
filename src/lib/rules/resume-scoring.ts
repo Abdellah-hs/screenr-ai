@@ -1,29 +1,8 @@
-import type { ScoreFactor, ApplicationState, AutomationMode, Disposition } from "@/lib/constants";
-
-/**
- * Shape of the AI's resume-scoring output. Defined here (not in the action
- * or service that produces it) because the rule layer owns the contract it
- * reads — that's what keeps AI advisory: the decisioner declares what
- * evidence it requires, producers conform.
- */
-export interface ResumeScoreResult {
-  overall_score: number;
-  tier: "strong" | "moderate" | "weak" | "no_match";
-  rationale: string;
-  factors: ScoreFactor[];
-}
-
-/**
- * One scoring criterion the rule reads — a resume-rubric dimension with its
- * per-dimension knockout fail line (`min_score`).
- */
-export interface ScoringCriterion {
-  id: string;
-  label: string;
-  weight: number;
-  is_mandatory: boolean;
-  min_score: number;
-}
+import type { ApplicationState, AutomationMode, Disposition } from "@/lib/constants";
+import type {
+  DeterministicResumeScoreResult,
+  ResumeCriterion,
+} from "@/lib/resume-scoring";
 
 /**
  * The campaign evidence this rule decides on. Owned by the rule layer — the
@@ -31,13 +10,17 @@ export interface ScoringCriterion {
  * produces a conforming object. Declaring it here (rather than deriving it from
  * the data function's return type) keeps the dependency arrow pointing
  * rules → constants only, never rules → data.
+ *
+ * `screening_threshold` now applies to the **ranking** score, which only exists
+ * for a candidate who already cleared every must-have. It is a bar on how good
+ * an eligible candidate is, never a way to become eligible.
  */
 export interface CampaignScoringConfig {
   id: string;
   description: string;
   automation_mode: AutomationMode;
   screening_threshold: number;
-  screening_criteria: ScoringCriterion[];
+  screening_criteria: ResumeCriterion[];
 }
 
 /**
@@ -60,63 +43,42 @@ export interface TransitionDescriptor {
 }
 
 /**
- * The mandatory-criteria knockout gate. Cross-references each `is_mandatory`
- * resume-rubric dimension against its paired factor score (factors are index-
- * aligned to dimensions per the scoring-prompt contract) and returns the
- * labels of every mandatory dimension scoring below its own `min_score` —
- * the per-dimension "fail line" the recruiter set in the rubric editor.
- *
- * A dimension with no paired factor (malformed AI output: fewer factors than
- * dimensions) is skipped rather than treated as a failure — we don't reject a
- * candidate on missing evidence. The overall-threshold check still applies.
- */
-function failedMandatoryCriteria(
-  result: ResumeScoreResult,
-  config: CampaignScoringConfig,
-): string[] {
-  return config.screening_criteria
-    .filter((criterion, i) => {
-      if (!criterion.is_mandatory) return false;
-      const factor = result.factors[i];
-      return factor !== undefined && factor.score < criterion.min_score;
-    })
-    .map((criterion) => criterion.label);
-}
-
-/**
- * Rule layer — reads persisted resume-score evidence and decides the next
+ * Rule layer — reads the deterministic resume evaluation and decides the next
  * transition. Pure function: never calls the AI, never touches the DB.
  *
- * The mandatory-criteria knockout gate runs FIRST, ahead of both the HITL and
- * threshold branches: a candidate who fails any Required criterion is a hard
- * fail in every mode — a high weighted overall must not mask a non-negotiable
- * miss. This is the rule branch that makes "Required" actually enforce
- * something instead of just shaping the AI narrative (CLAUDE.md: Control > AI).
+ * The must-have gate runs FIRST, ahead of both the HITL and threshold branches,
+ * and it is not a threshold — it is a different kind of check. A candidate
+ * missing a non-negotiable requirement is out in every automation mode, and no
+ * ranking number can reach back and change that, because ineligible candidates
+ * do not have one.
  *
  * Behaviour:
- *   - fail mandatory gate (any mode) → `rejected` (disposition LOW_SCORE).
- *   - human_in_loop: any score        → `screening_review_pending` so a
- *                    recruiter reviews before the application advances.
- *   - fully_auto:    pass threshold → `screening_approved`; else → `rejected`.
+ *   - ineligible (any mode) → `rejected` (disposition LOW_SCORE).
+ *   - human_in_loop        → `screening_review_pending` so a recruiter reviews
+ *                            before the application advances.
+ *   - fully_auto           → ranking ≥ threshold → `screening_approved`;
+ *                            else → `rejected`.
  */
 export function evaluateResumeScoringOutcome(
-  result: ResumeScoreResult,
+  result: DeterministicResumeScoreResult,
   config: CampaignScoringConfig,
 ): TransitionDescriptor {
-  const scoreLine = `Resume score ${result.overall_score} vs threshold ${config.screening_threshold}`;
-
-  const failedRequired = failedMandatoryCriteria(result, config);
-  if (failedRequired.length > 0) {
-    const failedList = failedRequired.join(", ");
+  if (!result.eligible) {
+    const failedList = result.failed_must_haves.map((f) => f.criterion_label).join(", ");
     return {
       toState: "rejected",
-      rationale: `${scoreLine} — failed required criteria below their min_score: ${failedList}`,
+      rationale: `Ineligible — failed must-have criteria: ${failedList}`,
       disposition: {
         code: "LOW_SCORE",
-        description: `Failed required criteria: ${failedList}`,
+        description: `Failed must-have criteria: ${failedList}`,
       },
     };
   }
+
+  // Eligible always carries a ranking score by construction
+  // (`calculateNiceToHaveRanking`); the fallback only keeps this total.
+  const ranking = result.ranking_score ?? 0;
+  const scoreLine = `Eligible — ranking score ${ranking} vs threshold ${config.screening_threshold}`;
 
   if (config.automation_mode === "human_in_loop") {
     return {
@@ -125,7 +87,7 @@ export function evaluateResumeScoringOutcome(
     };
   }
 
-  if (result.overall_score >= config.screening_threshold) {
+  if (ranking >= config.screening_threshold) {
     return {
       toState: "screening_approved",
       rationale: `${scoreLine} — passed`,
@@ -137,7 +99,7 @@ export function evaluateResumeScoringOutcome(
     rationale: `${scoreLine} — below threshold`,
     disposition: {
       code: "LOW_SCORE",
-      description: `Resume scored ${result.overall_score}, threshold ${config.screening_threshold}`,
+      description: `Met every must-have but ranked ${ranking}, below the campaign threshold of ${config.screening_threshold}`,
     },
   };
 }

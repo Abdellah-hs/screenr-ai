@@ -6,6 +6,7 @@ import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
 import { AUTO_ARCHIVABLE_STATES } from "@/lib/rules/auto-archive";
+import type { DeterministicResumeScoreResult } from "@/lib/resume-scoring";
 import type {
   ApplicationState,
   AutomationMode,
@@ -21,7 +22,6 @@ import {
 } from "@/lib/data/duplicate-flags";
 
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
-type ScreeningTierEnum = Database["public"]["Enums"]["screening_tier_enum"];
 
 export async function uploadResumeToStorage(campaignId: string, filename: string, fileBuffer: Buffer, db?: SupabaseDb): Promise<string> {
   const supabase = db ?? (await createClient());
@@ -351,6 +351,8 @@ export interface ResumeScoreAuditFields {
   promptVersion: string;
   rawOutput: string;
   inputSnapshot: Json;
+  /** OpenAI backend fingerprint, when the API returned one. */
+  systemFingerprint?: string | null;
 }
 
 /**
@@ -372,10 +374,9 @@ export async function saveResumeScore(args: {
   applicationId: string;
   campaignId: string;
   candidateId: string;
-  score: number;
-  tier: ScreeningTierEnum;
+  /** The deterministic evaluation — the whole auditable result. */
+  result: DeterministicResumeScoreResult;
   rationale: string;
-  factors: { name: string; weight: number; score: number }[];
   rubricVersion: number | null;
   audit: ResumeScoreAuditFields;
 }, db?: SupabaseDb) {
@@ -384,10 +385,19 @@ export async function saveResumeScore(args: {
   const { error: updateError, data: updateData } = await supabase
     .from("applications")
     .update({
-      resume_score: args.score,
-      screening_tier: args.tier,
+      // Null for an ineligible candidate: there is no ranking score to record,
+      // and writing a low number would let a failed gate be read as a near
+      // miss. `scored_at` is what says scoring has run.
+      resume_score: args.result.ranking_score,
+      resume_eligible: args.result.eligible,
+      resume_evaluation: args.result as unknown as Json,
+      screening_tier: args.result.tier,
       score_rationale: args.rationale,
-      score_factors: args.factors as unknown as Json,
+      // The legacy weighted-factor breakdown is superseded by
+      // `resume_evaluation`. Cleared rather than left behind, so a re-scored
+      // application cannot render last run's weights next to this run's
+      // verdict.
+      score_factors: null,
       rubric_version: args.rubricVersion,
       scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -412,9 +422,9 @@ export async function saveResumeScore(args: {
     rubric_version: args.rubricVersion != null ? String(args.rubricVersion) : null,
     input_snapshot: args.audit.inputSnapshot,
     raw_output: args.audit.rawOutput,
-    parsed_score: args.score,
+    parsed_score: args.result.ranking_score,
     rationale: args.rationale,
-    action_taken: "scored",
+    action_taken: args.result.eligible ? "scored_eligible" : "scored_ineligible",
   });
 
   if (auditError) {

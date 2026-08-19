@@ -6,17 +6,12 @@ vi.mock("@/lib/data/candidates", () => ({
   upsertCandidate: vi.fn(),
   createApplicationIfNotExists: vi.fn(),
   logAiAudit: vi.fn(),
-  saveResumeScore: vi.fn(),
-}));
-vi.mock("@/lib/data/campaigns", () => ({
-  fetchCampaignScoringConfig: vi.fn(),
-  fetchActiveRubricVersion: vi.fn(),
 }));
 vi.mock("@/lib/services/marker", () => ({ extractMarkdownWithMarker: vi.fn() }));
-vi.mock("@/lib/services/openai", () => ({
-  extractResumeData: vi.fn(),
-  scoreResumeAgainstCriteria: vi.fn(),
-}));
+vi.mock("@/lib/services/openai", () => ({ extractResumeData: vi.fn() }));
+// The evaluation pipeline has its own tests; here it is a seam, so this file
+// stays about ingest — classify, upload, upsert, and advance on the decision.
+vi.mock("@/lib/resume-ingest/score-resume", () => ({ evaluateApplicationResume: vi.fn() }));
 vi.mock("@/lib/rules/resume-scoring", () => ({ evaluateResumeScoringOutcome: vi.fn() }));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplicationAsSystem: vi.fn() }));
 
@@ -26,14 +21,10 @@ import {
   upsertCandidate,
   createApplicationIfNotExists,
   logAiAudit,
-  saveResumeScore,
 } from "@/lib/data/candidates";
-import {
-  fetchCampaignScoringConfig,
-  fetchActiveRubricVersion,
-} from "@/lib/data/campaigns";
 import { extractMarkdownWithMarker } from "@/lib/services/marker";
-import { extractResumeData, scoreResumeAgainstCriteria } from "@/lib/services/openai";
+import { extractResumeData } from "@/lib/services/openai";
+import { evaluateApplicationResume } from "@/lib/resume-ingest/score-resume";
 import { evaluateResumeScoringOutcome } from "@/lib/rules/resume-scoring";
 import { transitionApplicationAsSystem } from "@/lib/data/transitions";
 
@@ -41,12 +32,9 @@ const mockUpload = vi.mocked(uploadResumeToStorage);
 const mockUpsert = vi.mocked(upsertCandidate);
 const mockCreateApp = vi.mocked(createApplicationIfNotExists);
 const mockAudit = vi.mocked(logAiAudit);
-const mockSaveScore = vi.mocked(saveResumeScore);
-const mockFetchConfig = vi.mocked(fetchCampaignScoringConfig);
-const mockFetchRubric = vi.mocked(fetchActiveRubricVersion);
+const mockEvaluateResume = vi.mocked(evaluateApplicationResume);
 const mockExtractMarkdown = vi.mocked(extractMarkdownWithMarker);
 const mockExtractData = vi.mocked(extractResumeData);
-const mockScore = vi.mocked(scoreResumeAgainstCriteria);
 const mockEvaluate = vi.mocked(evaluateResumeScoringOutcome);
 const mockTransition = vi.mocked(transitionApplicationAsSystem);
 
@@ -98,22 +86,24 @@ beforeEach(() => {
   mockCreateApp.mockResolvedValue("app-1");
   mockAudit.mockResolvedValue(undefined as never);
 
-  mockFetchConfig.mockResolvedValue({
-    id: "camp-1",
-    description: "Backend engineer",
-    automation_mode: "fully_auto",
-    screening_threshold: 70,
-    screening_criteria: [{ id: "d1", label: "React", weight: 1, is_mandatory: true, min_score: 50 }],
-  });
-  mockFetchRubric.mockResolvedValue(1);
-  mockScore.mockResolvedValue({
-    result: { overall_score: 80, tier: "strong", rationale: "Good", factors: [{ name: "React", weight: 1, score: 80 }] },
-    rawOutput: "{}",
-    model: "gpt-4o-mini",
-    promptVersion: "v1",
+  mockEvaluateResume.mockResolvedValue({
+    result: {
+      eligible: true,
+      ranking_score: 80,
+      tier: "eligible",
+      criteria: [],
+      failed_must_haves: [],
+      validation_warnings: [],
+    },
+    config: {
+      id: "camp-1",
+      description: "Backend engineer",
+      automation_mode: "fully_auto",
+      screening_threshold: 70,
+      screening_criteria: [{ id: "d1", label: "React", priority: "must_have" }],
+    },
   });
   mockEvaluate.mockReturnValue({ toState: "screening_approved", rationale: "passed" });
-  mockSaveScore.mockResolvedValue(undefined);
   mockTransition.mockResolvedValue(undefined);
 });
 
@@ -228,22 +218,33 @@ describe("ingestResumeDocument", () => {
     );
   });
 
-  it("ingests without scoring when the campaign has no criteria", async () => {
-    mockFetchConfig.mockResolvedValue(null);
+  it("ingests without advancing when the campaign has no criteria", async () => {
+    mockEvaluateResume.mockResolvedValue(null);
 
     const result = await ingestResumeDocument(args());
 
     expect(result).toEqual({ outcome: "ingested", applicationId: "app-1" });
-    expect(mockScore).not.toHaveBeenCalled();
     expect(mockTransition).not.toHaveBeenCalled();
   });
 
   it("still reports ingested when scoring fails (best-effort, non-blocking)", async () => {
-    mockScore.mockRejectedValue(new Error("openai down"));
+    mockEvaluateResume.mockRejectedValue(new Error("openai down"));
 
     const result = await ingestResumeDocument(args());
 
     expect(result).toEqual({ outcome: "ingested", applicationId: "app-1" });
     expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it("hands the extracted resume text to the evaluator so quotes can be verified", async () => {
+    await ingestResumeDocument(args());
+
+    expect(mockEvaluateResume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: "app-1",
+        campaignId: "camp-1",
+        rawResumeText: expect.any(String),
+      }),
+    );
   });
 });

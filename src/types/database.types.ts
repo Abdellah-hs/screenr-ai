@@ -162,6 +162,8 @@ export type Database = {
           interview_score: number | null
           parsed_data: Json | null
           rejection_reason: string | null
+          resume_eligible: boolean | null
+          resume_evaluation: Json | null
           resume_score: number | null
           resume_url: string | null
           rubric_version: number | null
@@ -183,6 +185,8 @@ export type Database = {
           interview_score?: number | null
           parsed_data?: Json | null
           rejection_reason?: string | null
+          resume_eligible?: boolean | null
+          resume_evaluation?: Json | null
           resume_score?: number | null
           resume_url?: string | null
           rubric_version?: number | null
@@ -204,6 +208,8 @@ export type Database = {
           interview_score?: number | null
           parsed_data?: Json | null
           rejection_reason?: string | null
+          resume_eligible?: boolean | null
+          resume_evaluation?: Json | null
           resume_score?: number | null
           resume_url?: string | null
           rubric_version?: number | null
@@ -742,6 +748,56 @@ export type Database = {
           },
         ]
       }
+      resume_evidence_cache: {
+        Row: {
+          cache_key: string
+          campaign_id: string
+          created_at: string
+          extracted_evidence: Json
+          model: string
+          prompt_version: string
+          raw_model_output: string
+          resume_text_hash: string
+          rubric_version: number | null
+          rules_version: string
+          system_fingerprint: string | null
+        }
+        Insert: {
+          cache_key: string
+          campaign_id: string
+          created_at?: string
+          extracted_evidence: Json
+          model: string
+          prompt_version: string
+          raw_model_output: string
+          resume_text_hash: string
+          rubric_version?: number | null
+          rules_version: string
+          system_fingerprint?: string | null
+        }
+        Update: {
+          cache_key?: string
+          campaign_id?: string
+          created_at?: string
+          extracted_evidence?: Json
+          model?: string
+          prompt_version?: string
+          raw_model_output?: string
+          resume_text_hash?: string
+          rubric_version?: number | null
+          rules_version?: string
+          system_fingerprint?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "resume_evidence_cache_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rubric_dimensions: {
         Row: {
           created_at: string
@@ -1119,7 +1175,13 @@ export type Database = {
         | "responded"
         | "scored"
         | "expired"
-      screening_tier_enum: "strong" | "moderate" | "weak" | "no_match"
+      screening_tier_enum:
+        | "strong"
+        | "moderate"
+        | "weak"
+        | "no_match"
+        | "eligible"
+        | "ineligible"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1298,7 +1360,14 @@ export const Constants = {
         "scored",
         "expired",
       ],
-      screening_tier_enum: ["strong", "moderate", "weak", "no_match"],
+      screening_tier_enum: [
+        "strong",
+        "moderate",
+        "weak",
+        "no_match",
+        "eligible",
+        "ineligible",
+      ],
     },
   },
 } as const

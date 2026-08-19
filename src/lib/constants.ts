@@ -1,3 +1,5 @@
+import type { DeterministicResumeScoreResult } from "@/lib/resume-scoring/deterministic";
+
 // ─── Campaign Types ──────────────────────────────────────────────────────────
 
 export type CampaignStatus = "draft" | "active" | "paused" | "closed";
@@ -285,7 +287,22 @@ export const INTERVIEW_TARGET_QUESTIONS = 5;
 // ─── Candidate Types ────────────────────────────────────────────────────────
 
 export type CandidateStage = "applied" | "screening" | "interview" | "final_interview" | "hired" | "rejected";
-export type ScreeningTier = "strong" | "moderate" | "weak" | "no_match";
+/**
+ * The band shown next to a stage score.
+ *
+ * Two vocabularies live here on purpose. Resume screening now returns
+ * `eligible` / `ineligible`, because a must-have gate has no middle: calling
+ * someone who missed a non-negotiable requirement "moderate" invites an
+ * argument about the gate. The four graded values remain for stages that really
+ * are a scale, and for the history already stored under them.
+ */
+export type ScreeningTier =
+  | "strong"
+  | "moderate"
+  | "weak"
+  | "no_match"
+  | "eligible"
+  | "ineligible";
 
 export interface ScoreFactor {
   name: string;
@@ -295,10 +312,22 @@ export interface ScoreFactor {
 
 export interface CandidateScore {
   stage: "resume" | "screening" | "interview";
-  overall: number;
+  /**
+   * Null for an ineligible resume: they failed a must-have, so there is no
+   * ranking score. A number here would be read as "how close they were", which
+   * is the comparison a gate exists to refuse.
+   */
+  overall: number | null;
   tier?: ScreeningTier;
   ai_summary: string;
+  /** Legacy weighted breakdown. Present only on scores from before #? evidence screening. */
   factors: ScoreFactor[];
+  /**
+   * The evidence-based resume evaluation: per-criterion levels, verified quotes,
+   * and every failed must-have. Null for screening/interview scores and for
+   * resume scores produced by the old weighted scorer.
+   */
+  evaluation: DeterministicResumeScoreResult | null;
   scored_at: string;
   /**
    * Version of the stage's evaluation_rubric active when this score was
@@ -382,6 +411,8 @@ export const TIER_COLORS: Record<ScreeningTier, string> = {
   moderate: "bg-amber-100 text-amber-700",
   weak: "bg-red-100 text-red-700",
   no_match: "bg-red-200 text-red-800",
+  eligible: "bg-green-100 text-green-700",
+  ineligible: "bg-red-100 text-red-700",
 };
 
 /**
@@ -398,6 +429,8 @@ export const TIER_LABELS: Record<ScreeningTier, string> = {
   moderate: "Potential Match",
   weak: "Weak",
   no_match: "No Match",
+  eligible: "Eligible",
+  ineligible: "Ineligible",
 };
 
 export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "final_interview", "hired"];
@@ -670,7 +703,7 @@ export interface TalentPoolApplication {
   campaignRemoved: boolean;
   stage: CandidateStage;
   /** Stage-appropriate score (resume/screening/…), or null if none yet. */
-  score: { overall: number; stage: CandidateScore["stage"]; tier: ScreeningTier | null } | null;
+  score: { overall: number | null; stage: CandidateScore["stage"]; tier: ScreeningTier | null } | null;
   appliedAt: string;
 }
 

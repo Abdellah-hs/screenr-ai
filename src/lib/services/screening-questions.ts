@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { ScreeningCriterion } from "@/lib/constants";
+import type { ResumeCriterion } from "@/lib/resume-scoring";
 import type { VoiceTranscriptTurn } from "@/lib/data/screening-questions";
 import { isGrounded, locateEvidence } from "@/lib/scoring/evidence";
 
@@ -12,7 +12,7 @@ export interface GeneratedScreeningQuestion {
 
 export async function generateQuestionsForRole(params: {
   jobDescription: string;
-  screeningCriteria: ScreeningCriterion[];
+  screeningCriteria: Pick<ResumeCriterion, "label" | "priority">[];
   count?: number;
 }): Promise<GeneratedScreeningQuestion[]> {
   if (!process.env.OPENAI_API_KEY) {
@@ -22,7 +22,7 @@ export async function generateQuestionsForRole(params: {
   const { jobDescription, screeningCriteria, count = 5 } = params;
 
   const criteriaList = screeningCriteria
-    .map((c) => `- ${c.label} (weight: ${c.weight}, mandatory: ${c.is_mandatory})`)
+    .map((c) => `- ${c.label} (${c.priority === "must_have" ? "must-have" : "nice-to-have"})`)
     .join("\n");
 
   const response = await openai.chat.completions.create({
@@ -46,8 +46,8 @@ Rules:
 - Each prompt is a single clear question (no multi-part stacked questions)
 - Each prompt is 1-2 sentences, phrased in second person ("Tell us about...", "Describe a time when...")
 - Avoid yes/no questions — every question must invite a written narrative answer
-- Cover the mandatory screening criteria explicitly; touch the high-weight non-mandatory ones when possible
-- Mark at least half the questions as required (the ones tied to mandatory criteria)
+- Cover every must-have criterion explicitly; touch the nice-to-have ones when there is room
+- Mark at least half the questions as required (the ones tied to must-have criteria)
 - Do not ask for information already on a typical resume (work history, job titles, dates)`,
       },
       {
