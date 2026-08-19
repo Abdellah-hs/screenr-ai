@@ -6,10 +6,12 @@ import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { getInterviewBooking } from "@/lib/actions/schedule";
 import { getInterviewSession } from "@/lib/actions/interview";
 import { getCandidatePoolState } from "@/lib/actions/talent-pool";
+import { getCandidateTimeline } from "@/lib/actions/timeline";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import { ManagerReviewPanel } from "@/components/candidates/manager-review-panel";
 import { TalentPoolButton } from "@/components/candidates/talent-pool-button";
+import { ActivityTimelinePanel } from "@/components/candidates/activity-timeline";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import InterviewTranscript from "@/components/candidates/interview-transcript";
 import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
@@ -343,7 +345,7 @@ export default async function CandidateDetailPage({
     notFound();
   }
 
-  const [campaign, candidate, screeningState, resumeCriteriaCount, booking, interviewSession, poolState] =
+  const [campaign, candidate, screeningState, resumeCriteriaCount, booking, interviewSession, poolState, timeline] =
     await Promise.all([
       getCampaignById(id),
       getCandidateById(candidateId),
@@ -362,6 +364,12 @@ export default async function CandidateDetailPage({
         entryId: null,
         tags: [] as string[],
         notes: "",
+      })),
+      // Same posture: the history is the compliance record, but failing to read
+      // it must not hide the candidate it belongs to.
+      getCandidateTimeline(candidateId).catch(() => ({
+        entries: [],
+        hoursInCurrentState: null,
       })),
     ]);
 
@@ -842,6 +850,11 @@ export default async function CandidateDetailPage({
               />
             ))
           )}
+
+          {/* Below the evidence, above the decision: the history is context for
+              the judgement, and the panel that asks for that judgement stays
+              last. */}
+          <ActivityTimelinePanel timeline={timeline} />
 
           {/* Last in the column on purpose: the panel asks the manager to judge
               the evidence, so it sits below all of it rather than above. */}
