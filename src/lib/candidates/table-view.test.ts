@@ -179,10 +179,10 @@ describe("selectCandidates — sorting", () => {
       {
         stage: "screening" as const,
         overall,
-        tier: null,
+        // `tier` is optional and never null on the domain type — omitted.
         ai_summary: "",
         factors: [],
-        scored_at: null,
+        scored_at: "2026-08-10T09:00:00.000Z",
         rubric_version: null,
         current_rubric_version: null,
       },
