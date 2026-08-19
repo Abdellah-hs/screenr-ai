@@ -3,10 +3,16 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { pipelineDisplayScore, TIER_LABELS } from "@/lib/constants";
+import {
+  candidateStageCounts,
+  selectCandidates,
+  type CandidateSortField,
+} from "@/lib/candidates/table-view";
 import type {
   Candidate,
   CandidateScore,
   CandidateStage,
+  SlaBreachLevel,
 } from "@/lib/constants";
 import {
   ALL_FUNNEL_STAGE,
@@ -40,7 +46,19 @@ const stageLabels: Record<CandidateStage, string> = {
   rejected: "Rejected",
 };
 
-type SortField = "name" | "applied_at" | "score";
+type SortField = CandidateSortField;
+
+/**
+ * The overdue badge, styled by how far past the SLA the application is.
+ *
+ * Amber for an alert, red for an escalation — the same two-tone split the
+ * notification bell uses, so a recruiter who saw red in the bell finds red in
+ * the row rather than having to re-read the severity.
+ */
+const slaBadgeStyles: Record<SlaBreachLevel, string> = {
+  alert: "text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]",
+  escalation: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
+};
 
 // Short tags shown next to the score so a number is never mistaken for a stage
 // it didn't come from (the pipeline used to always show the resume score). The
@@ -55,32 +73,28 @@ export default function CandidateTable({
   candidates,
   campaignId,
   initialFilter = "all",
+  initialOverdue = false,
 }: {
   candidates: Candidate[];
   campaignId: string;
   /** Seeds the stage pill selection, e.g. from a `?stage=` deep link. */
   initialFilter?: string;
+  /** Seeds the overdue narrowing, from the bell's `?overdue=1` deep link. */
+  initialOverdue?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState<string>(initialFilter);
-  const [sortBy, setSortBy] = useState<SortField>("applied_at");
+  // Orthogonal to the stage pills rather than a pill of its own: an SLA breach
+  // is a property of an application *within* a stage, and the bell counts them
+  // per stage. Making it a pill would force "overdue in screening" to be
+  // expressed as two mutually exclusive selections.
+  const [overdueOnly, setOverdueOnly] = useState(initialOverdue);
+  const [sortBy, setSortBy] = useState<SortField>(
+    // Arriving from the bell, the useful order is worst-first.
+    initialOverdue ? "stage_age" : "applied_at",
+  );
 
-  const stageCounts = useMemo(() => {
-    const counts: Record<string, number> = {
-      all: candidates.length,
-      pending_review: 0,
-      archived: 0,
-    };
-    for (const c of candidates) {
-      counts[c.stage] = (counts[c.stage] || 0) + 1;
-      if (c.awaiting_human_review) counts.pending_review += 1;
-      if (c.is_archived) counts.archived += 1;
-    }
-    // Archived candidates sit in the `rejected` coarse bucket but get their
-    // own pill, so subtract them out to keep the two groups disjoint.
-    counts.rejected = (counts.rejected ?? 0) - counts.archived;
-    return counts;
-  }, [candidates]);
+  const stageCounts = useMemo(() => candidateStageCounts(candidates), [candidates]);
 
   // The "Pending review" banner (and its filter) only exist while candidates
   // are actually awaiting review. Once the queue empties the banner disappears,
@@ -88,6 +102,14 @@ export default function CandidateTable({
   // in effectiveFilter below) to avoid stranding the user on a hidden state.
   const pendingCount = stageCounts.pending_review ?? 0;
   const showPendingReview = pendingCount > 0;
+
+  // Counted across the whole campaign, not the current pill, so the number here
+  // matches the one in the notification bell.
+  const overdueCount = stageCounts.overdue ?? 0;
+  const showOverdue = overdueCount > 0;
+  // A campaign with no SLA timers, or one whose breaches have all been
+  // resolved, must not strand the user on an empty filtered list.
+  const overdueActive = overdueOnly && showOverdue;
   // Only surface the Archived group when there's something in it, so the pill
   // row stays quiet for campaigns that never archive anyone.
   const showArchived = stageCounts.archived > 0;
@@ -102,8 +124,13 @@ export default function CandidateTable({
   // only when a specific stage (or pending review) is selected, where every
   // visible row shares the same stage and the scores are comparable.
   const showScore = effectiveFilter !== "all";
-  const effectiveSort: SortField =
-    !showScore && sortBy === "score" ? "applied_at" : sortBy;
+  const effectiveSort: SortField = (() => {
+    if (!showScore && sortBy === "score") return "applied_at";
+    // "Longest in stage" is only offered where an SLA exists to make it mean
+    // something; falling back keeps a stale selection from silently reordering.
+    if (!showOverdue && sortBy === "stage_age") return "applied_at";
+    return sortBy;
+  })();
 
   // Funnel cards: an "All" reset card, the forward stages, then the terminal
   // Archived bucket (only when it has anyone).
@@ -112,43 +139,16 @@ export default function CandidateTable({
     : FUNNEL_STAGES;
   const funnelStages = [ALL_FUNNEL_STAGE, ...stageCards];
 
-  const filtered = useMemo(() => {
-    return candidates
-      .filter((c) => {
-        if (effectiveFilter === "pending_review") {
-          if (!c.awaiting_human_review) return false;
-        } else if (effectiveFilter === "archived") {
-          if (!c.is_archived) return false;
-        } else if (effectiveFilter === "rejected") {
-          // Rejected and Archived are disjoint groups — archived rows are
-          // filed under their own pill, not here.
-          if (c.stage !== "rejected" || c.is_archived) return false;
-        } else if (effectiveFilter !== "all" && c.stage !== effectiveFilter) {
-          return false;
-        }
-        if (search) {
-          const q = search.toLowerCase();
-          return (
-            c.name.toLowerCase().includes(q) ||
-            c.email.toLowerCase().includes(q) ||
-            (c.current_title ?? "").toLowerCase().includes(q) ||
-            (c.current_company ?? "").toLowerCase().includes(q)
-          );
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        if (effectiveSort === "name") return a.name.localeCompare(b.name);
-        if (effectiveSort === "score") {
-          const sa = pipelineDisplayScore(a)?.overall ?? 0;
-          const sb = pipelineDisplayScore(b)?.overall ?? 0;
-          return sb - sa;
-        }
-        return (
-          new Date(b.applied_at).getTime() - new Date(a.applied_at).getTime()
-        );
-      });
-  }, [candidates, search, effectiveFilter, effectiveSort]);
+  const filtered = useMemo(
+    () =>
+      selectCandidates(candidates, {
+        search,
+        stageFilter: effectiveFilter,
+        overdueOnly: overdueActive,
+        sort: effectiveSort,
+      }),
+    [candidates, search, effectiveFilter, effectiveSort, overdueActive],
+  );
 
   return (
     <div className="space-y-4">
@@ -205,6 +205,42 @@ export default function CandidateTable({
         </button>
       )}
 
+      {/* Overdue — the SLA counterpart to the pending-review banner. Narrows
+          the list to breaching applications on top of whatever stage pill is
+          selected, so "overdue in Screening" is one click plus one pill. */}
+      {showOverdue && (
+        <button
+          type="button"
+          onClick={() => setOverdueOnly((v) => !v)}
+          aria-pressed={overdueActive}
+          className={`flex w-full items-center justify-between gap-3 rounded-lg border border-[#FECACA] px-4 py-2.5 text-left transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#DC2626] focus-visible:ring-offset-1 ${
+            overdueActive ? "bg-[#FEE2E2]" : "bg-[#FEF2F2] hover:bg-[#FEE2E2]"
+          }`}
+        >
+          <span className="flex items-center gap-2 text-sm font-medium text-[#991B1B]">
+            <svg
+              className="h-4 w-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            {overdueCount} candidate{overdueCount === 1 ? " is" : "s are"} past
+            the stage SLA
+          </span>
+          <span className="text-xs font-medium text-[#B91C1C]">
+            {overdueActive ? "Clear filter" : "View →"}
+          </span>
+        </button>
+      )}
+
       {/* Search + Sort */}
       <div className="flex flex-col sm:flex-row items-center gap-3">
         <div className="relative w-full sm:max-w-sm">
@@ -238,6 +274,9 @@ export default function CandidateTable({
           <option value="applied_at">Sort by Newest</option>
           <option value="name">Sort A-Z</option>
           {showScore && <option value="score">Sort by Score</option>}
+          {showOverdue && (
+            <option value="stage_age">Sort by Longest in stage</option>
+          )}
         </select>
       </div>
 
@@ -333,6 +372,24 @@ export default function CandidateTable({
                           {candidate.awaiting_human_review && (
                             <span className="inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]">
                               Pending review
+                            </span>
+                          )}
+                          {candidate.sla && (
+                            <span
+                              title={`${candidate.sla.hours} hours in this stage — past the ${
+                                candidate.sla.level === "escalation"
+                                  ? "escalation"
+                                  : "alert"
+                              } threshold`}
+                              className={`inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md ${
+                                slaBadgeStyles[candidate.sla.level]
+                              }`}
+                            >
+                              {/* The word, not just the colour — colour alone
+                                  is not an indicator. */}
+                              {candidate.sla.level === "escalation"
+                                ? "Overdue · escalated"
+                                : "Overdue"}
                             </span>
                           )}
                         </div>

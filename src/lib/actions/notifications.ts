@@ -31,6 +31,7 @@ export async function getRecruiterNotifications(): Promise<RecruiterNotification
     campaignId: b.campaign_id,
     campaignTitle: b.campaign_title,
     count: b.count,
+    stage: b.stage,
     stageLabel: b.stage_label,
     level: b.level,
   }));

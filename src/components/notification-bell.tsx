@@ -6,6 +6,7 @@ import { AnchoredMenu } from "@/components/ui";
 import {
   NotificationIcon,
   notificationCaption,
+  notificationHref,
   notificationSummary,
 } from "@/components/notification-item";
 import type { RecruiterNotification } from "@/lib/data/notifications";
@@ -138,7 +139,7 @@ export function NotificationBell({
             {visible.map((n) => (
               <li key={n.id}>
                 <Link
-                  href={`/campaigns/${n.campaignId}/candidates`}
+                  href={notificationHref(n)}
                   role="menuitem"
                   onClick={() => {
                     setOpen(false);

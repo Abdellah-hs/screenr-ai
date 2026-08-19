@@ -1,6 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { toCandidateStage, SLA_STAGES, type SlaStage, type SlaTimer } from "@/lib/constants";
-import { hoursInStage, slaBreachLevel, type SlaBreachLevel } from "@/lib/rules/sla";
+import {
+  applicationSlaStatus,
+  slaStageFor,
+  type SlaBreachLevel,
+} from "@/lib/rules/sla";
 
 export interface PendingReviewNotification {
   campaign_id: string;
@@ -38,6 +42,7 @@ export interface RecruiterNotification {
   campaignTitle: string;
   count: number;
   /** SLA only. */
+  stage?: SlaStage;
   stageLabel?: string;
   level?: SlaBreachLevel;
 }
@@ -242,25 +247,31 @@ export async function fetchSlaBreachNotifications(
   >();
   for (const app of appRows) {
     const bucket = toCandidateStage(app.status);
-    if (bucket === "hired" || bucket === "rejected") continue; // terminal — no SLA
+    const slaStage = slaStageFor(bucket); // null for terminal buckets — no SLA
+    if (!slaStage) continue;
 
     const campaign = byCampaign.get(app.campaign_id);
     if (!campaign) continue;
 
-    const level = slaBreachLevel(
-      bucket,
-      hoursInStage(app.updated_at, now),
-      campaign.timers,
-    );
-    if (!level) continue;
+    // Same predicate the candidate table's badge and Overdue filter use, so
+    // the count in the bell and the rows behind it can never disagree.
+    const status = applicationSlaStatus(bucket, app.updated_at, campaign.timers, now);
+    if (!status) continue;
 
-    const key = `${app.campaign_id}:${bucket}`;
+    const key = `${app.campaign_id}:${slaStage}`;
     const existing = grouped.get(key);
     if (existing) {
       existing.count += 1;
-      if (LEVEL_RANK[level] > LEVEL_RANK[existing.level]) existing.level = level;
+      if (LEVEL_RANK[status.level] > LEVEL_RANK[existing.level]) {
+        existing.level = status.level;
+      }
     } else {
-      grouped.set(key, { campaign_id: app.campaign_id, stage: bucket, level, count: 1 });
+      grouped.set(key, {
+        campaign_id: app.campaign_id,
+        stage: slaStage,
+        level: status.level,
+        count: 1,
+      });
     }
   }
 

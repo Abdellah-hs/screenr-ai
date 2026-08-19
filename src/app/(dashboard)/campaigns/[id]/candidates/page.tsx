@@ -22,9 +22,9 @@ export default async function CandidatesPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ stage?: string }>;
+  searchParams: Promise<{ stage?: string; overdue?: string }>;
 }) {
-  const [{ id }, { stage }] = await Promise.all([params, searchParams]);
+  const [{ id }, { stage, overdue }] = await Promise.all([params, searchParams]);
   // Malformed campaign id in the URL → 404 before touching the database.
   if (!uuidSchema.safeParse(id).success) notFound();
 
@@ -37,6 +37,7 @@ export default async function CandidatesPage({
   const candidates = await getCandidatesByCampaignId(id);
 
   const initialFilter = stage && VALID_FILTERS.has(stage) ? stage : "all";
+  const initialOverdue = overdue === "1";
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -71,10 +72,11 @@ export default async function CandidatesPage({
       </div>
 
       <CandidateTable
-        key={initialFilter}
+        key={`${initialFilter}:${initialOverdue}`}
         candidates={candidates}
         campaignId={id}
         initialFilter={initialFilter}
+        initialOverdue={initialOverdue}
       />
     </div>
   );

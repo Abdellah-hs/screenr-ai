@@ -83,3 +83,28 @@ function iconPath(kind: RecruiterNotification["kind"]): string {
   }
   return "M9 12.75L11.25 15 15 9.75m6 2.25a9 9 0 11-18 0 9 9 0 0118 0z";
 }
+
+/**
+ * Where a notification lands when tapped.
+ *
+ * Every kind used to link at the campaign's candidate list unfiltered, which
+ * meant the recruiter arrived at the whole pipeline and had to reconstruct by
+ * hand which four people the bell was talking about. Deep-linking hands them
+ * the same set the count was computed from.
+ *
+ * `interview_expired` and `awaiting_decision` stay unfiltered on purpose: the
+ * table's pills are coarse pipeline buckets, and neither of those states has a
+ * pill of its own — a link to `?stage=rejected` would be actively wrong for a
+ * candidate awaiting a decision.
+ */
+export function notificationHref(n: RecruiterNotification): string {
+  const base = `/campaigns/${n.campaignId}/candidates`;
+
+  if (n.kind === "sla_breach" && n.stage) {
+    return `${base}?overdue=1&stage=${n.stage}`;
+  }
+  if (n.kind === "pending_review") {
+    return `${base}?stage=pending_review`;
+  }
+  return base;
+}
