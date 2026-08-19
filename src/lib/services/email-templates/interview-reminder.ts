@@ -13,15 +13,19 @@ export interface InterviewReminderEmailParams {
   interviewAt: Date;
   /** Join link for the interview session. */
   joinUrl?: string;
+  /** IANA zone the slot was offered in, so the time reads as the candidate booked it. */
+  timeZone?: string | null;
   companyName?: string;
 }
 
 /**
- * Candidate reminder ahead of a scheduled interview (the 24h / 1h nudges).
+ * Candidate reminder ahead of a booked final interview (the 24h / 1h nudges),
+ * sent by `sweepInterviewReminders` on a schedule.
  *
- * NOT WIRED YET — reminders are time-triggered, which needs a scheduler/cron
- * that does not exist in the codebase. The template is ready so that wiring
- * it to a scheduled job later is a one-line change.
+ * One reminder is sent per pass at most — see `dueInterviewReminders` for which
+ * one and why. The wording is deliberately lead-agnostic ("coming up", not
+ * "tomorrow"), because a missed cron run means the 24h notice can land at 13
+ * hours out, and copy that names a time it can't guarantee reads as a mistake.
  */
 export function buildInterviewReminderEmail(
   params: InterviewReminderEmailParams,
@@ -31,10 +35,11 @@ export function buildInterviewReminderEmail(
     campaignTitle,
     interviewAt,
     joinUrl,
+    timeZone,
     companyName = "the hiring team",
   } = params;
   const firstName = firstNameOf(candidateName);
-  const when = formatDateTime(interviewAt);
+  const when = formatDateTime(interviewAt, timeZone);
 
   const subject = `Reminder: your ${campaignTitle} interview is coming up`;
 

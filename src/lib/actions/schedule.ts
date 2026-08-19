@@ -15,7 +15,7 @@ import {
   fetchBookingCalendarEventId,
   insertBooking,
   updateBooking,
-  setBookingCalendarEventId,
+  setBookingCalendarLink,
   BOOKING_STATUS_BOOKED,
   BOOKING_STATUS_PENDING_RESCHEDULE,
   type InterviewBooking,
@@ -319,11 +319,12 @@ export async function bookInterviewSlot(input: {
       timeZone: timezone,
     });
 
-    // Persist the event id so a later recruiter reschedule moves THIS event, and
-    // open a watch channel so we hear about those edits.
+    // Persist the event id so a later recruiter reschedule moves THIS event, the
+    // Meet link so the reminder emails can carry it, and open a watch channel so
+    // we hear about the recruiter's edits.
     if (eventId) {
       try {
-        await setBookingCalendarEventId(application_id, eventId, db);
+        await setBookingCalendarLink({ applicationId: application_id, eventId, meetUrl, db });
       } catch (err) {
         console.error(
           "Storing calendar event id failed:",
@@ -346,6 +347,7 @@ export async function bookInterviewSlot(input: {
         campaignTitle: ctx.campaign_title,
         interviewAt: new Date(match.startIso),
         meetUrl: meetUrl ?? undefined,
+        timeZone: timezone,
       });
       await sendEmail(gmail, {
         to: ctx.candidate_email,
@@ -441,9 +443,16 @@ export async function confirmRescheduledSlot(input: {
       timeZone: timezone,
     });
 
-    // The event id can change if we had to create a fresh event as a fallback.
-    if (eventId && eventId !== googleEventId) {
-      await setBookingCalendarEventId(application_id, eventId, db).catch((err) =>
+    // Written on every reschedule, not just when the event id changed (it can,
+    // if we had to create a fresh event as a fallback): the Meet link needs
+    // re-persisting either way, and the write is idempotent.
+    if (eventId) {
+      await setBookingCalendarLink({
+        applicationId: application_id,
+        eventId,
+        meetUrl,
+        db,
+      }).catch((err) =>
         console.error(
           "Storing rescheduled calendar event id failed:",
           err instanceof Error ? err.message : err,
@@ -458,6 +467,7 @@ export async function confirmRescheduledSlot(input: {
         campaignTitle: ctx.campaign_title,
         interviewAt: new Date(match.startIso),
         meetUrl: meetUrl ?? undefined,
+        timeZone: timezone,
       });
       await sendEmail(gmail, {
         to: ctx.candidate_email,

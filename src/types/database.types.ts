@@ -639,6 +639,9 @@ export type Database = {
           created_at: string
           google_event_id: string | null
           id: string
+          meet_url: string | null
+          reminder_1h_sent_at: string | null
+          reminder_24h_sent_at: string | null
           scheduled_at: string
           slot_minutes: number
           status: string
@@ -651,6 +654,9 @@ export type Database = {
           created_at?: string
           google_event_id?: string | null
           id?: string
+          meet_url?: string | null
+          reminder_1h_sent_at?: string | null
+          reminder_24h_sent_at?: string | null
           scheduled_at: string
           slot_minutes: number
           status?: string
@@ -663,6 +669,9 @@ export type Database = {
           created_at?: string
           google_event_id?: string | null
           id?: string
+          meet_url?: string | null
+          reminder_1h_sent_at?: string | null
+          reminder_24h_sent_at?: string | null
           scheduled_at?: string
           slot_minutes?: number
           status?: string
