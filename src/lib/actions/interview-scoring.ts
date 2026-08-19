@@ -88,6 +88,10 @@ export async function runInterviewScoring(
       name: d.name,
       score: d.score,
       rationale: d.rationale,
+      // The quote and its position are persisted, not just used to validate and
+      // dropped — a manager needs to reach the words behind the number.
+      evidence_quote: d.evidence_quote,
+      evidence_turn_index: d.evidence_turn_index,
     })),
     strengths: evidence.result.strengths,
     concerns: evidence.result.concerns,

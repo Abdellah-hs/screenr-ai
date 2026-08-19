@@ -170,6 +170,41 @@ describe("saveAnswerScores", () => {
     ]);
   });
 
+  it("carries the evidence quote and turn index through the merge (#148)", async () => {
+    await saveAnswerScores({
+      ...validArgs,
+      perAnswer: [
+        {
+          question_id: "q-1",
+          score: 80,
+          rationale: "Specific",
+          evidence_quote: "I led the migration",
+          evidence_turn_index: 1,
+        },
+        { question_id: "q-2", score: 64, rationale: "Generic" },
+      ],
+    });
+
+    const answers = mockResponseUpdate.mock.calls[0][0].answers;
+    expect(answers[0]).toMatchObject({
+      evidence_quote: "I led the migration",
+      evidence_turn_index: 1,
+    });
+  });
+
+  /**
+   * "We looked and found nothing" and "this score predates evidence capture"
+   * render differently, so an answer with no evidence must carry no evidence
+   * keys rather than null ones.
+   */
+  it("writes no evidence keys for an answer the scorer found none for", async () => {
+    await saveAnswerScores(validArgs);
+
+    const answers = mockResponseUpdate.mock.calls[0][0].answers;
+    expect(answers[0]).not.toHaveProperty("evidence_quote");
+    expect(answers[0]).not.toHaveProperty("evidence_turn_index");
+  });
+
   it("forwards the input_snapshot verbatim into the audit row", async () => {
     await saveAnswerScores(validArgs);
 

@@ -348,3 +348,86 @@ describe("scoreTranscript", () => {
     ).rejects.toThrow("OpenAI returned an empty response");
   });
 });
+
+describe("scoreTranscript — evidence traceability (#148)", () => {
+  it("persists the quote and its transcript turn per question", async () => {
+    // Before this, the quote was parsed, used to verify the score, and dropped
+    // — leaving a per-question number with nothing behind it.
+    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.answers[0].evidence_quote).toBe(GROUNDED_Q1);
+    // Indices into the full transcript, agent turns included.
+    expect(evidence.result.answers.map((a) => a.evidence_turn_index)).toEqual([1, 3]);
+  });
+
+  it("leaves no evidence on a question it zeroed for an invented quote", async () => {
+    mockCreate.mockResolvedValueOnce(
+      aiResponse(
+        voicePayload({
+          answers: [
+            { question_id: "q-1", score: 90, rationale: "Strong", evidence_quote: "I ran a team of twenty" },
+            { question_id: "q-2", score: 64, rationale: "Decent", evidence_quote: GROUNDED_Q2 },
+          ],
+        }),
+      ),
+    );
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.answers[0].score).toBe(0);
+    expect(evidence.result.answers[0].evidence_turn_index).toBeNull();
+    expect(evidence.result.answers[0].evidence_quote).toBeUndefined();
+  });
+
+  /**
+   * The bug this guards: `enforceTranscriptEvidence` used to return the
+   * original result untouched when no score changed. With evidence now
+   * attached in the same pass, that early return would drop every quote on a
+   * fully-grounded response — the common case.
+   */
+  it("attaches evidence even when no score needed correcting", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.answers.every((a) => a.evidence_quote)).toBe(true);
+    // …and the overall is untouched, since nothing was demoted.
+    expect(evidence.result.overall_score).toBe(68);
+  });
+
+  it("leaves a legitimately zero-scored question unevidenced", async () => {
+    mockCreate.mockResolvedValueOnce(
+      aiResponse(
+        voicePayload({
+          answers: [
+            { question_id: "q-1", score: 0, rationale: "Never addressed", evidence_quote: "" },
+            { question_id: "q-2", score: 64, rationale: "Decent", evidence_quote: GROUNDED_Q2 },
+          ],
+        }),
+      ),
+    );
+
+    const evidence = await scoreTranscript({
+      jobDescription: "JD",
+      questions: sampleQuestions,
+      transcript: sampleTranscript,
+    });
+
+    expect(evidence.result.answers[0].evidence_turn_index).toBeUndefined();
+    expect(evidence.result.answers[1].evidence_turn_index).toBe(3);
+  });
+});

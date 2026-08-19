@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { InterviewTranscriptTurn } from "@/lib/data/interview-sessions";
+import { isGrounded, locateEvidence } from "@/lib/scoring/evidence";
 
 /**
  * AI scoring for the on-demand AI video interview (Phase B). The interview
@@ -25,6 +26,13 @@ export interface InterviewDimensionScore {
   score: number;
   rationale: string;
   evidence_quote: string;
+  /**
+   * Index of the transcript turn the quote was found in, or null when it could
+   * not be pinned to a single utterance. Set by `enforceEvidence`, which
+   * already has to locate the quote to verify it — this is the position that
+   * used to be computed and thrown away.
+   */
+  evidence_turn_index: number | null;
 }
 
 export interface InterviewScoringResult {
@@ -154,6 +162,9 @@ function normalizeResult(content: string): InterviewScoringResult {
     score: Math.max(0, Math.min(100, Math.round(Number(d.score) || 0))),
     rationale: String(d.rationale ?? ""),
     evidence_quote: typeof d.evidence_quote === "string" ? d.evidence_quote : "",
+    // Filled in by `enforceEvidence`, which is the only place with the
+    // transcript to locate it against.
+    evidence_turn_index: null,
   }));
 
   return {
@@ -165,35 +176,36 @@ function normalizeResult(content: string): InterviewScoringResult {
   };
 }
 
-/** Lowercase + strip non-alphanumerics so a verbatim quote survives minor
- *  punctuation/spacing differences but a fabricated one does not match. */
-function normalizeForMatch(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
 /**
  * Backstop (Control > AI > Data): a non-zero dimension score may only stand if
  * grounded in a candidate quote that actually appears in the transcript. Any
  * ungrounded non-zero score is forced to 0 and the overall recomputed — so an
  * invented "managed a team of twelve" can't inflate the result.
+ *
+ * It also records WHERE the quote was found, so the score can be traced back to
+ * the words behind it (PRD 3.10.2). Locating is a strictly narrower question
+ * than grounding — a quote stitched across two turns is still grounded but
+ * cannot be linked to one utterance — so the two are asked separately and only
+ * `isGrounded` may zero a score. Otherwise adding a UI feature would quietly
+ * start demoting scores that used to stand.
  */
 function enforceEvidence(
   result: InterviewScoringResult,
   transcript: InterviewTranscriptTurn[],
 ): InterviewScoringResult {
-  const candidateSpeech = normalizeForMatch(
-    transcript.filter((t) => t.role === "candidate").map((t) => t.text).join(" "),
-  );
-
   const dimensions = result.dimensions.map((d) => {
     if (d.score === 0) return d;
-    const quote = normalizeForMatch(d.evidence_quote);
-    const grounded = quote.length > 0 && candidateSpeech.includes(quote);
-    if (grounded) return d;
+    if (!isGrounded(d.evidence_quote, transcript)) {
+      return {
+        ...d,
+        score: 0,
+        evidence_turn_index: null,
+        rationale: "Scored 0: no supporting candidate quote for this competency was found in the transcript.",
+      };
+    }
     return {
       ...d,
-      score: 0,
-      rationale: "Scored 0: no supporting candidate quote for this competency was found in the transcript.",
+      evidence_turn_index: locateEvidence(d.evidence_quote, transcript)?.turnIndex ?? null,
     };
   });
 

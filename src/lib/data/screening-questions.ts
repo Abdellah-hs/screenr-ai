@@ -191,6 +191,13 @@ export interface ScoredAnswerRow {
   answer_text: string;
   score: number | null;
   rationale: string | null;
+  /**
+   * The spoken words behind this score and the transcript turn they came from
+   * (PRD 3.4.4). Optional: responses scored before #148 have neither, because
+   * the scorer verified the quote and then dropped it.
+   */
+  evidence_quote?: string;
+  evidence_turn_index?: number | null;
 }
 
 /** One spoken turn of a voice-screening call, in conversation order. */
@@ -571,7 +578,13 @@ export async function saveAnswerScores(args: {
   campaignId: string;
   candidateId: string;
   overall: { score: number; rationale: string };
-  perAnswer: { question_id: string; score: number; rationale: string }[];
+  perAnswer: {
+    question_id: string;
+    score: number;
+    rationale: string;
+    evidence_quote?: string;
+    evidence_turn_index?: number | null;
+  }[];
   rubricVersion: number | null;
   audit: ScreeningScoreAuditFields;
   /**
@@ -593,9 +606,23 @@ export async function saveAnswerScores(args: {
   const scoreById = new Map(args.perAnswer.map((a) => [a.question_id, a]));
   const mergedAnswers = existing.answers.map((a) => {
     const s = scoreById.get(a.question_id);
-    return s
-      ? { ...a, score: s.score, rationale: s.rationale }
-      : a;
+    if (!s) return a;
+
+    // Evidence keys are added only when there IS evidence. Writing
+    // `evidence_quote: undefined` / `evidence_turn_index: null` onto every
+    // answer would put "we looked and found nothing" and "this predates
+    // evidence capture" into the same shape, and the UI distinguishes them.
+    return {
+      ...a,
+      score: s.score,
+      rationale: s.rationale,
+      ...(s.evidence_quote
+        ? {
+            evidence_quote: s.evidence_quote,
+            evidence_turn_index: s.evidence_turn_index ?? null,
+          }
+        : {}),
+    };
   });
 
   const { error: updateError } = await db

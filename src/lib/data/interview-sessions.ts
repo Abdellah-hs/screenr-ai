@@ -38,6 +38,14 @@ export interface InterviewDimension {
   name: string;
   score: number;
   rationale: string;
+  /**
+   * The candidate's own words behind this score, and which transcript turn they
+   * came from (PRD 3.10.2). Both optional: sessions scored before #148 have
+   * neither, because the scorer verified the quote and then discarded it.
+   * Absent reads as "no linkable evidence", which is honest for those rows.
+   */
+  evidence_quote?: string;
+  evidence_turn_index?: number | null;
 }
 
 /**

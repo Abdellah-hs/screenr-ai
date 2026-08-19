@@ -12,6 +12,11 @@ import {
 } from "@/lib/screening/transcript-cadence";
 import { Badge, type BadgeProps } from "@/components/ui";
 import { ProctoringReportPanel } from "./proctoring-report";
+import {
+  EvidenceExcerpt,
+  TURN_TARGET_HIGHLIGHT,
+  transcriptTurnId,
+} from "./score-evidence";
 import type { ApplicationState } from "@/lib/constants";
 import type {
   ScoredAnswerRow,
@@ -40,6 +45,8 @@ function formatDate(iso: string | null): string {
     minute: "2-digit",
   });
 }
+
+const ANCHOR = "screening";
 
 function scoreColor(score: number | null): string {
   if (score == null) return "text-[#9CA3AF]";
@@ -251,6 +258,17 @@ export default function ScreeningThread({
                           {answer.rationale}
                         </p>
                       )}
+                      {/* Voice only: a typed answer is already the evidence and
+                          renders directly above, so an excerpt would just
+                          repeat it back. */}
+                      {isVoice && (
+                        <EvidenceExcerpt
+                          quote={answer.evidence_quote}
+                          turnIndex={answer.evidence_turn_index}
+                          anchorPrefix={ANCHOR}
+                          zeroScored={answer.score === 0}
+                        />
+                      )}
                     </div>
                   )}
                 </div>
@@ -324,7 +342,8 @@ function TranscriptReview({
             return (
               <li
                 key={`${turn.at}-${i}`}
-                className={`rounded-lg border p-2.5 ${
+                id={transcriptTurnId(ANCHOR, i)}
+                className={`rounded-lg border p-2.5 transition-colors ${TURN_TARGET_HIGHLIGHT} ${
                   isAgent
                     ? "border-[#BAE6FD] bg-[#F0F9FF]"
                     : "border-[#E5E7EB] bg-[#F9FAFB]"
