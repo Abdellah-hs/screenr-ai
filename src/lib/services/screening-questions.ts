@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ScreeningCriterion } from "@/lib/constants";
 import type { VoiceTranscriptTurn } from "@/lib/data/screening-questions";
+import { isGrounded, locateEvidence } from "@/lib/scoring/evidence";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -83,6 +84,16 @@ export interface ScoredAnswer {
   question_id: string;
   score: number;
   rationale: string;
+  /**
+   * The candidate's own words behind this score, and the transcript turn they
+   * came from (PRD 3.4.4). Voice scoring only — a typed answer is already the
+   * evidence, and the text path was retired in #161 anyway.
+   *
+   * Optional because responses scored before #148 have neither: the quote was
+   * parsed, used to verify the score, and then discarded.
+   */
+  evidence_quote?: string;
+  evidence_turn_index?: number | null;
 }
 
 export interface AnswerScoringResult {
@@ -380,12 +391,6 @@ ${conversation}`,
   };
 }
 
-/** Lowercase + strip non-alphanumerics so a verbatim quote survives minor
- * punctuation/spacing differences but a fabricated one does not match. */
-function normalizeForMatch(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
 /**
  * Voice backstop (Control > AI > Data): a non-zero per-question score may only
  * stand if the model grounded it in a candidate quote that actually appears in
@@ -420,25 +425,38 @@ function enforceTranscriptEvidence(
     }
   }
 
-  const candidateSpeech = normalizeForMatch(
-    transcript.filter((t) => t.role === "candidate").map((t) => t.text).join(" "),
-  );
-
   let changed = false;
   const answers = result.answers.map((a) => {
     if (a.score === 0) return a;
-    const quote = normalizeForMatch(quoteByQuestion.get(a.question_id) ?? "");
-    const grounded = quote.length > 0 && candidateSpeech.includes(quote);
-    if (grounded) return a;
-    changed = true;
+
+    const quote = quoteByQuestion.get(a.question_id) ?? "";
+    if (!isGrounded(quote, transcript)) {
+      changed = true;
+      return {
+        ...a,
+        score: 0,
+        evidence_quote: undefined,
+        evidence_turn_index: null,
+        rationale:
+          "Scored 0: no candidate answer to this question was found in the transcript.",
+      };
+    }
+
+    // Grounded: keep the score, and keep the evidence this time. Locating is a
+    // narrower question than grounding (a quote spanning two turns is grounded
+    // but not linkable), so a null index never demotes a score.
     return {
       ...a,
-      score: 0,
-      rationale:
-        "Scored 0: no candidate answer to this question was found in the transcript.",
+      evidence_quote: quote.trim(),
+      evidence_turn_index: locateEvidence(quote, transcript)?.turnIndex ?? null,
     };
   });
 
-  if (!changed) return result;
-  return { ...result, answers, overall_score: averageOverall(answers) };
+  // Always rebuild: even when no score changed, the answers now carry evidence
+  // they did not before, and returning `result` would drop it on the floor.
+  return {
+    ...result,
+    answers,
+    overall_score: changed ? averageOverall(answers) : result.overall_score,
+  };
 }

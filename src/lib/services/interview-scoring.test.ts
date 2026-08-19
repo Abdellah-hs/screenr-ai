@@ -123,3 +123,151 @@ describe("scoreInterview", () => {
     expect(evidence.result.dimensions[0].score).toBe(100);
   });
 });
+
+describe("scoreInterview — evidence traceability (#148)", () => {
+  it("records which transcript turn each quote came from", async () => {
+    mockCreate.mockResolvedValue(
+      aiResponse({
+        overall_score: 85,
+        overall_rationale: "Strong.",
+        dimensions: [
+          {
+            name: "Technical depth",
+            score: 90,
+            rationale: "Led a ledger rewrite.",
+            evidence_quote: "I led the ledger rewrite",
+          },
+          {
+            name: "Correctness",
+            score: 80,
+            rationale: "Idempotency tokens.",
+            evidence_quote: "idempotency token stored in Postgres",
+          },
+        ],
+        strengths: [],
+        concerns: [],
+      }),
+    );
+
+    const evidence = await scoreInterview({
+      jobDescription: "Senior Backend Engineer",
+      transcript: TRANSCRIPT,
+    });
+
+    // Indices into the FULL transcript, agent turns included — the UI anchors
+    // onto rendered turns, so skipping them would link to the wrong line.
+    expect(evidence.result.dimensions.map((d) => d.evidence_turn_index)).toEqual([1, 3]);
+  });
+
+  it("keeps the quote itself, rather than verifying and discarding it", async () => {
+    // The bug this closes: the scorer located the evidence, allowed the score
+    // to stand on it, then persisted a number with nothing behind it.
+    mockCreate.mockResolvedValue(
+      aiResponse({
+        overall_score: 90,
+        overall_rationale: "Strong.",
+        dimensions: [
+          {
+            name: "Technical depth",
+            score: 90,
+            rationale: "Led a ledger rewrite.",
+            evidence_quote: "I led the ledger rewrite",
+          },
+        ],
+        strengths: [],
+        concerns: [],
+      }),
+    );
+
+    const evidence = await scoreInterview({
+      jobDescription: "Senior Backend Engineer",
+      transcript: TRANSCRIPT,
+    });
+
+    expect(evidence.result.dimensions[0].evidence_quote).toBe("I led the ledger rewrite");
+  });
+
+  it("leaves no linkable evidence on a dimension it zeroed for an invented quote", async () => {
+    mockCreate.mockResolvedValue(
+      aiResponse({
+        overall_score: 80,
+        overall_rationale: "Claims leadership.",
+        dimensions: [
+          {
+            name: "Leadership",
+            score: 80,
+            rationale: "Managed a large team.",
+            evidence_quote: "I managed a team of twelve engineers",
+          },
+        ],
+        strengths: [],
+        concerns: [],
+      }),
+    );
+
+    const evidence = await scoreInterview({
+      jobDescription: "Senior Backend Engineer",
+      transcript: TRANSCRIPT,
+    });
+
+    expect(evidence.result.dimensions[0].score).toBe(0);
+    expect(evidence.result.dimensions[0].evidence_turn_index).toBeNull();
+  });
+
+  it("reports a null index for a dimension the model left unevidenced", async () => {
+    // Score 0 with an empty quote is the model's honest "they never showed
+    // this". It must render as a finding, not as a broken link.
+    mockCreate.mockResolvedValue(
+      aiResponse({
+        overall_score: 0,
+        overall_rationale: "Not demonstrated.",
+        dimensions: [
+          { name: "System design", score: 0, rationale: "Never came up.", evidence_quote: "" },
+        ],
+        strengths: [],
+        concerns: [],
+      }),
+    );
+
+    const evidence = await scoreInterview({
+      jobDescription: "Senior Backend Engineer",
+      transcript: TRANSCRIPT,
+    });
+
+    expect(evidence.result.dimensions[0].evidence_quote).toBe("");
+    expect(evidence.result.dimensions[0].evidence_turn_index).toBeNull();
+  });
+
+  /**
+   * A quote the model stitched from two separate answers is still grounded, so
+   * it must NOT be demoted — adding the link feature cannot start zeroing
+   * scores that previously stood. It simply has no single turn to point at.
+   */
+  it("keeps a cross-turn quote's score but gives it no anchor", async () => {
+    mockCreate.mockResolvedValue(
+      aiResponse({
+        overall_score: 75,
+        overall_rationale: "Broad.",
+        dimensions: [
+          {
+            name: "Breadth",
+            score: 75,
+            rationale: "Covered both.",
+            evidence_quote:
+              "cutting reconciliation time by half We keyed every write on an idempotency token",
+          },
+        ],
+        strengths: [],
+        concerns: [],
+      }),
+    );
+
+    const evidence = await scoreInterview({
+      jobDescription: "Senior Backend Engineer",
+      transcript: TRANSCRIPT,
+    });
+
+    expect(evidence.result.dimensions[0].score).toBe(75);
+    expect(evidence.result.dimensions[0].evidence_turn_index).toBeNull();
+  });
+});

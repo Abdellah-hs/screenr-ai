@@ -1,6 +1,14 @@
 import type { InterviewScore } from "@/lib/data/interview-sessions";
 import type { InterviewSessionView } from "@/lib/actions/interview";
 import { ProctoringReportPanel } from "./proctoring-report";
+import {
+  EvidenceExcerpt,
+  TURN_TARGET_HIGHLIGHT,
+  transcriptTurnId,
+} from "./score-evidence";
+
+/** Anchor namespace for this transcript, so screening links can never collide. */
+const ANCHOR = "interview";
 
 function scoreColor(score: number | null): string {
   if (score == null) return "text-[#9CA3AF]";
@@ -58,7 +66,8 @@ export default function InterviewTranscript({
             return (
               <li
                 key={`${turn.at}-${i}`}
-                className={`rounded-lg border p-2.5 ${
+                id={transcriptTurnId(ANCHOR, i)}
+                className={`rounded-lg border p-2.5 transition-colors ${TURN_TARGET_HIGHLIGHT} ${
                   isAgent
                     ? "border-[#BAE6FD] bg-[#F0F9FF]"
                     : "border-[#E5E7EB] bg-[#F9FAFB]"
@@ -125,6 +134,12 @@ function InterviewScoreBlock({ score }: { score: InterviewScore }) {
                   style={{ width: `${d.score}%` }}
                 />
               </div>
+              <EvidenceExcerpt
+                quote={d.evidence_quote}
+                turnIndex={d.evidence_turn_index}
+                anchorPrefix={ANCHOR}
+                zeroScored={d.score === 0}
+              />
             </div>
           ))}
         </div>
