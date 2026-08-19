@@ -15,6 +15,8 @@ export interface InterviewConfirmationEmailParams {
   meetUrl?: string;
   /** Web prep-guide page (per the PRD this is a page, not a PDF). */
   prepGuideUrl?: string;
+  /** IANA zone the slot was offered in, so the time reads as the candidate booked it. */
+  timeZone?: string | null;
   companyName?: string;
 }
 
@@ -33,10 +35,11 @@ export function buildInterviewConfirmationEmail(
     interviewAt,
     meetUrl,
     prepGuideUrl,
+    timeZone,
     companyName = "the hiring team",
   } = params;
   const firstName = firstNameOf(candidateName);
-  const when = formatDateTime(interviewAt);
+  const when = formatDateTime(interviewAt, timeZone);
 
   const subject = `Your ${campaignTitle} interview is confirmed`;
 

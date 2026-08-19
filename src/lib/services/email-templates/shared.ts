@@ -18,8 +18,8 @@ export function firstNameOf(fullName: string): string {
 }
 
 /** Human-readable date + time, e.g. "Monday, June 2, 2026 at 2:30 PM EDT". */
-export function formatDateTime(date: Date): string {
-  return date.toLocaleString("en-US", {
+export function formatDateTime(date: Date, timeZone?: string | null): string {
+  const base: Intl.DateTimeFormatOptions = {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -27,7 +27,22 @@ export function formatDateTime(date: Date): string {
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",
-  });
+  };
+
+  // Without a zone this renders in the SERVER's timezone — UTC on Vercel —
+  // which quotes a candidate in Casablanca an hour they don't recognise.
+  // Callers that know the zone the slot was offered in should pass it; an
+  // unrecognised zone falls back to the server default rather than throwing
+  // partway through building an email.
+  if (timeZone) {
+    try {
+      return date.toLocaleString("en-US", { ...base, timeZone });
+    } catch {
+      /* fall through to the server default */
+    }
+  }
+
+  return date.toLocaleString("en-US", base);
 }
 
 /** Wraps email body HTML in the shared Screenr AI card layout. */

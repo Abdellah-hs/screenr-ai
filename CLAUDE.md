@@ -485,15 +485,25 @@ Both are exposed as guarded GET routes, `Authorization: Bearer ${CRON_SECRET}` (
 - **`GET /api/cron/expire-screenings`**
 - **`GET /api/cron/expire-interviews`**
 
-**Both are scheduled in `vercel.json`**, daily and staggered so they never overlap each other or the calendar-watch renewal:
+**Final-interview reminders** are the one scheduled job that is *not* an expiry sweep. `sweepInterviewReminders` (`src/lib/scheduling/reminder-sweep.ts`, route `GET /api/cron/interview-reminders`) sends the 24h / 1h nudges ahead of a booked final human interview, driving the `interview-reminder` template that had sat unwired since #31. Three properties are load-bearing:
+
+- **The rule decides, the sweep executes.** `dueInterviewReminders` (`src/lib/rules/interview-reminders.ts`) is pure and answers "what is owed *right now*", so the sweep stays correct at any cadence. At most one email per pass: when a gap leaves both unsent, the nearest lead is sent and the stale one is **retired unsent** rather than delivered late.
+- **Claim before send.** The `reminder_24h_sent_at` / `reminder_1h_sent_at` stamps on `interview_bookings` are written by a conditional `UPDATE … WHERE col IS NULL`, so two overlapping runs cannot both win. A failed send hands the claim back so the next run retries. A **reschedule clears both stamps** (in `updateBooking`) — a new time is a new thing to be reminded about.
+- **Remindable is an allowlist.** A booking row outlives the decision that made it, so `isRemindableApplicationState` gates on the *application*: a candidate rejected the day before their final interview is never reminded to attend it.
+
+**All are scheduled in `vercel.json`**, daily and staggered so they never overlap:
 
 | Path | Schedule (UTC) |
 | --- | --- |
 | `/api/cron/expire-screenings` | `0 2 * * *` |
 | `/api/cron/expire-interviews` | `30 2 * * *` |
 | `/api/cron/renew-calendar-watches` | `0 3 * * *` |
+| `/api/cron/auto-archive` | `0 4 * * *` |
+| `/api/cron/interview-reminders` | `0 5 * * *` |
 
-Vercel injects the `CRON_SECRET` bearer automatically for paths listed in `vercel.json`, so **`CRON_SECRET` must be set in the deployed environment** — the routes fail closed without it, which shows up as a 500 in the cron log rather than an open endpoint. Daily is deliberate: a 7-day TTL doesn't need finer granularity, and Vercel's Hobby plan permits only one run per day per path anyway.
+Vercel injects the `CRON_SECRET` bearer automatically for paths listed in `vercel.json`, so **`CRON_SECRET` must be set in the deployed environment** — the routes fail closed without it, which shows up as a 500 in the cron log rather than an open endpoint. Daily is deliberate for the sweeps: a 7-day TTL doesn't need finer granularity, and Vercel's Hobby plan permits only one run per day per path anyway.
+
+**The reminder job is the exception, and the limit bites.** A reminder is only useful *before* the thing it announces, and the final hour cannot be caught by a job that looks once a day. On the daily schedule above the 24h reminder still lands (somewhere inside the final day) and the 1h one is quietly retired unsent — nothing breaks, nothing double-sends, but the 1h nudge effectively never fires. Making it real is a one-line change to `0 * * * *` on a plan that allows more than one run per day per path; the sweep already handles the faster cadence without any other change.
 
 Other schedulers work equally well if you ever move off Vercel:
 

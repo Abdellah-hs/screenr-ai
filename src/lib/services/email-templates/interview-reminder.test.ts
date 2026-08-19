@@ -34,3 +34,29 @@ describe("buildInterviewReminderEmail", () => {
     expect(email.subject + email.text + email.html).not.toContain("undefined");
   });
 });
+
+describe("buildInterviewReminderEmail — the time the candidate booked", () => {
+  const base = {
+    candidateName: "Jane Doe",
+    campaignTitle: "Senior Engineer",
+    interviewAt: new Date("2026-06-02T18:30:00Z"),
+  };
+
+  it("renders the interview time in the zone the slot was offered in", () => {
+    const email = buildInterviewReminderEmail({ ...base, timeZone: "Asia/Tokyo" });
+
+    expect(email.text).toContain("3:30 AM");
+  });
+
+  /**
+   * A reminder is only useful before the interview, and a cron gap can push the
+   * 24h notice to well inside the final day. Copy that names a lead ("tomorrow")
+   * would then be wrong; naming the time never is.
+   */
+  it("never claims a specific lead time it cannot guarantee", () => {
+    const email = buildInterviewReminderEmail(base);
+
+    expect(email.subject.toLowerCase()).not.toMatch(/tomorrow|in an hour|24 hours/);
+    expect(email.text.toLowerCase()).not.toMatch(/tomorrow|in an hour|24 hours/);
+  });
+});

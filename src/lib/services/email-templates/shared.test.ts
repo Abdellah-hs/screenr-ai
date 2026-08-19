@@ -33,6 +33,29 @@ describe("formatDateTime", () => {
   it("renders a human-readable date that includes the year", () => {
     expect(formatDateTime(new Date("2026-06-02T18:30:00Z"))).toMatch(/2026/);
   });
+
+  /**
+   * Without a zone this renders in the server's timezone — UTC on Vercel — so
+   * an interview email would quote a candidate an hour they never agreed to.
+   */
+  it("renders the time in the zone it is given", () => {
+    const at = new Date("2026-06-02T18:30:00Z");
+
+    expect(formatDateTime(at, "Asia/Tokyo")).toContain("3:30 AM");
+    expect(formatDateTime(at, "Asia/Tokyo")).toContain("June 3");
+  });
+
+  it("falls back to the server default rather than throwing on an unknown zone", () => {
+    const at = new Date("2026-06-02T18:30:00Z");
+
+    expect(formatDateTime(at, "Mars/Olympus_Mons")).toBe(formatDateTime(at));
+  });
+
+  it("falls back when no zone is known", () => {
+    const at = new Date("2026-06-02T18:30:00Z");
+
+    expect(formatDateTime(at, null)).toBe(formatDateTime(at));
+  });
 });
 
 describe("renderEmailLayout", () => {
