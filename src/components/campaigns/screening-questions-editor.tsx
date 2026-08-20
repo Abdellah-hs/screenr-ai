@@ -120,46 +120,72 @@ export default function ScreeningQuestionsEditor({
 
   return (
     <>
-      <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
-              Screening Questions
-            </h2>
-            <p className="text-xs text-[#6B7280] mt-1">
-              AI-generated follow-up questions sent to candidates who pass
-              resume screening.
-            </p>
+      <section className="rounded-xl border border-[#E5E7EB] bg-white p-[22px] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3.5">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+            Screening questions
+            <span className="font-medium normal-case tracking-normal text-[#9CA3AF]">
+              {" "}
+              · asked by the voice AI, in order
+            </span>
+          </h2>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={busy || !canGenerate}
+              title={
+                canGenerate
+                  ? "Replace all questions with fresh AI suggestions"
+                  : "Add a job description to enable AI generation"
+              }
+              className="inline-flex min-h-9 items-center gap-[7px] rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] transition-colors duration-150 cursor-pointer hover:bg-[#F9FAFB] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {generating ? "Drafting…" : "Draft from the role"}
+            </button>
+            <button
+              type="button"
+              onClick={openModal}
+              className="inline-flex min-h-9 items-center rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB]"
+            >
+              {hasQuestions ? "Edit questions" : "Add question"}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={openModal}
-            className="px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-colors duration-150"
-          >
-            {hasQuestions ? "Edit" : "Set up"}
-          </button>
         </div>
 
         {hasQuestions ? (
-          <ol className="space-y-2 list-decimal pl-5">
-            {questions.map((q) => (
-              <li key={q._key} className="text-sm text-[#111827]">
-                <span>{q.prompt}</span>
-                {q.is_required && (
-                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-red-50 text-red-700 text-[10px] font-medium uppercase">
-                    Required
-                  </span>
-                )}
-              </li>
+          <div className="flex flex-col gap-2">
+            {questions.map((q, i) => (
+              <div
+                key={q._key}
+                className="flex items-center gap-3 rounded-lg border border-[#E5E7EB] bg-white px-3.5 py-3"
+              >
+                {/* The order is the order they are asked in, so the number is
+                    the question's identity, not decoration. */}
+                <span className="w-5 shrink-0 text-xs font-semibold text-[#9CA3AF] tabular-nums">
+                  {i + 1}
+                </span>
+                <p className="min-w-0 flex-1 text-[13px] text-ink">{q.prompt}</p>
+                <span
+                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                    q.is_required
+                      ? "bg-[#EEF2FF] text-[#4338CA]"
+                      : "bg-[#F3F4F6] text-[#4B5563]"
+                  }`}
+                >
+                  {q.is_required ? "Required" : "Optional"}
+                </span>
+              </div>
             ))}
-          </ol>
+          </div>
         ) : (
-          <p className="text-sm text-[#6B7280]">
-            No questions configured yet. Click <strong>Set up</strong> to
-            generate them with AI or write your own.
+          <p className="text-[13px] leading-[1.55] text-[#6B7280]">
+            No questions yet. Nobody can be approved into screening until this
+            campaign has some — draft them from the role description, or write your
+            own.
           </p>
         )}
-      </div>
+      </section>
 
       <Modal open={open} onClose={closeModal} className="max-w-[720px]">
         <ModalHeader>
