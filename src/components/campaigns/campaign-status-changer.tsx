@@ -25,13 +25,27 @@ const SELECTION_LABEL: Record<CampaignStatusSelection, string> = Object.fromEntr
 function statusTone(status: CampaignStatus): string {
   switch (status) {
     case "active":
-      return "text-[#059669] bg-[#ECFDF5] border-[#A7F3D0]";
+      return "text-[#047857] bg-[#ECFDF5] border-[#A7F3D0] hover:bg-[#D1FAE5]";
     case "paused":
-      return "text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]";
+      return "text-[#B45309] bg-[#FFFBEB] border-[#FDE68A] hover:bg-[#FEF3C7]";
     case "closed":
-      return "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]";
+      return "text-[#B91C1C] bg-[#FEF2F2] border-[#FECACA] hover:bg-[#FEE2E2]";
     default:
-      return "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]";
+      return "text-[#4B5563] bg-[#F3F4F6] border-[#E5E7EB] hover:bg-[#E5E7EB]";
+  }
+}
+
+/** The dot carries the status when the pill is scanned rather than read. */
+function statusDot(status: CampaignStatus): string {
+  switch (status) {
+    case "active":
+      return "bg-[#059669]";
+    case "paused":
+      return "bg-[#D97706]";
+    case "closed":
+      return "bg-[#DC2626]";
+    default:
+      return "bg-[#9CA3AF]";
   }
 }
 
@@ -86,13 +100,17 @@ export function CampaignStatusChanger({
         aria-expanded={open}
         title="Change campaign status"
         className={cn(
-          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-colors duration-150",
+          "inline-flex min-h-8 items-center gap-[7px] rounded-full border px-2.5 text-xs font-semibold transition-colors duration-150",
           statusTone(currentStatus),
           isPending
             ? "cursor-default"
-            : "cursor-pointer hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1",
+            : "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1",
         )}
       >
+        <span
+          className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusDot(currentStatus))}
+          aria-hidden="true"
+        />
         {isPending ? "Saving…" : currentLabel}
         {!isPending && (
           <svg

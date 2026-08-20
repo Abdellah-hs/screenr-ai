@@ -26,13 +26,63 @@ import {
   updateCampaignStatusTx,
   softDeleteCampaignTx,
   restoreCampaignTx,
+  fetchCampaignBoardApplications,
+  fetchScreeningQuestionCounts,
 } from "@/lib/data/campaigns";
+import {
+  summariseCampaign,
+  type BoardApplication,
+  type CampaignBoardSummary,
+} from "@/lib/campaigns/board-view";
 
 // ─── GET all campaigns ───────────────────────────────────────────────────────
 
 export async function getCampaigns(): Promise<Campaign[]> {
   const userId = await requireUserId();
   return fetchAllCampaigns(userId);
+}
+
+// ─── GET campaigns + their board summaries ───────────────────────────────────
+
+export interface CampaignBoard {
+  campaigns: Campaign[];
+  /** Keyed by campaign id. A campaign with no applications is absent. */
+  summaries: Record<string, CampaignBoardSummary>;
+}
+
+/**
+ * The campaigns list, with the pipeline shape and waiting work each row shows.
+ *
+ * `Campaign.pipeline` is a static placeholder (`DEFAULT_PIPELINE`), so the list
+ * had no real counts to draw and fell back to a "Show candidates" link that
+ * said nothing about whether opening it was worth doing. Three queries answer
+ * the whole board.
+ */
+export async function getCampaignBoard(): Promise<CampaignBoard> {
+  const userId = await requireUserId();
+  const [campaigns, applications, questionCounts] = await Promise.all([
+    fetchAllCampaigns(userId),
+    fetchCampaignBoardApplications(userId),
+    fetchScreeningQuestionCounts(userId),
+  ]);
+
+  const byCampaign = new Map<string, BoardApplication[]>();
+  for (const app of applications) {
+    const existing = byCampaign.get(app.campaignId);
+    if (existing) existing.push(app);
+    else byCampaign.set(app.campaignId, [app]);
+  }
+
+  const summaries: Record<string, CampaignBoardSummary> = {};
+  for (const campaign of campaigns) {
+    summaries[campaign.id] = summariseCampaign(byCampaign.get(campaign.id) ?? [], {
+      status: campaign.status ?? "draft",
+      slaTimers: campaign.sla_timers,
+      screeningQuestionCount: questionCounts[campaign.id] ?? 0,
+    });
+  }
+
+  return { campaigns, summaries };
 }
 
 // ─── GET single campaign ─────────────────────────────────────────────────────
