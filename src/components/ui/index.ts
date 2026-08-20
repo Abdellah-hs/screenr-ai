@@ -4,6 +4,7 @@ export { Textarea, type TextareaProps } from "./textarea";
 export { Select, type SelectProps } from "./select";
 export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, type CardProps } from "./card";
 export { Badge, type BadgeProps } from "./badge";
+export { AiRail, AiCaption, AiEyebrow } from "./ai-attribution";
 export { Modal, ModalHeader, ModalFooter, type ModalProps } from "./modal";
 export { AnchoredMenu } from "./anchored-menu";
 export { DottedSurface } from "./dotted-surface";
