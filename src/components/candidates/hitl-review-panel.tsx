@@ -13,6 +13,7 @@ export function HitlReviewPanel({
   campaignId,
   campaignActive,
   hasScreeningQuestions,
+  bare = false,
 }: {
   applicationId: string;
   // For the "set up screening questions" jump link in the blocked-approval hint.
@@ -23,6 +24,9 @@ export function HitlReviewPanel({
   // Approving emails the screening questions immediately, so it's blocked
   // until the campaign has a question set. The server action re-checks this.
   hasScreeningQuestions: boolean;
+  // Drop the card chrome when the panel is already inside one (the decision
+  // rail) — a card nested in a card reads as two separate asks.
+  bare?: boolean;
 }) {
   const router = useRouter();
   const [decision, setDecision] = useState<Decision | null>(null);
@@ -83,7 +87,13 @@ export function HitlReviewPanel({
   const isApprove = decision === "approve";
 
   return (
-    <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-xl p-5">
+    <div
+      className={
+        bare
+          ? "rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-4"
+          : "rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-5"
+      }
+    >
       <div className="flex items-start gap-3 mb-4">
         <div className="w-8 h-8 rounded-full bg-[#FEF3C7] text-[#B45309] flex items-center justify-center shrink-0">
           <svg
