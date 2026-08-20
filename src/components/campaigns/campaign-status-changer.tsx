@@ -86,7 +86,7 @@ export function CampaignStatusChanger({
         aria-expanded={open}
         title="Change campaign status"
         className={cn(
-          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-all duration-200",
+          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-colors duration-150",
           statusTone(currentStatus),
           isPending
             ? "cursor-default"

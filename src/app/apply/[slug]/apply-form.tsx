@@ -264,7 +264,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
 
                     <button
                       type="submit"
-                      className="w-full inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-all duration-200 min-h-[48px] !mt-6"
+                      className="w-full inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-150 min-h-[48px] !mt-6"
                     >
                       Continue
                     </button>
@@ -341,7 +341,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                     <button
                       type="submit"
                       disabled={submitting}
-                      className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 text-base font-semibold text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px]"
+                      className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 text-base font-semibold text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px]"
                     >
                       {submitting ? (
                         <>

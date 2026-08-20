@@ -87,9 +87,49 @@ When adding a new enum value, update both `constants.ts` **and** the matching Zo
 
 ### Styling
 
-- Tailwind CSS 4 utilities with custom CSS variables in `src/app/globals.css`
+- Tailwind CSS 4 utilities, tokens declared in the `@theme` block of `src/app/globals.css`
 - `cn()` helper in `src/lib/utils.ts` (clsx + tailwind-merge) for conditional classes
-- Custom component classes (`.btn-primary`, `.card`, `.input`, `.modal-overlay`) defined in globals.css
+- Custom component classes (`.btn-primary`, `.card`, `.input`, `.ai-rail`, `.modal-overlay`) defined in globals.css
+
+**The AI advises in indigo. A person decides in ink.** Machine output and human
+authority never dress alike, and colour encodes *consequence*, not prominence.
+Four families, one job each — using one for another's job is a bug, not taste:
+
+| Token | Hex | Its only job |
+| --- | --- | --- |
+| `ink` | `#111827` | A person is about to change someone's state. The highest-contrast object on screen. |
+| `ai` | `#4F46E5` | An AI produced what follows — a 3px rail or a caption. **Never a fill, never a button.** |
+| `primary` | `#2563EB` | Blue. Links, focus, navigation, affordances. **It is never an action.** |
+| `cta` | `#10B981` | Emerald. A positive **terminal** outcome only — hired, approved, submitted. Not "advance". |
+
+Plus `tier-*` (one AI verdict on one stage, never summed) and the stage badge
+palette. `Button` variants encode the same distinction: `primary` is ink,
+`success` is emerald, `danger` is outlined rather than filled, and "generate with
+AI" is `secondary` because it is a helper, not a commitment.
+
+Attribution is a primitive, not a convention: `AiRail` / `AiCaption` /
+`AiEyebrow` in `src/components/ui/ai-attribution.tsx`. **Wrap the whole score,
+not just its header** — a score and its "why" are one object, and nobody should
+read a 61 without seeing that a model wrote it and that it moved nobody.
+
+Three rules that exist because breaking them caused real problems:
+
+1. **Fields are solid white.** `bg-white/70 backdrop-blur-md` samples whatever
+   is behind it, so the contrast of the text being typed depends on the page
+   underneath — including on the candidate apply form. One definition,
+   `FIELD_BASE` in `src/components/ui/field.ts`, kept identical to `.input`.
+2. **Hover changes colour, never position.** No `hover:-translate-y-*`: a card
+   that rises shifts everything below it on a scrolling list, and a button that
+   lifts moves out from under the cursor. `transition-colors duration-150`;
+   `transition-all` only where a box genuinely changes geometry (the proctoring
+   overlay is the sole case).
+3. **No sparkle icons on AI features**, no emoji as icons, no gradient
+   decoration, no glassmorphism. Heroicons outline, inline SVG.
+
+`design-system/screenr-ai/MASTER.md` holds the long form — but note that
+`design-system/` is **gitignored**, so it is a local aid only and this section is
+the version that travels. If the two disagree, **this file wins** (as it does
+over everything in `docs/`), and the code wins over both.
 
 ### Path Alias
 

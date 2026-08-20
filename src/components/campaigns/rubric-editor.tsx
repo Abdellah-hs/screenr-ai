@@ -124,7 +124,7 @@ export default function RubricEditor({
           type="button"
           onClick={handleAutoGenerate}
           disabled={generating}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {generating ? (
             <>
@@ -161,7 +161,7 @@ export default function RubricEditor({
               key={stage.key}
               type="button"
               onClick={() => setActiveTab(stage.key)}
-              className={`flex-1 px-3 py-2 text-sm font-medium rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-all duration-200 ${
+              className={`flex-1 px-3 py-2 text-sm font-medium rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-colors duration-150 ${
                 activeTab === stage.key
                   ? "bg-white text-[#111827] shadow-sm"
                   : "text-[#6B7280] hover:text-[#111827]"
@@ -197,7 +197,7 @@ export default function RubricEditor({
               onChange={(e) => updateDimension(dim.id, "name", e.target.value)}
               placeholder="Dimension name"
               aria-label="Dimension name"
-              className="flex-1 min-w-[180px] px-3 py-1.5 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] focus-visible:outline-none transition-all duration-200"
+              className="flex-1 min-w-[180px] px-3 py-1.5 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] focus-visible:outline-none transition-colors duration-150"
             />
 
             <div className="flex items-center gap-1.5">
@@ -230,7 +230,7 @@ export default function RubricEditor({
             <button
               type="button"
               onClick={() => removeDimension(dim.id)}
-              className="ml-auto p-1.5 text-[#6B7280] cursor-pointer rounded-lg hover:text-[#DC2626] hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-all duration-200"
+              className="ml-auto p-1.5 text-[#6B7280] cursor-pointer rounded-lg hover:text-[#DC2626] hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors duration-150"
               aria-label={`Remove ${dim.name || "dimension"}`}
               title="Remove dimension"
             >
@@ -251,7 +251,7 @@ export default function RubricEditor({
       <button
         type="button"
         onClick={addDimension}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#4B5563] cursor-pointer rounded-lg hover:bg-[#F3F4F6] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-all duration-200"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#4B5563] cursor-pointer rounded-lg hover:bg-[#F3F4F6] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-colors duration-150"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -300,7 +300,7 @@ function SegmentedControl<T extends string>({
             type="button"
             aria-pressed={selected}
             onClick={() => onChange(opt.value)}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] ${
+            className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] ${
               selected
                 ? "bg-[#374151] text-white shadow-sm"
                 : "text-[#6B7280] hover:text-[#111827] hover:bg-[#F3F4F6]"

@@ -88,7 +88,7 @@ export function StageChanger({
         aria-expanded={isTerminal ? undefined : open}
         title={isTerminal ? "This is a terminal state — no further transitions" : "Change stage"}
         className={cn(
-          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-all duration-200",
+          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-colors duration-150",
           stateTone(currentState),
           isTerminal
             ? "cursor-default"

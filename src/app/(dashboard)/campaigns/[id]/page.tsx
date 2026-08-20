@@ -73,7 +73,7 @@ export default async function CampaignDetailPage({
           <CloneCampaignButton campaignId={campaign.id} />
           <Link
             href={`/campaigns/${campaign.id}/edit`}
-            className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200"
+            className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors duration-150"
           >
             Edit
           </Link>
