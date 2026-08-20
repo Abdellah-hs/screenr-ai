@@ -31,12 +31,27 @@ const stageColors: Record<CandidateStage, string> = {
   rejected: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
 };
 
+// Same four tones as the `tier*` Badge variants and the candidate detail page.
+// A verdict must not read one way in the list and another on the record.
 const tierColors: Record<string, string> = {
-  strong: "text-[#059669] bg-[#ECFDF5]",
-  moderate: "text-[#D97706] bg-[#FEF3C7]",
-  weak: "text-[#DC2626] bg-[#FEF2F2]",
-  no_match: "text-[#B91C1C] bg-[#FEE2E2]",
+  strong: "text-tier-strong bg-[#ECFDF5] border border-[#A7F3D0]",
+  moderate: "text-tier-potential bg-[#FEF3C7] border border-[#FDE68A]",
+  weak: "text-tier-weak bg-[#FEF2F2] border border-[#FECACA]",
+  no_match: "text-tier-no-match bg-[#FEE2E2] border border-[#FCA5A5]",
 };
+
+/**
+ * Past this many rows the table gets its own scroll region so the header can
+ * stick. Below it, the page scrolls as it always did.
+ *
+ * `position: sticky` needs a scrolling ancestor, and the horizontal-scroll
+ * wrapper is already one (a non-visible overflow on either axis makes the other
+ * `auto`), but it has no height, so nothing ever sticks. Constraining the
+ * height is what makes the header real. Doing it unconditionally would put an
+ * inner scrollbar on a campaign with four candidates, which is worse than no
+ * sticky header at all — hence the threshold.
+ */
+const STICKY_HEADER_MIN_ROWS = 12;
 
 const stageLabels: Record<CandidateStage, string> = {
   applied: "New",
@@ -185,6 +200,20 @@ export default function CandidateTable({
     });
   }
 
+  // Whether the view is narrowed at all — decides which empty state to show.
+  // `overdueActive`, not `overdueOnly`: a stale overdue intent on a campaign
+  // with no breaches narrows nothing, so it must not claim to.
+  const hasNarrowedView =
+    search.trim() !== "" || effectiveFilter !== "all" || overdueActive;
+
+  function clearFilters() {
+    setSearch("");
+    setStageFilter("all");
+    setOverdueOnly(false);
+  }
+
+  const stickyHeader = filtered.length >= STICKY_HEADER_MIN_ROWS;
+
   return (
     <div className="space-y-4">
       {/* Pipeline funnel — doubles as the stage filter. Click a card to filter,
@@ -304,14 +333,16 @@ export default function CandidateTable({
             placeholder="Search by name, email, title…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
+            aria-label="Search candidates"
+            className="w-full pl-9 pr-4 py-2 bg-white border border-[#D1D5DB] rounded-lg text-sm text-ink placeholder-[#9CA3AF] transition-colors duration-150 focus:border-primary focus:outline-[3px] focus:outline-primary/20 outline-none"
           />
         </div>
 
         <select
           value={effectiveSort}
           onChange={(e) => setSortBy(e.target.value as SortField)}
-          className="bg-white border border-[#E5E7EB] text-[#111827] text-sm rounded-lg px-3 py-2 outline-none focus:border-[#2563EB] w-full sm:w-auto"
+          aria-label="Sort candidates"
+          className="bg-white border border-[#D1D5DB] text-ink text-sm rounded-lg px-3 py-2 cursor-pointer transition-colors duration-150 focus:border-primary focus:outline-[3px] focus:outline-primary/20 outline-none w-full sm:w-auto"
         >
           <option value="applied_at">Sort by Newest</option>
           <option value="name">Sort A-Z</option>
@@ -324,14 +355,15 @@ export default function CandidateTable({
 
       {/* Table */}
       {filtered.length === 0 ? (
-        <div className="text-center py-16 bg-white border border-[#E5E7EB] rounded-xl flex flex-col justify-center items-center">
-          <div className="w-16 h-16 bg-[#EFF6FF] text-[#2563EB] rounded-full flex items-center justify-center mb-4">
+        <div className="text-center py-16 px-6 bg-white border border-[#E5E7EB] rounded-xl flex flex-col justify-center items-center">
+          <div className="w-16 h-16 bg-[#F3F4F6] text-[#9CA3AF] rounded-full flex items-center justify-center mb-4">
             <svg
               className="w-8 h-8"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
               strokeWidth={1.5}
+              aria-hidden="true"
             >
               <path
                 strokeLinecap="round"
@@ -340,15 +372,50 @@ export default function CandidateTable({
               />
             </svg>
           </div>
-          <p className="text-[#6B7280]">No candidates found matching your criteria.</p>
+          {/* "Nobody has applied" and "your filters match nobody" are different
+              facts with different next actions, and showing one message for
+              both let an over-narrow filter read as an empty campaign. */}
+          {hasNarrowedView ? (
+            <>
+              <p className="font-medium text-ink">No candidates match these filters</p>
+              <p className="mt-1 text-sm text-[#6B7280]">
+                {candidates.length} {candidates.length === 1 ? "person is" : "people are"} in
+                this campaign.
+              </p>
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="mt-4 px-4 py-2 text-sm font-semibold text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-[3px] focus-visible:outline-primary/45 focus-visible:outline-offset-2"
+              >
+                Clear filters
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="font-medium text-ink">No one has applied yet</p>
+              <p className="mt-1 max-w-sm text-sm text-[#6B7280]">
+                Share this campaign&apos;s apply link and applications will land here
+                automatically, parsed and scored.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="bg-white border border-[#E5E7EB] rounded-xl overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
+          <div className={stickyHeader ? "overflow-auto max-h-[calc(100vh-14rem)]" : "overflow-x-auto"}>
             <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-[#F9FAFB] border-b border-[#E5E7EB] text-xs font-semibold text-[#6B7280] uppercase tracking-wider">
+              <thead
+                className={`bg-[#F9FAFB] text-xs font-semibold text-[#6B7280] uppercase tracking-wider ${
+                  stickyHeader
+                    ? // A sticky <thead> loses its own border in most engines
+                      // (the row scrolls under it and the 1px border is painted
+                      // per-cell), so the edge is drawn with a shadow instead.
+                      "sticky top-0 z-10 shadow-[inset_0_-1px_0_#E5E7EB]"
+                    : "border-b border-[#E5E7EB]"
+                }`}
+              >
                 <tr>
-                  <th scope="col" className="w-10 pl-6 pr-0 py-4">
+                  <th scope="col" className="w-10 pl-6 pr-0 py-3">
                     <input
                       type="checkbox"
                       checked={allVisibleSelected}
@@ -367,24 +434,24 @@ export default function CandidateTable({
                       className="h-4 w-4 cursor-pointer accent-[#2563EB]"
                     />
                   </th>
-                  <th scope="col" className="px-6 py-4">
+                  <th scope="col" className="px-6 py-3">
                     Candidate
                   </th>
-                  <th scope="col" className="px-6 py-4">
+                  <th scope="col" className="px-6 py-3">
                     Title / Company
                   </th>
-                  <th scope="col" className="px-6 py-4">
+                  <th scope="col" className="px-6 py-3">
                     Stage
                   </th>
                   {showScore && (
-                    <th scope="col" className="px-6 py-4">
+                    <th scope="col" className="px-6 py-3">
                       Score
                     </th>
                   )}
-                  <th scope="col" className="px-6 py-4">
+                  <th scope="col" className="px-6 py-3">
                     Applied
                   </th>
-                  <th scope="col" className="px-6 py-4 text-center" />
+                  <th scope="col" className="px-6 py-3 text-center" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
@@ -395,11 +462,11 @@ export default function CandidateTable({
                       key={candidate.id}
                       className={`transition-colors group ${
                         selectedIds.has(candidate.id)
-                          ? "bg-[#EFF6FF]"
+                          ? "bg-[#EFF6FF] hover:bg-[#DBEAFE]"
                           : "hover:bg-[#F9FAFB]"
                       }`}
                     >
-                      <td className="w-10 pl-6 pr-0 py-4">
+                      <td className="w-10 pl-6 pr-0 py-3">
                         <input
                           type="checkbox"
                           checked={selectedIds.has(candidate.id)}
@@ -408,7 +475,7 @@ export default function CandidateTable({
                           className="h-4 w-4 cursor-pointer accent-[#2563EB]"
                         />
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-3">
                         <Link
                           href={`/campaigns/${campaignId}/candidates/${candidate.id}`}
                           className="block"
@@ -421,14 +488,14 @@ export default function CandidateTable({
                           </p>
                         </Link>
                       </td>
-                      <td className="px-6 py-4 text-[#4B5563]">
+                      <td className="px-6 py-3 text-[#4B5563]">
                         {candidate.current_title && candidate.current_company
                           ? `${candidate.current_title} at ${candidate.current_company}`
                           : candidate.current_title ||
                             candidate.current_company ||
                             "—"}
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-3">
                         <div className="flex items-center gap-1.5">
                           {candidate.is_archived ? (
                             <span className="inline-flex px-2.5 py-1 text-xs font-medium border rounded-md text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]">
@@ -469,10 +536,10 @@ export default function CandidateTable({
                         </div>
                       </td>
                       {showScore && (
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-3">
                           {stageScore ? (
                             <div className="flex items-center gap-2">
-                              <span className="font-semibold text-[#111827]">
+                              <span className="font-semibold text-ink tabular-nums">
                                 {stageScore.overall}
                               </span>
                               <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-[#F3F4F6] text-[#6B7280]">
@@ -489,11 +556,11 @@ export default function CandidateTable({
                               )}
                             </div>
                           ) : (
-                            <span className="text-[#9CA3AF]">—</span>
+                            <span className="text-sm text-[#9CA3AF]">Not scored</span>
                           )}
                         </td>
                       )}
-                      <td className="px-6 py-4 text-[#4B5563]">
+                      <td className="px-6 py-3 text-[#4B5563] tabular-nums">
                         {new Date(candidate.applied_at).toLocaleDateString(
                           "en-US",
                           {
@@ -503,7 +570,7 @@ export default function CandidateTable({
                           }
                         )}
                       </td>
-                      <td className="px-6 py-4 text-center">
+                      <td className="px-6 py-3 text-center">
                         <Link
                           href={`/campaigns/${campaignId}/candidates/${candidate.id}`}
                           className="text-[#9CA3AF] hover:text-[#2563EB] transition-colors"
