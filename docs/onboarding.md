@@ -2,6 +2,11 @@
 
 Welcome to the Screenr AI team! This document will get you up to speed on the project, our tech stack, development workflow, and everything you need to start contributing. Take your time going through it — there's no rush, and asking questions is always encouraged.
 
+> **Reviewed 2026-08-20.** Sections 1–3, 5 and 9 were checked against `main`.
+> The setup and workflow walkthroughs (4, 6–8) have not been re-verified step by
+> step — if a command or a path here disagrees with [CLAUDE.md](../CLAUDE.md),
+> CLAUDE.md is right, and please fix the line you found.
+
 ---
 
 ## 1. What is Screenr AI?
@@ -35,7 +40,7 @@ matter:
 |---|---|
 | **Campaign Management** | Hiring managers create campaigns (one per open role) with custom screening criteria and evaluation rubrics |
 | **Resume Parsing & Screening** | AI extracts structured data from resumes (PDF/DOCX) and scores them against campaign criteria |
-| **Screening Questions** | AI-generated questions delivered via email link; candidates respond with video/audio recordings |
+| **Screening Questions** | AI-generated questions delivered via email link; candidates answer in a live **voice** call with an AI that asks unscripted follow-ups (the typed form was removed in #161) |
 | **AI Technical Interview** | Real-time conversational AI interview (video call) with adaptive difficulty, proctoring, and multi-language support |
 | **Scoring & Transparency** | Every AI score includes factor-level breakdowns and transcript-to-score linkage |
 | **Manager Dashboard** | Ranked candidate lists, side-by-side comparisons, interview replay with AI commentary |
@@ -54,14 +59,30 @@ Read the full PRD at `docs/prd.md` — it is the source of truth for what we are
 | **Backend / API** | Next.js API Routes + Supabase | Route Handlers, Edge Functions |
 | **Database** | Supabase (PostgreSQL) | SQL, Row-Level Security, Realtime subscriptions |
 | **Authentication** | Supabase Auth | OAuth, token-based access for candidates |
-| **AI Engine** | Claude Opus 4.5 (Anthropic) | Prompt engineering, structured outputs, tool use |
-| **File Storage** | Supabase Storage | Resume uploads, video recordings |
-| **Hosting** | Hetzner Cloud | VPS deployment, Docker |
-| **Calendar** | Google Calendar API | OAuth, event creation |
-| **Email** | TBD (Resend / Postmark / SendGrid) | Transactional email, templates |
-| **Real-Time Comms** | TBD (LiveKit / Daily.co / Twilio) | WebRTC, real-time audio/video |
-| **Speech-to-Text** | TBD (Deepgram / Whisper) | Audio transcription |
-| **Text-to-Speech** | TBD (ElevenLabs / Google TTS) | Voice synthesis for AI interviewer |
+| **AI Engine** | OpenAI | Structured outputs, the Realtime API for live voice |
+| **File Storage** | Supabase Storage | Resume uploads, proctoring snapshots |
+| **Hosting** | Vercel | Serverless deploys, cron jobs (`vercel.json`) |
+| **Calendar** | Google Calendar API | OAuth, event creation, push notifications |
+| **Email** | Gmail API | Sent from the recruiter's own connected inbox |
+| **Real-Time Comms** | LiveKit | Rooms + agent workers for screening and interview |
+| **Speech-to-Text / TTS** | OpenAI Realtime | Speech-to-speech; no separate STT or TTS vendor |
+| **Resume extraction** | Datalab Marker | Layout-aware text extraction (PDF + DOCX) |
+
+Every "TBD" in this table was decided during the build. If you find another one
+anywhere in this guide, it is a stale line, not an open question — check
+[CLAUDE.md](../CLAUDE.md) and fix it.
+
+**Two decisions worth knowing on day one**, because they are load-bearing and
+easy to reverse by accident:
+
+- **The AI interview is not recorded** (2026-08-04). The candidate's camera is
+  live-only — the worker samples frames in memory for proctoring and discards
+  them. The durable record is the transcript, the score and the proctoring
+  report. This is a deliberate privacy posture, not missing work.
+- **The AI never decides anything.** It produces evidence — scores, quotes,
+  classifications — and a rule reads that evidence and calls `transition()`.
+  If you find yourself writing `if (aiScore > x) { advance() }` in an action,
+  it belongs in `src/lib/rules/`.
 
 ---
 
@@ -107,22 +128,28 @@ Work through these resources in your first 2–3 weeks. You don't need to master
 - [PostgreSQL Tutorial](https://www.postgresqltutorial.com/) — SQL fundamentals if you need them
 - Focus on: JOINs, indexes, JSON/JSONB columns, CTEs, and migrations
 
-### 3.6 Claude API (Anthropic AI)
+### 3.6 OpenAI API
 
-- **Docs:** [Anthropic API Documentation](https://docs.anthropic.com/) — the primary reference
-- [Claude Prompt Engineering Guide](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview) — how to write effective prompts
-- [Tool Use (Function Calling)](https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview) — how Claude calls functions, critical for our AI interviewer
-- [Structured Outputs](https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs) — getting JSON responses from Claude
-- [Anthropic Cookbook](https://github.com/anthropics/anthropic-cookbook) — practical examples and patterns
-- [Anthropic TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript) — the SDK we use in code
+- **Docs:** [OpenAI API Reference](https://platform.openai.com/docs/api-reference) — the primary reference
+- [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs) — how we get typed JSON back; used for every scoring and extraction call
+- [Realtime API](https://platform.openai.com/docs/guides/realtime) — the speech-to-speech model that runs both the voice screening and the AI interview
+- [OpenAI Node SDK](https://github.com/openai/openai-node) — the SDK in `src/lib/services/openai.ts`
+
+Read `src/lib/services/openai.ts` alongside these. Note what the prompts do
+**not** ask for: no numeric resume score, no tier, no hire/no-hire verdict. The
+model reports evidence and `src/lib/resume-scoring/` derives every number from
+it deterministically. Ask a model for a number twice and you get two answers.
 
 ### 3.7 Real-Time Communication (WebRTC)
 
-These are relevant when you work on the AI interview feature:
+Relevant when you work on the voice screening or the AI interview:
 
-- [WebRTC Basics — MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API) — understand the fundamentals
-- [LiveKit Docs](https://docs.livekit.io/) — one of our candidate real-time platforms
-- [Daily.co Docs](https://docs.daily.co/) — alternative option
+- [WebRTC Basics — MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API) — the fundamentals
+- [LiveKit Docs](https://docs.livekit.io/) — our real-time platform
+- [LiveKit Agents](https://docs.livekit.io/agents/) — the worker framework behind `agents/screening/` and `agents/interview/`
+
+The agent workers are separate packages with their own `pnpm install`, deployed
+to LiveKit Cloud. They are not part of the Next build — see `agents/*/README.md`.
 
 ### 3.8 Tailwind CSS
 
@@ -220,7 +247,9 @@ You will be granted access to the following on your first day. If anything is mi
 |---|---|---|
 | **GitHub** | Collaborator access to `MatiousCorp/screenr-ai` | [github.com/MatiousCorp/screenr-ai](https://github.com/MatiousCorp/screenr-ai) |
 | **Supabase** | Project member access (database, auth, storage, logs) | Invite link provided separately |
-| **Hetzner Cloud** | Server access for deployments | Credentials provided separately |
+| **Vercel** | Deploys, logs, cron job runs | Invite link provided separately |
+| **LiveKit Cloud** | Rooms + agent worker deploys | Credentials provided separately |
+| **OpenAI** | API key for scoring, extraction and the Realtime interview | Credentials provided separately |
 | **Claude Account** | For coding with Claude Code | Credentials provided separately |
 
 ---
@@ -353,11 +382,11 @@ These concepts come up constantly in the project. Make sure you're comfortable w
 
 | Concept | Why It Matters | Resource |
 |---|---|---|
-| **Prompt engineering** | Every AI feature depends on well-crafted prompts | [Anthropic Prompt Engineering Guide](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview) |
-| **Tool use / Function calling** | The AI interviewer uses tools to display content, manage interview flow | [Claude Tool Use Docs](https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview) |
-| **Structured outputs** | We need JSON responses for scoring, evaluations, parsed data | [Claude Structured Outputs](https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs) |
-| **Streaming** | Real-time interview requires streaming responses | [Claude Streaming](https://docs.anthropic.com/en/docs/build-with-claude/streaming) |
-| **Context windows** | Managing long interview transcripts within token limits | [Claude Models Overview](https://docs.anthropic.com/en/docs/about-claude/models) |
+| **Prompt engineering** | Every AI feature depends on a versioned, well-crafted prompt | [OpenAI Prompt Engineering](https://platform.openai.com/docs/guides/prompt-engineering) |
+| **Structured outputs** | Every scoring, extraction and evaluation call returns typed JSON | [OpenAI Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs) |
+| **Speech-to-speech** | Both live stages are one Realtime model, not an STT → LLM → TTS chain | [OpenAI Realtime](https://platform.openai.com/docs/guides/realtime) |
+| **Context windows** | Managing long interview transcripts within token limits | [OpenAI Models](https://platform.openai.com/docs/models) |
+| **Evidence, not verdicts** | The model reports what it read; our code derives every number | `src/lib/resume-scoring/` + CLAUDE.md |
 
 ### 9.2 Web Development Concepts
 
@@ -426,7 +455,8 @@ claude                    # Launch Claude Code in the current directory
 - [React Docs](https://react.dev)
 - [TypeScript Handbook](https://www.typescriptlang.org/docs/handbook/intro.html)
 - [Supabase Docs](https://supabase.com/docs)
-- [Anthropic API Docs](https://docs.anthropic.com/)
+- [OpenAI API Docs](https://platform.openai.com/docs) — the product AI
+- [LiveKit Docs](https://docs.livekit.io/) — the real-time stack
 - [Claude Code Docs](https://docs.anthropic.com/en/docs/claude-code)
 - [Tailwind CSS Docs](https://tailwindcss.com/docs)
 
@@ -434,8 +464,8 @@ claude                    # Launch Claude Code in the current directory
 
 - [Next.js Learn Course](https://nextjs.org/learn)
 - [Supabase + Next.js Quickstart](https://supabase.com/docs/guides/getting-started/quickstarts/nextjs)
-- [Anthropic Prompt Engineering Guide](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview)
-- [Anthropic Cookbook (Examples)](https://github.com/anthropics/anthropic-cookbook)
+- [OpenAI Prompt Engineering](https://platform.openai.com/docs/guides/prompt-engineering)
+- [OpenAI Cookbook (Examples)](https://github.com/openai/openai-cookbook)
 - [Total TypeScript (Free Tutorials)](https://www.totaltypescript.com/tutorials)
 - [PostgreSQL Tutorial](https://www.postgresqltutorial.com/)
 - [Conventional Commits](https://www.conventionalcommits.org/)

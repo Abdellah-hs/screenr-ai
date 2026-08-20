@@ -25,7 +25,7 @@ saying so; this page is the index.
 | --- | --- |
 | [prd.md](prd.md) | The product requirements. **Amended in place** as decisions land, with dated entries (2026-06-23 on-demand interviews, 2026-08-04 no recording). That convention works — keep it. |
 | [architecture.md](architecture.md) | The layer map and reading order. Refreshed 2026-08-20: six layers, the current directory map, the agent workers as a trust boundary. |
-| [onboarding.md](onboarding.md) | Intern onboarding — tech stack, workflow, conventions. Mostly slow-moving material that has aged well. Its pipeline overview is corrected; the deeper walkthroughs have not been re-verified line by line. |
+| [onboarding.md](onboarding.md) | Intern onboarding — tech stack, workflow, conventions. Reviewed 2026-08-20: the pipeline overview, the tech-stack table (five rows were wrong or still said "TBD"), the AI/real-time learning sections and the access list are all corrected. The setup and workflow walkthroughs have not been re-verified step by step. |
 | [voice-screening.md](voice-screening.md) | The screening threat model — why the unscripted follow-up exists. **Shipped**, but two transport decisions in it were later reversed; the file says which, inline. |
 
 ## Historical — kept for the reasoning, not the facts
