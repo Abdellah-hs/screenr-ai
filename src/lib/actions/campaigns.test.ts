@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockRequireUserId,
+  mockInsertCampaignTx,
   mockFetchCampaignScoringConfig,
   mockFetchCampaignStatus,
   mockUpdateCampaignStatusTx,
@@ -10,6 +11,7 @@ const {
   mockRevalidatePath,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
+  mockInsertCampaignTx: vi.fn(),
   mockFetchCampaignScoringConfig: vi.fn(),
   mockFetchCampaignStatus: vi.fn(),
   mockUpdateCampaignStatusTx: vi.fn(),
@@ -25,7 +27,7 @@ vi.mock("@/lib/auth/guards", () => ({
 vi.mock("@/lib/data/campaigns", () => ({
   fetchAllCampaigns: vi.fn(),
   fetchCampaignById: vi.fn(),
-  insertCampaignTx: vi.fn(),
+  insertCampaignTx: mockInsertCampaignTx,
   updateCampaignTx: vi.fn(),
   cloneCampaignTx: vi.fn(),
   fetchCampaignScoringConfig: mockFetchCampaignScoringConfig,
@@ -51,6 +53,7 @@ vi.mock("./candidates", () => ({
 }));
 
 import {
+  createCampaign,
   getCampaignById,
   getResumeCriteriaCount,
   updateCampaignStatus,
@@ -329,5 +332,56 @@ describe("updateCampaignsStatus (bulk)", () => {
       `/campaigns/${VALID_CAMPAIGN_ID_2}`,
       "layout",
     );
+  });
+});
+
+describe("createCampaign — team reviewers flag", () => {
+  const FLAG = "NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS";
+
+  /** The minimum a campaign form must carry, plus a reviewer payload. */
+  function formWithReviewers(): FormData {
+    const form = new FormData();
+    form.set("title", "Senior Engineer");
+    form.set("status", "draft");
+    form.set(
+      "reviewers_json",
+      JSON.stringify([{ user_id: "user-temp-1730000000000", role: "reviewer" }]),
+    );
+    return form;
+  }
+
+  beforeEach(() => {
+    delete process.env[FLAG];
+    mockInsertCampaignTx.mockResolvedValue(VALID_CAMPAIGN_ID);
+  });
+
+  /**
+   * Hiding the editor only removes the hidden input. This is the half that
+   * makes the flag mean something: a hand-built post must not seed the table
+   * with placeholder identities that grant nothing and read as real.
+   */
+  it("drops reviewers from a submitted form while the flag is off", async () => {
+    await createCampaign(formWithReviewers());
+
+    expect(mockInsertCampaignTx).toHaveBeenCalledTimes(1);
+    expect(mockInsertCampaignTx.mock.calls[0][3]).toEqual([]);
+  });
+
+  it("writes reviewers once the flag is on", async () => {
+    process.env[FLAG] = "true";
+
+    await createCampaign(formWithReviewers());
+
+    expect(mockInsertCampaignTx.mock.calls[0][3]).toEqual([
+      { user_id: "user-temp-1730000000000", role: "reviewer" },
+    ]);
+  });
+
+  it("still creates the campaign — the flag gates reviewers, not the form", async () => {
+    await createCampaign(formWithReviewers());
+
+    expect(mockInsertCampaignTx.mock.calls[0][0]).toMatchObject({
+      title: "Senior Engineer",
+    });
   });
 });

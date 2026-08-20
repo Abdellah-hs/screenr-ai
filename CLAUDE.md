@@ -439,7 +439,21 @@ LIVEKIT_API_SECRET            # LiveKit API secret — NEVER exposed to the brow
 AGENT_API_SECRET              # Shared secret the agent worker presents to /api/agent/* routes (transcript + proctoring reporting)
 LINKEDIN_CLIENT_ID            # LinkedIn OAuth app client id — social publishing ("Share on LinkedIn")
 LINKEDIN_CLIENT_SECRET        # LinkedIn OAuth app client secret — NEVER exposed to the browser
+NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS  # Feature flag, default OFF — see Feature Flags below
 ```
+
+### Feature Flags
+
+`src/lib/flags.ts`. Two rules hold for every flag:
+
+1. **Default off.** Unset, empty, or anything other than the exact string `"true"` reads as false. A flag exists to hide something that isn't ready, so a mistyped value must land on the safe state.
+2. **The flag holds on the server too.** Hiding a form section only removes its inputs — the Server Action behind it must refuse the work as well, or the flag hides a mess instead of preventing one.
+
+The `NEXT_PUBLIC_` prefix is required because flags are read inside Client Components as well as Server Actions. Next inlines them at **build** time, so flipping one takes a redeploy, not just a restart.
+
+| Flag | Default | What it gates |
+| --- | --- | --- |
+| `NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS` | off | The team-reviewers editor on `/campaigns/new`, and the reviewer rows `createCampaign` writes. The editor mints placeholder identities (`user-temp-<timestamp>`) for people with no account, and `campaign_reviewers` is referenced by no RLS policy (#132) — so the rows grant nothing while reading as though they do. Stays off until reviewer invites create real accounts and #132 settles what a reviewer may do. |
 
 Social publishing (`src/lib/services/linkedin.ts`) lets a recruiter publish a "we're hiring" post to their own LinkedIn feed from a campaign's **Share on social** panel. It mirrors the Gmail integration: the OAuth **app** credentials (`LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET`) live in env; the per-recruiter **access token** is obtained via consent (Settings → Integrations → Connect LinkedIn) and stored in the `social_connections` table (one row per `user_id` + `provider`, owner-only RLS, read server-side only). Connect/callback route handlers live in `src/app/api/integrations/linkedin/{connect,callback}/route.ts`; publishing goes through `publishLinkedInPost` (`src/lib/actions/social-publish.ts`). **Setup:** create a LinkedIn app, request the *Sign In with LinkedIn using OpenID Connect* + *Share on LinkedIn* products (approval required), set the two env vars, and register the redirect URL `<origin>/api/integrations/linkedin/callback`. Until then the Connect flow fails closed and nothing else breaks. AI **only drafts** the post copy; the recruiter reviews/edits and clicks Publish — the app never posts on its own. LinkedIn access tokens are long-lived (~60 days) and are not silently refreshed; an expired token surfaces as "Reconnect needed."
 

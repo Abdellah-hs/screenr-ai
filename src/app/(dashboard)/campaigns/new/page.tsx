@@ -18,6 +18,7 @@ import RubricEditor from "@/components/campaigns/rubric-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
 import TeamReviewersEditor from "@/components/campaigns/team-reviewers-editor";
+import { isTeamReviewersEnabled } from "@/lib/flags";
 import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
 
 export default function NewCampaignPage() {
@@ -176,10 +177,14 @@ export default function NewCampaignPage() {
           <RubricEditor />
         </div>
 
-        {/* Team Reviewers */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <TeamReviewersEditor />
-        </div>
+        {/* Team Reviewers — behind NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS, default off.
+            The section is omitted entirely rather than disabled: a greyed-out
+            editor would advertise a capability that does not exist yet. */}
+        {isTeamReviewersEnabled() && (
+          <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+            <TeamReviewersEditor />
+          </div>
+        )}
 
         {/* SLA Timers */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
