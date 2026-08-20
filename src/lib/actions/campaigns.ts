@@ -11,6 +11,7 @@ import {
   campaignIdsSchema,
 } from "@/lib/validations";
 import { decodeStatusSelection } from "@/lib/rules/campaign-status";
+import { isTeamReviewersEnabled } from "@/lib/flags";
 import { requireUserId } from "@/lib/auth/guards";
 import { scoreUnscoredCampaignCandidates } from "./candidates";
 
@@ -73,6 +74,12 @@ export async function createCampaign(formData: FormData) {
     rubrics, slaTimers, reviewers, availabilityRules
   } = parseCampaignFormData(formData);
 
+  // Hiding the editor removes the hidden input, but a form field is a
+  // suggestion, not a guard — a hand-built post would still write placeholder
+  // `user-temp-*` reviewers into a table nothing reads. The flag has to hold
+  // here too, or it only hides the mess instead of preventing it.
+  const teamReviewers = isTeamReviewersEnabled() ? reviewers : [];
+
   const campaignId = await insertCampaignTx(
     {
       title,
@@ -93,7 +100,7 @@ export async function createCampaign(formData: FormData) {
     },
     rubrics,
     slaTimers,
-    reviewers,
+    teamReviewers,
     availabilityRules,
     userId
   );
