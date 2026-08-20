@@ -1,5 +1,6 @@
-import { forwardRef, type InputHTMLAttributes } from "react";
+import { forwardRef, useId, type InputHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
+import { FIELD_BASE, FIELD_ERROR, FIELD_LABEL, FIELD_ERROR_TEXT } from "./field";
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -8,32 +9,32 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className, label, error, id, ...props }, ref) => {
-    const inputId = id || label?.toLowerCase().replace(/\s+/g, "-");
+    // The old id fell back to a slugged label, so two fields labelled "Name" on
+    // one page produced duplicate ids and the second label pointed at the first
+    // input. useId is per-instance, so it cannot collide.
+    const generatedId = useId();
+    const inputId = id || generatedId;
+    const errorId = `${inputId}-error`;
 
     return (
       <div className="space-y-1.5">
         {label && (
-          <label
-            htmlFor={inputId}
-            className="block text-sm font-medium text-foreground"
-          >
+          <label htmlFor={inputId} className={FIELD_LABEL}>
             {label}
           </label>
         )}
         <input
           ref={ref}
           id={inputId}
-          className={cn(
-            "w-full px-4 py-3 border border-border rounded-lg text-foreground bg-white/70 backdrop-blur-md",
-            "placeholder-[#94A3B8] transition-all duration-300",
-            "focus:border-primary focus:outline-none focus:shadow-[0_0_0_3px_rgba(30,64,175,0.15)] focus:bg-white",
-            error && "border-red-400 focus:border-red-500 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]",
-            className
-          )}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
+          className={cn(FIELD_BASE, error && FIELD_ERROR, className)}
           {...props}
         />
         {error && (
-          <p className="text-sm text-red-600">{error}</p>
+          <p id={errorId} className={FIELD_ERROR_TEXT}>
+            {error}
+          </p>
         )}
       </div>
     );

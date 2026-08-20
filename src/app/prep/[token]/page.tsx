@@ -78,7 +78,7 @@ export default async function InterviewPrepPage({
   return (
     <Shell>
       <header className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wider text-[#0369A1]">
+        <p className="text-xs font-semibold uppercase tracking-wider text-[#2563EB]">
           Interview preparation
         </p>
         <h1 className="mt-1 text-2xl font-semibold text-[#111827] sm:text-3xl">
@@ -90,16 +90,16 @@ export default async function InterviewPrepPage({
         </p>
       </header>
 
-      <div className="mb-6 flex flex-col gap-3 rounded-xl border border-[#BAE6FD] bg-[#F0F9FF] p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-6 flex flex-col gap-3 rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-[#0C4A6E]">
+          <p className="text-sm font-medium text-[#1E40AF]">
             About {guide.durationMinutes} minutes · start whenever you are ready
           </p>
-          <p className="mt-0.5 text-xs text-[#0369A1]">
+          <p className="mt-0.5 text-xs text-[#2563EB]">
             Complete it by {formatDeadline(expiresAt)}.
           </p>
         </div>
-        <p className="text-xs text-[#0369A1] sm:text-right">
+        <p className="text-xs text-[#2563EB] sm:text-right">
           Use the link in your
           <br className="hidden sm:block" /> invitation email to begin.
         </p>
@@ -137,7 +137,7 @@ function Section({ section }: { section: PrepSection }) {
         {section.items.map((item) => (
           <li key={item} className="flex gap-2.5">
             <span
-              className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#0369A1]"
+              className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#9CA3AF]"
               aria-hidden="true"
             />
             <span className="text-sm leading-relaxed text-[#374151]">{item}</span>

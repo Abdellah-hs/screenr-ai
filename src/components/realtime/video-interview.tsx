@@ -56,10 +56,10 @@ const STATUS_LABEL: Record<Status, string> = {
 };
 
 const STATUS_DOT: Record<Status, string> = {
-  idle: "bg-[#94A3B8]",
+  idle: "bg-[#9CA3AF]",
   connecting: "bg-amber-500 animate-pulse",
   live: "bg-green-500",
-  review: "bg-[#0369A1]",
+  review: "bg-[#2563EB]",
   submitting: "bg-amber-500 animate-pulse",
   done: "bg-green-500",
   error: "bg-red-500",
@@ -217,7 +217,7 @@ function computeIsDesktop(): boolean {
 }
 
 const PRIMARY_BTN =
-  "px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
+  "px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
 
 /**
  * Candidate-facing AI video interview on LiveKit. Mirrors the voice-screening
@@ -672,7 +672,7 @@ export default function VideoInterview({
 
   if (status === "done") {
     return (
-      <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
+      <div className="rounded-xl border border-[#E5E7EB] bg-white p-6 text-center">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
           <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -688,18 +688,18 @@ export default function VideoInterview({
   }
 
   return (
-    <div className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5">
+    <div className="space-y-4 rounded-xl border border-[#E5E7EB] bg-white p-5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className={`inline-block h-2.5 w-2.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
-          <span className="text-sm font-medium text-[#0C4A6E]" role="status" aria-live="polite">
+          <span className="text-sm font-medium text-[#374151]" role="status" aria-live="polite">
             {STATUS_LABEL[status]}
           </span>
         </div>
         {live && (
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold tabular-nums ${
-              lowTime ? "bg-red-50 text-red-600" : "bg-[#F0F9FF] text-[#0369A1]"
+              lowTime ? "bg-red-50 text-red-600" : "bg-[#F3F4F6] text-[#374151]"
             }`}
             role="timer"
             aria-label={`${secondsLeft} seconds remaining`}
@@ -786,11 +786,11 @@ export default function VideoInterview({
 
       {/* Live captions of the interviewer's questions. */}
       {(live || connecting) && (
-        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#0369A1]">
+        <div className="rounded-lg border border-[#C7D2FE] bg-[#FAFAFF] p-4">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#4338CA]">
             Interviewer
           </p>
-          <p className="min-h-[1.5rem] text-sm leading-relaxed text-[#0C4A6E]" aria-live="polite">
+          <p className="min-h-[1.5rem] text-sm leading-relaxed text-[#374151]" aria-live="polite">
             {caption || (
               <span className="text-[#6B7280]">
                 Listening… the interviewer&apos;s questions will appear here as they speak.
@@ -805,20 +805,20 @@ export default function VideoInterview({
       )}
 
       {review && (
-        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+        <div className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-4">
           {timedOut && (
-            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">
+            <p className="mb-1 text-sm font-medium text-[#374151]">
               Your {INTERVIEW_DURATION_MINUTES} minutes are up.
             </p>
           )}
           {hasResponses ? (
-            <p className="text-sm text-[#0C4A6E]">
+            <p className="text-sm text-[#374151]">
               We captured <strong>{responseCount}</strong> spoken{" "}
               {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re ready, or
               restart if you&apos;d like to redo the interview.
             </p>
           ) : (
-            <p className="text-sm text-[#0C4A6E]">
+            <p className="text-sm text-[#374151]">
               We didn&apos;t catch any spoken answers. Please restart before submitting.
             </p>
           )}
@@ -845,7 +845,7 @@ export default function VideoInterview({
           <button
             type="button"
             onClick={restart}
-            className="px-4 py-2 text-sm font-medium text-[#0C4A6E] bg-white border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200"
+            className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-200"
           >
             Restart
           </button>
