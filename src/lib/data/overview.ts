@@ -1,5 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
-import { toCandidateStage, type CandidateStage } from "@/lib/constants";
+import {
+  toCandidateStage,
+  type ApplicationState,
+  type CandidateStage,
+  type ScreeningTier,
+  type SlaTimer,
+} from "@/lib/constants";
+import {
+  DECISION_QUEUE_STATES,
+  type DecisionRow,
+} from "@/lib/overview/decision-queue";
 
 // ─── Active campaigns (lite) ─────────────────────────────────────────────────
 
@@ -201,4 +211,91 @@ export async function fetchRecentOutcomes(
     outcome: row.status,
     at: row.updated_at,
   }));
+}
+
+// ─── Decision queue ──────────────────────────────────────────────────────────
+
+/**
+ * Every application across the owner's non-deleted campaigns that is waiting on
+ * a **person**, or that lapsed without anybody deciding anything.
+ *
+ * The bell counts these per campaign; the overview names them, because "4
+ * candidates awaiting review" tells a recruiter there is work but not whether
+ * it is the work to do first. `campaigns.status` comes back because SLA does
+ * not run on a frozen campaign, and the SLA timers are resolved by the caller
+ * (they are already loaded per campaign). SELECT-only.
+ */
+export async function fetchDecisionQueueRows(userId: string): Promise<DecisionRow[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("applications")
+    .select(
+      "id, campaign_id, status, updated_at, resume_score, screening_q_score, interview_score, screening_tier, candidates!inner(first_name, last_name), campaigns!inner(title, status, user_id, deleted_at)",
+    )
+    .in("status", [...DECISION_QUEUE_STATES])
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return [];
+
+  return (
+    data as unknown as Array<{
+      id: string;
+      campaign_id: string;
+      status: ApplicationState;
+      updated_at: string | null;
+      resume_score: number | null;
+      screening_q_score: number | null;
+      interview_score: number | null;
+      screening_tier: ScreeningTier | null;
+      candidates: { first_name: string | null; last_name: string | null };
+      campaigns: { title: string; status: string };
+    }>
+  ).map((row) => ({
+    applicationId: row.id,
+    campaignId: row.campaign_id,
+    campaignTitle: row.campaigns.title,
+    campaignStatus: row.campaigns.status,
+    candidateName:
+      `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
+      "Unnamed candidate",
+    status: row.status,
+    updatedAt: row.updated_at ?? new Date().toISOString(),
+    resumeScore: row.resume_score,
+    screeningScore: row.screening_q_score,
+    interviewScore: row.interview_score,
+    tier: row.screening_tier,
+  }));
+}
+
+/**
+ * The SLA timers and status of every non-deleted campaign the owner has, keyed
+ * by campaign id — what `toDecisionItem` needs to judge lateness. SELECT-only.
+ */
+export async function fetchCampaignSlaContext(
+  userId: string,
+): Promise<Record<string, SlaTimer[]>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("sla_timers")
+    .select(
+      "campaign_id, stage, time_limit_hours, alert_threshold_hours, escalation_threshold_hours, campaigns!inner(user_id, deleted_at)",
+    )
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return {};
+
+  const byCampaign: Record<string, SlaTimer[]> = {};
+  for (const row of data as unknown as Array<
+    { campaign_id: string } & SlaTimer
+  >) {
+    (byCampaign[row.campaign_id] ??= []).push({
+      stage: row.stage,
+      time_limit_hours: row.time_limit_hours,
+      alert_threshold_hours: row.alert_threshold_hours,
+      escalation_threshold_hours: row.escalation_threshold_hours,
+    });
+  }
+  return byCampaign;
 }

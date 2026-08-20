@@ -1,177 +1,148 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { requireUserId } from "@/lib/auth/guards";
-import { getRecruiterNotifications } from "@/lib/actions/notifications";
 import {
   fetchActiveCampaignsLite,
   fetchPipelineStageCounts,
   fetchHiredCount,
   fetchExpiringScreeningLinks,
   fetchRecentOutcomes,
+  fetchDecisionQueueRows,
+  fetchCampaignSlaContext,
   type ExpiringScreeningLink,
   type RecentOutcome,
 } from "@/lib/data/overview";
-import { FUNNEL_STAGES } from "@/components/campaigns/pipeline-funnel";
 import {
-  NotificationIcon,
-  notificationCaption,
-  notificationHref,
-  notificationSummary,
-} from "@/components/notification-item";
+  decisionQueueHeadline,
+  groupDecisionQueue,
+  toDecisionItem,
+} from "@/lib/overview/decision-queue";
+import { DecisionQueueSection } from "./decision-queue-section";
+import { FUNNEL_STAGES } from "@/components/campaigns/pipeline-funnel";
 
 export default async function OverviewPage() {
   const userId = await requireUserId();
 
-  const [campaigns, pipeline, hired, expiring, outcomes, notifications] = await Promise.all([
+  const [
+    campaigns,
+    pipeline,
+    hired,
+    expiring,
+    outcomes,
+    queueRows,
+    slaByCampaign,
+  ] = await Promise.all([
     fetchActiveCampaignsLite(userId),
     fetchPipelineStageCounts(userId),
     fetchHiredCount(userId),
     fetchExpiringScreeningLinks(userId),
     fetchRecentOutcomes(userId, 6),
-    getRecruiterNotifications(),
+    fetchDecisionQueueRows(userId),
+    fetchCampaignSlaContext(userId),
   ]);
+
+  const queue = groupDecisionQueue(
+    queueRows.map((row) => toDecisionItem(row, slaByCampaign[row.campaignId] ?? [])),
+  );
 
   const inPipeline =
     pipeline.buckets.applied +
     pipeline.buckets.screening +
     pipeline.buckets.interview +
     pipeline.buckets.final_interview;
-  const awaitingReview = notifications
-    .filter((n) => n.kind === "pending_review")
-    .reduce((sum, n) => sum + n.count, 0);
 
   return (
-    <div className="max-w-7xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-[#111827]">Overview</h1>
-        <p className="text-sm text-[#6B7280] mt-1">Your hiring pipeline at a glance.</p>
-      </div>
+    <div className="mx-auto max-w-7xl">
+      <header className="mb-8">
+        <h1 className="text-2xl font-semibold text-ink">Overview</h1>
+        <p className="mt-1 text-sm text-[#6B7280]">
+          {decisionQueueHeadline(queue)} Nothing below has moved on its own.
+        </p>
+      </header>
 
-      {/* KPI tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard
-          label="Active campaigns"
-          value={campaigns.length}
-          href="/campaigns"
-          accent="text-[#2563EB]"
-          iconWrap="bg-[#EFF6FF]"
-          icon={
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20 7h-3V5a2 2 0 00-2-2H9a2 2 0 00-2 2v2H4a1 1 0 00-1 1v11a1 1 0 001 1h16a1 1 0 001-1V8a1 1 0 00-1-1zM9 5h6v2H9V5z" />
-          }
-        />
-        <StatCard
-          label="In pipeline"
-          value={inPipeline}
-          accent="text-[#7C3AED]"
-          iconWrap="bg-[#F5F3FF]"
-          icon={
-            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6 0a3 3 0 10-2.6-4.5" />
-          }
-        />
-        <StatCard
-          label="Awaiting your review"
-          value={awaitingReview}
-          accent={awaitingReview > 0 ? "text-[#B45309]" : "text-[#111827]"}
-          iconWrap={awaitingReview > 0 ? "bg-[#FFFBEB]" : "bg-[#F3F4F6]"}
-          icon={
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7l2 2 4-4" />
-          }
-        />
-        <StatCard
-          label="Hired"
-          value={hired}
-          accent="text-[#059669]"
-          iconWrap="bg-[#ECFDF5]"
-          icon={
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          }
-        />
-      </div>
-
-      {/* Pipeline funnel across active campaigns */}
-      <section className="bg-white rounded-xl border border-[#E5E7EB] p-6 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
-            Pipeline · Active campaigns
-          </h2>
-          <Link href="/campaigns" className="text-sm font-medium text-[#2563EB] hover:underline">
-            View campaigns
-          </Link>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* The queue is the page. Everything in the rail is context for it. */}
+        <div className="lg:col-span-2">
+          <DecisionQueueSection queue={queue} />
         </div>
-        {pipeline.total === 0 ? (
-          <EmptyHint>
-            No candidates in your active campaigns yet. Set a campaign to{" "}
-            <span className="font-medium">Active</span> and sync resumes to get started.
-          </EmptyHint>
-        ) : (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-            {FUNNEL_STAGES.map((stage) => {
-              const count = pipeline.buckets[stage.key as keyof typeof pipeline.buckets] ?? 0;
-              return (
-                <div
-                  key={stage.key}
-                  className="flex flex-col rounded-lg border border-[#E5E7EB] bg-white p-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`flex h-6 w-6 items-center justify-center rounded-md ${stage.iconWrap}`}>
-                      {stage.icon}
-                    </span>
-                    <span
-                      className={`text-xl font-semibold tabular-nums ${
-                        count > 0 ? stage.accent : "text-[#D1D5DB]"
-                      }`}
-                    >
-                      {count}
-                    </span>
-                  </div>
-                  <p className="mt-1.5 truncate text-xs font-medium text-[#6B7280]">{stage.name}</p>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Awaiting you — reuses the notification bell view-model */}
-        <section className="lg:col-span-2 bg-white rounded-xl border border-[#E5E7EB] p-6">
-          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
-            Awaiting you
-          </h2>
-          {notifications.length === 0 ? (
-            <EmptyHint>
-              You&apos;re all caught up. Reviews, SLA alerts, and expired interviews will appear
-              here.
-            </EmptyHint>
-          ) : (
-            <ul className="divide-y divide-[#F3F4F6]">
-              {notifications.map((n) => (
-                <li key={n.id}>
-                  <Link
-                    href={notificationHref(n)}
-                    className="flex items-start gap-3 py-3 -mx-2 px-2 rounded-lg transition-colors hover:bg-[#F9FAFB]"
-                  >
-                    <NotificationIcon notification={n} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm text-[#111827]">
-                        <span className="font-medium">{n.campaignTitle}</span>
-                        {notificationSummary(n)}
-                      </span>
-                      <span className="block text-xs text-[#6B7280] mt-0.5">
-                        {notificationCaption(n)}
-                      </span>
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {/* Side column: expiring links + recent outcomes */}
         <div className="space-y-6">
-          <section className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-            <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
+          {/* Counts, not work — which is why they sit beside the queue rather
+              than above it. A tile that goes up is not a thing to do. */}
+          <section className="rounded-xl border border-[#E5E7EB] bg-white p-5">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-ink">
+              Where things stand
+            </h2>
+            <div className="grid grid-cols-2 gap-4">
+              <StatTile
+                label="Active campaigns"
+                value={campaigns.length}
+                href="/campaigns"
+              />
+              <StatTile label="People in pipeline" value={inPipeline} />
+              <StatTile
+                label="Awaiting your decision"
+                value={queue.waitingCount}
+                accent={queue.waitingCount > 0 ? "text-[#B45309]" : undefined}
+              />
+              <StatTile label="Hired" value={hired} accent="text-[#047857]" />
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-[#E5E7EB] bg-white p-5">
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-ink">
+                Pipeline
+              </h2>
+              <Link
+                href="/campaigns"
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                Campaigns
+              </Link>
+            </div>
+            {pipeline.total === 0 ? (
+              <EmptyHint>
+                No candidates in your active campaigns yet. Set a campaign to{" "}
+                <span className="font-medium">Active</span> and share its apply
+                link to get started.
+              </EmptyHint>
+            ) : (
+              <ul className="space-y-2">
+                {FUNNEL_STAGES.map((stage) => {
+                  const count =
+                    pipeline.buckets[stage.key as keyof typeof pipeline.buckets] ?? 0;
+                  return (
+                    <li
+                      key={stage.key}
+                      className="flex items-center justify-between gap-3"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${stage.iconWrap}`}
+                        >
+                          {stage.icon}
+                        </span>
+                        <span className="truncate text-sm text-[#4B5563]">
+                          {stage.name}
+                        </span>
+                      </span>
+                      <span
+                        className={`text-sm font-semibold tabular-nums ${
+                          count > 0 ? stage.accent : "text-[#D1D5DB]"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-[#E5E7EB] bg-white p-5">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-ink">
               Expiring soon
             </h2>
             {expiring.length === 0 ? (
@@ -185,8 +156,8 @@ export default async function OverviewPage() {
             )}
           </section>
 
-          <section className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-            <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
+          <section className="rounded-xl border border-[#E5E7EB] bg-white p-5">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-ink">
               Recent outcomes
             </h2>
             {outcomes.length === 0 ? (
@@ -207,45 +178,39 @@ export default async function OverviewPage() {
 
 // ─── Local presentational pieces ─────────────────────────────────────────────
 
-function StatCard({
+/**
+ * A count in the rail. No icon: four coloured glyphs beside four numbers is
+ * decoration competing with the queue, and none of them is a thing to do.
+ */
+function StatTile({
   label,
   value,
-  icon,
-  iconWrap,
-  accent,
+  accent = "text-ink",
   href,
 }: {
   label: string;
   value: number;
-  icon: ReactNode;
-  iconWrap: string;
-  accent: string;
+  accent?: string;
   href?: string;
 }) {
   const body = (
     <>
-      <div className="flex items-center justify-between">
-        <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${iconWrap}`}>
-          <svg className={`h-5 w-5 ${accent}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-            {icon}
-          </svg>
-        </span>
-      </div>
-      <p className={`mt-3 text-3xl font-semibold tabular-nums ${accent}`}>{value}</p>
-      <p className="text-sm text-[#6B7280] mt-0.5">{label}</p>
+      <p className={`text-2xl font-semibold tabular-nums ${accent}`}>{value}</p>
+      <p className="mt-0.5 text-xs text-[#6B7280]">{label}</p>
     </>
   );
 
-  const className =
-    "block bg-white rounded-xl border border-[#E5E7EB] p-5 transition-colors";
   if (href) {
     return (
-      <Link href={href} className={`${className} hover:border-[#CBD5E1] hover:bg-[#F8FAFC] cursor-pointer`}>
+      <Link
+        href={href}
+        className="block rounded-lg transition-colors duration-150 hover:text-primary"
+      >
         {body}
       </Link>
     );
   }
-  return <div className={className}>{body}</div>;
+  return <div>{body}</div>;
 }
 
 function EmptyHint({ children }: { children: ReactNode }) {
