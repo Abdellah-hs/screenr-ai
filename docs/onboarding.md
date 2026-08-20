@@ -11,11 +11,23 @@ Screenr AI is an internal **Applicant Tracking System (ATS) & AI-Powered Intervi
 ### The Hiring Pipeline
 
 ```
-Resume Collection → AI Screening → Filtering → Screening Questions →
-Answer Scoring → AI Interview Scheduling → AI Interview →
+Resume Collection → AI Screening → Filtering → Voice Screening Questions →
+Answer Scoring → AI Interview Invitation → AI Interview →
 Interview Scoring → AI Reference Check (optional) → Manager Review →
-Final Interview Scheduling
+Final Interview Scheduling (human, calendar-booked)
 ```
+
+Two things in that line changed after this guide was first written, and both
+matter:
+
+- The **AI interview is invited, not scheduled**. It runs on demand — the
+  candidate gets a token link with a deadline and starts whenever they are
+  ready. There is no calendar to book against, because the AI is always
+  available. (Decision 2026-06-23.)
+- **Slot booking belongs to the final human interview**, at the end of the
+  pipeline, where a real person's calendar genuinely has to be coordinated.
+- Screening answers are **spoken**, not typed. The text form was deleted
+  outright in #161.
 
 ### Core Capabilities
 

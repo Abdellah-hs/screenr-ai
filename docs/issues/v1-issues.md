@@ -1,5 +1,13 @@
 # V1 Implementation Issues — Revised
 
+> **MAY-2026 SNAPSHOT — a historical record, not a live plan.**
+> The I-numbered seed list from 2026-05-16. It is kept, and deliberately not
+> edited, because many open GitHub issues still cite it as `Source: I<n>` —
+> rewriting it would break those references.
+> Treat the GitHub issue board as the live plan and [CLAUDE.md](../../CLAUDE.md)
+> as the description of what is built. Where this file and either of those
+> disagree, this file is wrong.
+
 > Generated from `docs/issue-seed.md`, `docs/delta-prd.md`, `docs/feature-buckets.md`, `docs/implementation-audit.md`, and `docs/prd-notes.md`.
 > Use the existing issue templates in `.github/ISSUE_TEMPLATE/feature.md` when creating these in GitHub.
 > **Last updated:** 2026-05-01 after D1 resolved (V1 includes AI interview stack, OpenAI engine confirmed).

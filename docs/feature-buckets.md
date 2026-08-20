@@ -1,5 +1,10 @@
 # Feature Buckets — Screenr AI
 
+> **HISTORICAL — not current status.**
+> Written 2026-04-29 and kept as a record of the thinking at the time.
+> The keep / clarify / defer split predates everything shipped since: voice screening, the AI video interview, interview scoring, two-stream proctoring, calendar sync, and the manager review decision point.
+> For what is actually built today, read [CLAUDE.md](../CLAUDE.md) and [docs/README.md](README.md).
+
 A keep / clarify / defer classification of every feature in [docs/implementation-audit.md](implementation-audit.md), as of 2026-04-29. Use this to scope V1 conversations.
 
 ## Keep — built or core enough that V1 can't ship without them

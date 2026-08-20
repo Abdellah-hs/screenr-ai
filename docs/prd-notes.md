@@ -1,5 +1,10 @@
 # PRD Notes — Screenr AI
 
+> **HISTORICAL — not current status.**
+> Written 2026-05-16 and kept as a record of the thinking at the time.
+> A reading of the PRD as it stood then. Several details have since changed — the interview runs on OpenAI Realtime rather than Claude with TTS/STT, and interview recording was retired on 2026-08-04.
+> For what is actually built today, read [CLAUDE.md](../CLAUDE.md) and [docs/README.md](README.md).
+
 A reading of [docs/prd.md](prd.md) and [docs/onboarding.md](onboarding.md): what the product is, how it's intended to be built, the pipeline, and every place the spec still defers a decision.
 
 ## Product summary
