@@ -533,6 +533,12 @@ Expiry is therefore detected **both** ways: proactively on the schedule above, a
 
 ## Documentation
 
-- [Product Requirements (PRD)](docs/prd.md)
+Start at **[docs/README.md](docs/README.md)** — it says which documents in `docs/` are current and which are historical, and why.
+
+- [docs/README.md](docs/README.md) — index of the docs folder, with a reviewed-on date
+- [Product Requirements (PRD)](docs/prd.md) — amended in place, with dated entries
+- [Architecture](docs/architecture.md) — the layer map and reading order
 - [Intern Onboarding Guide](docs/onboarding.md)
 - [Design System Master](design-system/screenr-ai/MASTER.md)
+
+**This file wins.** Most of `docs/` is planning material from April–May 2026, kept for the reasoning rather than the facts. Where CLAUDE.md and any document under `docs/` disagree, CLAUDE.md is the current one — every file that has stopped being true now says so in a banner at the top.

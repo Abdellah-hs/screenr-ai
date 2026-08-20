@@ -1,5 +1,10 @@
 # Implementation Audit — Screenr AI
 
+> **HISTORICAL — not current status.**
+> Written 2026-04-29 and kept as a record of the thinking at the time.
+> Superseded by the 2026-08-14 PRD implementation audit (issue #160). Much of it is now flatly wrong: Gmail resume intake was retired in favour of the public apply page, the shared `GOOGLE_REFRESH_TOKEN` was replaced by per-recruiter OAuth, and the standalone screening-criteria editor no longer exists.
+> For what is actually built today, read [CLAUDE.md](../CLAUDE.md) and [docs/README.md](README.md).
+
 A feature-by-feature mapping of what is actually in the codebase against [docs/prd.md](prd.md), as of 2026-04-29.
 
 Status legend: ✅ implemented, 🟡 partial / spec-divergent, ⛔ not built.

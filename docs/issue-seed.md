@@ -1,5 +1,10 @@
 # Issue seed list — revised after decisions on 2026-04-30
 
+> **HISTORICAL — not current status.**
+> Written 2026-04-30 and kept as a record of the thinking at the time.
+> A draft list that was bulk-created into GitHub issues. Those issues, not this file, are the live record.
+> For what is actually built today, read [CLAUDE.md](../CLAUDE.md) and [docs/README.md](README.md).
+
 A draft of issues to bulk-create. Skim it, strike anything wrong, then I bulk-create.
 
 ## What changed

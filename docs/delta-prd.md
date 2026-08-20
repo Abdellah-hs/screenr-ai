@@ -1,5 +1,10 @@
 # Delta PRD — Screenr AI
 
+> **HISTORICAL — not current status.**
+> Written 2026-04-29 and kept as a record of the thinking at the time.
+> Its central working assumption — "V1 = ATS-first, not the full real-time AI interview platform" — was overtaken. The real-time AI interview shipped in #117-#124.
+> For what is actually built today, read [CLAUDE.md](../CLAUDE.md) and [docs/README.md](README.md).
+
 A decision-oriented complement to `docs/prd.md`, based on the current codebase audit as of 2026-04-29.
 
 ## Working assumption

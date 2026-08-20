@@ -1,16 +1,35 @@
 # Voice Screening (OpenAI Realtime) — Design & Threat Model
 
-Status: **planned**. Replaces the text screening form, which is gameable
-(copy-paste / ChatGPT). See CLAUDE.md → PRD 3.4.3 (text form is a legacy
-shortcut) and issues #47, #48.
+Status: **shipped** (#80–#85). The text screening form was deleted outright in
+#161 — there is no typed-answer path left and no env flag re-enables one.
+
+> **Two decisions below were later reversed. The threat model was not.**
+>
+> - **Transport: LiveKit, not a direct browser WebRTC connection.** The
+>   "No LiveKit for screening" call under *Decision* no longer holds. Screening
+>   now opens a per-attempt LiveKit room server-side and dispatches an agent
+>   worker into it (`agents/screening/`). The reason is the one this document
+>   argued *for* elsewhere: the candidate's browser must not be the source of
+>   the transcript. With a direct browser connection it was. Now the worker
+>   reports the transcript server-to-server and the browser's submit carries
+>   only the token.
+> - **Recording was retired** on 2026-08-04 for the AI interview, so "video +
+>   recording + proctoring" no longer describes what LiveKit is there for.
+>   Proctoring stayed; recording did not.
+>
+> Everything from *Threat model* onward is still the live rationale — it is why
+> the unscripted follow-up exists, and it has not changed.
+> Current behaviour: CLAUDE.md → PRD 3.4.3 and the proctoring section.
 
 ## Decision
 
 - **Screening = a short, voice-only AI Q&A**, delivered live by **OpenAI
   Realtime** (speech-to-speech) over a direct browser WebRTC connection.
+  *(Superseded — see the note above: the transport is LiveKit + an agent worker.)*
 - **No LiveKit** for screening. OpenAI Realtime does not require it; LiveKit is
   only needed for **video + recording + proctoring**, which belong to the
   separate **AI interview** stage (#29), not the cheap screening filter.
+  *(Superseded — see the note above.)*
 - Layered anti-gaming: screening is cheat-**resistant** (filters most gaming);
   the proctored A/V interview (#29 + #41) is the cheat-**hard** gate.
 
