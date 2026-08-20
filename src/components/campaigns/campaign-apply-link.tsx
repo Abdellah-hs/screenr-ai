@@ -40,7 +40,7 @@ export function CampaignApplyLink({ slug, isActive }: CampaignApplyLinkProps) {
   }
 
   return (
-    <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
+    <div className="rounded-xl border border-[#E5E7EB] bg-white p-5">
       <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-2">
         Public apply link
       </h2>
