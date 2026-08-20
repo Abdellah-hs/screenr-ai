@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Room,
   RoomEvent,
@@ -94,6 +94,25 @@ const PRIMARY_BTN =
  * the review / re-record step (a re-record simply opens a fresh room; the new
  * draft overwrites the old).
  */
+/** One promise, ticked. Used only in the pre-call list. */
+function Assurance({ children }: { children: ReactNode }) {
+  return (
+    <li className="flex items-start gap-2">
+      <svg
+        className="mt-0.5 h-4 w-4 shrink-0 text-[#059669]"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+        aria-hidden="true"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+      <span className="leading-relaxed">{children}</span>
+    </li>
+  );
+}
+
 export default function VoiceScreening({
   token,
   campaignTitle,
@@ -524,6 +543,18 @@ export default function VoiceScreening({
             your time, and you&apos;ll be able to review before submitting.
           </p>
 
+          {/* Said before the call, not after: these are the three things a
+              candidate is most likely to be anxious about, and answering them
+              afterwards is answering them too late. */}
+          <ul className="space-y-1.5 text-sm text-[#4B5563]">
+            <Assurance>Nothing is recorded — only a written transcript is kept.</Assurance>
+            <Assurance>
+              You can re-record before you submit. Nothing is sent until you press
+              submit.
+            </Assurance>
+            <Assurance>A person reads everything before any decision is made.</Assurance>
+          </ul>
+
           {/* Pre-call environment notice. */}
           <div className="flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="note">
             <svg className="mt-0.5 h-4 w-4 shrink-0 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
@@ -539,9 +570,16 @@ export default function VoiceScreening({
       )}
 
       {expired && status !== "submitting" && (
-        <p className="text-sm text-red-600" role="alert">
-          This link has expired. Please contact the hiring team for a new one.
-        </p>
+        <div className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-4" role="alert">
+          <p className="text-sm font-medium text-ink">This link has expired</p>
+          {/* A candidate who misses a deadline assumes they have been rejected.
+              They have not been — nothing about this is a decision. */}
+          <p className="mt-1 text-sm leading-relaxed text-[#4B5563]">
+            Screening links stay open for seven days. Nothing you did is lost, and this
+            does not count against you. Reply to the email we sent you and a person will
+            send a fresh link.
+          </p>
+        </div>
       )}
 
       {expiresAt && !expired && (status === "idle" || review) && (
@@ -565,6 +603,13 @@ export default function VoiceScreening({
             Enable sound
           </button>
         </div>
+      )}
+
+      {(live || connecting) && audioBlocked && (
+        <p className="text-xs text-[#6B7280]">
+          The call keeps running while this shows — the captions below carry the
+          question, so nothing is missed if you tap late.
+        </p>
       )}
 
       {/* Live captions of the interviewer's questions — a lifeline if the audio
@@ -603,8 +648,9 @@ export default function VoiceScreening({
             </p>
           ) : (
             <p className="text-sm text-[#374151]">
-              We didn&apos;t catch any spoken answers on that call. Please re-record before
-              submitting.
+              We didn&apos;t catch any answers. That usually means the microphone
+              wasn&apos;t picking you up. Please re-record — an empty submission would
+              leave the team nothing to read.
             </p>
           )}
         </div>
