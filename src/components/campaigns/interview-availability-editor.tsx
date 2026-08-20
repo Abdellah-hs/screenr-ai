@@ -1,9 +1,13 @@
 "use client";
 
+import { useRef } from "react";
+
 interface Props {
   initialSlotMinutes?: number | null;
   initialTimezone?: string | null;
   initialHorizonDays?: number;
+  /** Reports both knobs together so a caller can describe the booking window. */
+  onChange?: (next: { slotMinutes: number; horizonDays: number }) => void;
 }
 
 const inputClass =
@@ -28,7 +32,13 @@ export default function InterviewAvailabilityEditor({
   initialSlotMinutes = null,
   initialTimezone = null,
   initialHorizonDays = DEFAULT_HORIZON_DAYS,
+  onChange,
 }: Props) {
+  // The inputs stay uncontrolled — the form reads them directly — so the last
+  // value of each is kept here purely to report the pair together.
+  const slotRef = useRef(initialSlotMinutes ?? DEFAULT_SLOT_MINUTES);
+  const horizonRef = useRef(initialHorizonDays);
+
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-medium text-[#111827]">Final Interview Availability</h3>
@@ -68,6 +78,13 @@ export default function InterviewAvailabilityEditor({
             min="5"
             max="240"
             defaultValue={initialSlotMinutes ?? DEFAULT_SLOT_MINUTES}
+            onChange={(e) => {
+              slotRef.current = Number(e.target.value) || DEFAULT_SLOT_MINUTES;
+              onChange?.({
+                slotMinutes: slotRef.current,
+                horizonDays: horizonRef.current,
+              });
+            }}
             className={inputClass}
           />
         </div>
@@ -79,6 +96,13 @@ export default function InterviewAvailabilityEditor({
             min="1"
             max="90"
             defaultValue={initialHorizonDays}
+            onChange={(e) => {
+              horizonRef.current = Number(e.target.value) || DEFAULT_HORIZON_DAYS;
+              onChange?.({
+                slotMinutes: slotRef.current,
+                horizonDays: horizonRef.current,
+              });
+            }}
             className={inputClass}
           />
         </div>

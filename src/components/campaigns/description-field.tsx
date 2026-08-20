@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { generateCampaignDescription } from "@/lib/actions/ai-generate";
 import type { GenerateDescriptionInput } from "@/lib/validations";
 import { cn } from "@/lib/utils";
@@ -20,8 +20,21 @@ type Mode = GenerateDescriptionInput["mode"];
  * Grounding inputs (seniority, skills, …) are generation-only; title/department/
  * location are read live from the surrounding form.
  */
-export function DescriptionField({ initialValue = "" }: { initialValue?: string }) {
+export function DescriptionField({
+  initialValue = "",
+  onChange,
+}: {
+  initialValue?: string;
+  /** Reports the current text — the AI-assist buttons write to it too, so a
+   *  caller cannot get this from the textarea's own change events. */
+  onChange?: (value: string) => void;
+}) {
   const [value, setValue] = useState(initialValue);
+
+  useEffect(() => {
+    onChange?.(value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
   const [panelOpen, setPanelOpen] = useState(false);
 
   const [seniority, setSeniority] = useState("");

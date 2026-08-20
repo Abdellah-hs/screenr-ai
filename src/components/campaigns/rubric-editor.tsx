@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import type { EvaluationRubric, RubricDimension, PipelineStage } from "@/lib/constants";
 import { generateRubricDimensions } from "@/lib/actions/ai-generate";
 
 interface RubricEditorProps {
   initialRubrics?: EvaluationRubric[];
   campaignId?: string;
+  /** How many dimensions the resume rubric has — zero means no CV is scored. */
+  onResumeDimensionsChange?: (count: number) => void;
 }
 
 const STAGES: { key: PipelineStage; label: string }[] = [
@@ -46,6 +48,7 @@ function createEmptyDimension(): RubricDimension {
 export default function RubricEditor({
   initialRubrics = [],
   campaignId = "",
+  onResumeDimensionsChange,
 }: RubricEditorProps) {
   const [rubrics, setRubrics] = useState<EvaluationRubric[]>(() => {
     const existing = [...initialRubrics];
@@ -58,6 +61,15 @@ export default function RubricEditor({
   });
 
   const [activeTab, setActiveTab] = useState<PipelineStage>("resume");
+
+  // The resume rubric is the one that decides whether CVs get scored at all, so
+  // a caller can describe the consequence of leaving it empty.
+  const resumeDimensionCount =
+    rubrics.find((r) => r.stage === "resume")?.dimensions.length ?? 0;
+  useEffect(() => {
+    onResumeDimensionsChange?.(resumeDimensionCount);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeDimensionCount]);
   const [generating, startGenerate] = useTransition();
   const [error, setError] = useState<string | null>(null);
 

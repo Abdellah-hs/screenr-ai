@@ -1,9 +1,23 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { createCampaign } from "@/lib/actions/campaigns";
-import { CAMPAIGN_STATUS_SELECTIONS } from "@/lib/constants";
+import {
+  CAMPAIGN_STATUS_SELECTIONS,
+  type CampaignStatusSelection,
+  type SlaTimer,
+} from "@/lib/constants";
+import { DescriptionField } from "@/components/campaigns/description-field";
+import RubricEditor from "@/components/campaigns/rubric-editor";
+import AiSettingsFields, {
+  type AiSettings,
+} from "@/components/campaigns/ai-settings-fields";
+import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
+import TeamReviewersEditor from "@/components/campaigns/team-reviewers-editor";
+import { isTeamReviewersEnabled } from "@/lib/flags";
+import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
+import { CampaignRunPreview } from "@/components/campaigns/campaign-run-preview";
 
 /** Today's date as YYYY-MM-DD in the user's local timezone, for a date input's
  *  `min` so a deadline can't be set in the past. */
@@ -13,17 +27,30 @@ function todayLocalYmd(): string {
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
 }
-import { DescriptionField } from "@/components/campaigns/description-field";
-import RubricEditor from "@/components/campaigns/rubric-editor";
-import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
-import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
-import TeamReviewersEditor from "@/components/campaigns/team-reviewers-editor";
-import { isTeamReviewersEnabled } from "@/lib/flags";
-import InterviewAvailabilityEditor from "@/components/campaigns/interview-availability-editor";
+
+const fieldClass =
+  "w-full px-4 py-2 bg-white border border-[#D1D5DB] rounded-lg text-sm text-ink placeholder-[#9CA3AF] outline-none transition-colors duration-150 focus:border-primary focus:outline-[3px] focus:outline-primary/20";
 
 export default function NewCampaignPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Mirrored from the form so the preview can say what these settings will
+  // actually run. The form itself stays uncontrolled — this is a read of the
+  // handful of values that change the pipeline's shape, not a second copy of
+  // every input.
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [status, setStatus] = useState<CampaignStatusSelection>("draft");
+  const [ai, setAi] = useState<AiSettings>({
+    automationMode: "human_in_loop",
+    screeningThreshold: 70,
+    interviewPersona: "neutral",
+  });
+  const [resumeDimensions, setResumeDimensions] = useState(0);
+  const [slaTimers, setSlaTimers] = useState<SlaTimer[]>([]);
+  const [slotMinutes, setSlotMinutes] = useState(45);
+  const [horizonDays, setHorizonDays] = useState(14);
 
   // Use onSubmit + preventDefault rather than the form `action` prop: React 19
   // auto-resets an uncontrolled form once its action resolves, and since we
@@ -45,173 +72,305 @@ export default function NewCampaignPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <h1 className="text-2xl font-bold text-[#111827] mb-6">New Campaign</h1>
+    <div className="mx-auto max-w-7xl">
+      <div className="mb-4 flex items-baseline gap-2 text-sm text-[#6B7280]">
+        <Link href="/campaigns" className="transition-colors duration-150 hover:text-ink">
+          Campaigns
+        </Link>
+        <span>/</span>
+        <span className="text-ink">New campaign</span>
+      </div>
 
-      <form onSubmit={handleSubmit} className="space-y-5 bg-white p-6 rounded-xl border border-[#E5E7EB]">
-        {error && (
-          <div className="p-3 text-sm text-[#DC2626] bg-[#FEF2F2] rounded-lg border border-[#FECACA]">
-            {error}
-          </div>
-        )}
+      <header className="mb-8 max-w-3xl">
+        <h1 className="text-2xl font-semibold text-ink">New campaign</h1>
+        <p className="mt-1.5 text-sm leading-relaxed text-[#6B7280]">
+          A campaign is one open role and everything the pipeline needs to run it:
+          the description candidates read, the rubric the AI scores against, who
+          reviews, and how long each stage may take.
+        </p>
+      </header>
 
-        <div>
-          <label htmlFor="title" className="block text-sm font-medium text-[#111827] mb-1">
-            Title <span className="text-[#DC2626]">*</span>
-          </label>
-          <input
-            id="title"
-            name="title"
-            type="text"
-            required
-            className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            placeholder="e.g. Senior Frontend Engineer"
-          />
-        </div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4 min-w-0 lg:col-span-2"
+          id="new-campaign-form"
+        >
+          {error && (
+            <div className="rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-3 text-sm text-[#DC2626]">
+              {error}
+            </div>
+          )}
 
-        <DescriptionField />
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="department" className="block text-sm font-medium text-[#111827] mb-1">
-              Department
-            </label>
-            <input
-              id="department"
-              name="department"
-              type="text"
-              className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-              placeholder="e.g. Engineering"
-            />
-          </div>
-
-          <div>
-            <label htmlFor="positions" className="block text-sm font-medium text-[#111827] mb-1">
-              Open Positions
-            </label>
-            <input
-              id="positions"
-              name="positions"
-              type="number"
-              min={1}
-              defaultValue={1}
-              className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="status" className="block text-sm font-medium text-[#111827] mb-1">
-              Status
-            </label>
-            <select
-              id="status"
-              name="status"
-              defaultValue="draft"
-              className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            >
-              {CAMPAIGN_STATUS_SELECTIONS.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="deadline" className="block text-sm font-medium text-[#111827] mb-1">
-              Deadline
-            </label>
-            <input
-              id="deadline"
-              name="deadline"
-              type="date"
-              min={todayLocalYmd()}
-              suppressHydrationWarning
-              className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            />
-
-            <fieldset className="mt-2">
-              <legend className="text-xs font-medium text-[#6B7280] mb-1">After the deadline passes</legend>
-              <label className="flex items-center gap-2 text-sm text-[#374151] cursor-pointer">
-                <input
-                  type="radio"
-                  name="deadline_enforced"
-                  value="false"
-                  defaultChecked
-                  className="h-4 w-4 border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] cursor-pointer"
-                />
-                Keep accepting (informational only)
-              </label>
-              <label className="mt-1 flex items-center gap-2 text-sm text-[#374151] cursor-pointer">
-                <input
-                  type="radio"
-                  name="deadline_enforced"
-                  value="true"
-                  className="h-4 w-4 border-[#D1D5DB] text-[#2563EB] focus:ring-[#2563EB] cursor-pointer"
-                />
-                Stop accepting applications
-              </label>
-            </fieldset>
-          </div>
-        </div>
-
-        <div>
-          <label htmlFor="location" className="block text-sm font-medium text-[#111827] mb-1">
-            Location
-          </label>
-          <input
-            id="location"
-            name="location"
-            type="text"
-            className="w-full px-4 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none transition-colors"
-            placeholder="e.g. Remote, New York, NY"
-          />
-        </div>
-
-        <AiSettingsFields />
-
-        {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <RubricEditor />
-        </div>
-
-        {/* Team Reviewers — behind NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS, default off.
-            The section is omitted entirely rather than disabled: a greyed-out
-            editor would advertise a capability that does not exist yet. */}
-        {isTeamReviewersEnabled() && (
-          <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-            <TeamReviewersEditor />
-          </div>
-        )}
-
-        {/* SLA Timers */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <SlaTimersEditor />
-        </div>
-
-        {/* AI Interview Availability */}
-        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
-          <InterviewAvailabilityEditor />
-        </div>
-
-        <div className="flex justify-end gap-3 pt-4 border-t border-[#E5E7EB] mt-6">
-          <Link
-            href="/campaigns"
-            className="px-4 py-2.5 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors"
+          <Section
+            index="01"
+            title="The role"
+            hint="Candidates see everything in this section"
           >
-            Cancel
-          </Link>
-          <button
-            type="submit"
-            disabled={loading}
-            className="px-6 py-2.5 bg-[#2563EB] text-white rounded-lg text-sm font-medium hover:bg-[#1D4ED8] transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            <div>
+              <label
+                htmlFor="title"
+                className="mb-1 block text-sm font-medium text-ink"
+              >
+                Title <span className="text-[#DC2626]">*</span>
+              </label>
+              <input
+                id="title"
+                name="title"
+                type="text"
+                required
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className={fieldClass}
+                placeholder="e.g. Senior Frontend Engineer"
+              />
+            </div>
+
+            <DescriptionField onChange={setDescription} />
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label
+                  htmlFor="department"
+                  className="mb-1 block text-sm font-medium text-ink"
+                >
+                  Department
+                </label>
+                <input
+                  id="department"
+                  name="department"
+                  type="text"
+                  className={fieldClass}
+                  placeholder="e.g. Engineering"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="positions"
+                  className="mb-1 block text-sm font-medium text-ink"
+                >
+                  Open positions
+                </label>
+                <input
+                  id="positions"
+                  name="positions"
+                  type="number"
+                  min={1}
+                  defaultValue={1}
+                  className={fieldClass}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="location"
+                className="mb-1 block text-sm font-medium text-ink"
+              >
+                Location
+              </label>
+              <input
+                id="location"
+                name="location"
+                type="text"
+                className={fieldClass}
+                placeholder="e.g. Remote, New York, NY"
+              />
+            </div>
+          </Section>
+
+          <Section
+            index="02"
+            title="Status and deadline"
+            hint="Controls whether the apply link accepts anyone"
           >
-            {loading ? "Creating..." : "Create Campaign"}
-          </button>
-        </div>
-      </form>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label
+                  htmlFor="status"
+                  className="mb-1 block text-sm font-medium text-ink"
+                >
+                  Status
+                </label>
+                <select
+                  id="status"
+                  name="status"
+                  value={status}
+                  onChange={(e) =>
+                    setStatus(e.target.value as CampaignStatusSelection)
+                  }
+                  className={fieldClass}
+                >
+                  {CAMPAIGN_STATUS_SELECTIONS.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-[#6B7280]">
+                  Draft keeps the apply link dark. Nothing is scored and nobody is
+                  contacted until you set it Active.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="deadline"
+                  className="mb-1 block text-sm font-medium text-ink"
+                >
+                  Deadline
+                </label>
+                <input
+                  id="deadline"
+                  name="deadline"
+                  type="date"
+                  min={todayLocalYmd()}
+                  suppressHydrationWarning
+                  className={fieldClass}
+                />
+
+                <fieldset className="mt-2">
+                  <legend className="mb-1 text-xs font-medium text-[#6B7280]">
+                    After the deadline passes
+                  </legend>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-[#374151]">
+                    <input
+                      type="radio"
+                      name="deadline_enforced"
+                      value="false"
+                      defaultChecked
+                      className="h-4 w-4 cursor-pointer accent-ink"
+                    />
+                    Keep accepting (informational only)
+                  </label>
+                  <label className="mt-1 flex cursor-pointer items-center gap-2 text-sm text-[#374151]">
+                    <input
+                      type="radio"
+                      name="deadline_enforced"
+                      value="true"
+                      className="h-4 w-4 cursor-pointer accent-ink"
+                    />
+                    Stop accepting applications
+                  </label>
+                </fieldset>
+              </div>
+            </div>
+          </Section>
+
+          <Section index="03" title="How much the AI may do alone">
+            <AiSettingsFields onChange={setAi} />
+          </Section>
+
+          <Section index="04" title="Evaluation rubrics">
+            <RubricEditor onResumeDimensionsChange={setResumeDimensions} />
+          </Section>
+
+          {/* Team Reviewers — behind NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS, default off.
+              The section is omitted entirely rather than disabled: a greyed-out
+              editor would advertise a capability that does not exist yet. */}
+          {isTeamReviewersEnabled() && (
+            <Section index="05" title="Who reviews">
+              <TeamReviewersEditor />
+            </Section>
+          )}
+
+          <Section
+            index={isTeamReviewersEnabled() ? "06" : "05"}
+            title="SLA timers"
+            hint="Timers only alert a person — they never advance and never reject"
+          >
+            <SlaTimersEditor onChange={setSlaTimers} />
+          </Section>
+
+          <Section
+            index={isTeamReviewersEnabled() ? "07" : "06"}
+            title="Final interview availability"
+          >
+            <InterviewAvailabilityEditor
+              onChange={(next) => {
+                setSlotMinutes(next.slotMinutes);
+                setHorizonDays(next.horizonDays);
+              }}
+            />
+          </Section>
+
+          <div className="flex flex-wrap items-center justify-end gap-3 rounded-xl border border-[#E5E7EB] bg-white p-5">
+            <p className="mr-auto text-xs text-[#6B7280]">
+              Creating saves the campaign only. Nothing is sent, scored or published
+              until the status is Active.
+            </p>
+            <Link href="/campaigns" className="btn-secondary text-sm">
+              Cancel
+            </Link>
+            <button type="submit" disabled={loading} className="btn-primary text-sm">
+              {loading ? "Creating…" : "Create campaign"}
+            </button>
+          </div>
+        </form>
+
+        <CampaignRunPreview
+          config={{
+            status,
+            automationMode: ai.automationMode,
+            screeningThreshold: ai.screeningThreshold,
+            resumeDimensions,
+            interviewPersona: ai.interviewPersona,
+            slaTimers,
+            slotMinutes,
+            horizonDays,
+          }}
+          preflight={[
+            { label: "Title", done: title.trim().length > 0 },
+            { label: "Description", done: description.trim().length >= 10 },
+            {
+              label:
+                resumeDimensions > 0
+                  ? `Resume rubric · ${resumeDimensions} ${
+                      resumeDimensions === 1 ? "dimension" : "dimensions"
+                    }`
+                  : "Resume rubric · no dimensions yet",
+              done: resumeDimensions > 0,
+            },
+          ]}
+        />
+      </div>
     </div>
+  );
+}
+
+/**
+ * A numbered step with a one-line statement of what it decides.
+ *
+ * The form was one card of stacked fields, which gave a recruiter no way to
+ * tell which answers were consequential and which were labels. The hint is the
+ * point of the number.
+ */
+function Section({
+  index,
+  title,
+  hint,
+  children,
+}: {
+  index: string;
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-[#E5E7EB] bg-white p-6">
+      <div className="mb-4 flex items-baseline gap-3">
+        <span className="text-xs font-semibold tabular-nums text-[#9CA3AF]">
+          {index}
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink">
+            {title}
+          </h2>
+          {hint && <p className="mt-0.5 text-xs text-[#6B7280]">{hint}</p>}
+        </div>
+      </div>
+      <div className="space-y-4">{children}</div>
+    </section>
   );
 }

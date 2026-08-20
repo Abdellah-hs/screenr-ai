@@ -218,11 +218,18 @@ export default function EditCampaignPage({
           />
         </div>
 
-        <AiSettingsFields
-          defaultAutomationMode={campaign.automation_mode}
-          defaultScreeningThreshold={campaign.screening_threshold}
-          defaultInterviewPersona={campaign.interview_persona}
-        />
+        {/* The card's own heading moved out with the create form's numbered
+            sections — the edit page keeps its own. */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <p className="mb-3 text-sm font-medium text-ink">
+            How much the AI may do alone
+          </p>
+          <AiSettingsFields
+            defaultAutomationMode={campaign.automation_mode}
+            defaultScreeningThreshold={campaign.screening_threshold}
+            defaultInterviewPersona={campaign.interview_persona}
+          />
+        </div>
 
         {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">

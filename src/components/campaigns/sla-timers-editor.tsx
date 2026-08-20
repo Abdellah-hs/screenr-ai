@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type SlaTimer, SLA_STAGES } from "@/lib/constants";
 
 interface Props {
   initialTimers?: SlaTimer[];
+  /** Reports the current timer set so a caller can describe what will run. */
+  onChange?: (timers: SlaTimer[]) => void;
 }
 
 const DEFAULT_SLA: SlaTimer = {
@@ -14,8 +16,15 @@ const DEFAULT_SLA: SlaTimer = {
   escalation_threshold_hours: 44,
 };
 
-export default function SlaTimersEditor({ initialTimers = [] }: Props) {
+export default function SlaTimersEditor({ initialTimers = [], onChange }: Props) {
   const [timers, setTimers] = useState<SlaTimer[]>(initialTimers);
+
+  // Report after commit rather than from each mutator: the timers change from
+  // six different handlers, and one effect cannot forget one of them.
+  useEffect(() => {
+    onChange?.(timers);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timers]);
 
   const addTimer = () => {
     // Default a new timer to the first stage that has no timer yet, so the new
