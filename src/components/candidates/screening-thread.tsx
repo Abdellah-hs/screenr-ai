@@ -119,7 +119,7 @@ export default function ScreeningThread({
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
       <div className="flex items-start justify-between mb-4 gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider">
+          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
             Screening Questions
           </h2>
           <StatusLine response={response} />
@@ -130,7 +130,7 @@ export default function ScreeningThread({
             onClick={handleSend}
             disabled={sending || !canSend}
             title={canSend ? undefined : sendDisabledReason}
-            className="px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#E0F2FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            className="px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {sending ? "Resending…" : "Resend email"}
           </button>
@@ -141,7 +141,7 @@ export default function ScreeningThread({
             onClick={handleScore}
             disabled={scoring || !campaignActive}
             title={campaignActive ? undefined : frozenReason}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {scoring ? (
               <>
@@ -180,9 +180,9 @@ export default function ScreeningThread({
       )}
 
       {status === "scored" && response && (
-        <div className="mb-4 p-3 rounded-lg bg-[#F0F9FF] border border-[#BAE6FD]">
+        <div className="mb-4 p-3 rounded-lg bg-[#FAFAFF] border border-[#C7D2FE]">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-[#0369A1] uppercase tracking-wider">
+            <span className="text-xs font-medium text-[#4338CA] uppercase tracking-wider">
               Overall Score
             </span>
             <span className={`text-2xl font-bold ${scoreColor(response.overall_score)}`}>
@@ -220,7 +220,7 @@ export default function ScreeningThread({
               key={q.id}
               className="pl-7 relative"
             >
-              <span className="absolute left-0 top-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#0369A1] text-white text-xs font-semibold">
+              <span className="absolute left-0 top-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#374151] text-white text-xs font-semibold">
                 {idx + 1}
               </span>
               <p className="text-sm font-medium text-[#111827] mb-1">
@@ -315,7 +315,7 @@ function TranscriptReview({
   return (
     <details open className="mb-4 rounded-lg border border-[#E5E7EB] bg-white">
       <summary className="flex items-center justify-between gap-3 cursor-pointer select-none px-3 py-2.5 list-none">
-        <span className="text-xs font-semibold text-[#0369A1] uppercase tracking-wider">
+        <span className="text-xs font-semibold text-[#4338CA] uppercase tracking-wider">
           Voice Transcript
         </span>
         <span className="flex items-center gap-2">
@@ -345,13 +345,13 @@ function TranscriptReview({
                 id={transcriptTurnId(ANCHOR, i)}
                 className={`rounded-lg border p-2.5 transition-colors ${TURN_TARGET_HIGHLIGHT} ${
                   isAgent
-                    ? "border-[#BAE6FD] bg-[#F0F9FF]"
+                    ? "border-[#C7D2FE] bg-[#FAFAFF]"
                     : "border-[#E5E7EB] bg-[#F9FAFB]"
                 }`}
               >
                 <span
                   className={`block text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${
-                    isAgent ? "text-[#0369A1]" : "text-[#6B7280]"
+                    isAgent ? "text-[#4338CA]" : "text-[#6B7280]"
                   }`}
                 >
                   {isAgent ? "Interviewer" : "Candidate"}

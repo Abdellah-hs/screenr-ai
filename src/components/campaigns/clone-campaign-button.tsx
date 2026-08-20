@@ -27,7 +27,7 @@ export default function CloneCampaignButton({ campaignId }: CloneCampaignButtonP
       <button
         onClick={handleClone}
         disabled={pending}
-        className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {pending ? "Cloning..." : "Clone"}
       </button>

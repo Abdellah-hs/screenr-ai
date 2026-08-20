@@ -33,9 +33,9 @@ export default function InterviewAvailabilityEditor({
     <div className="space-y-4">
       <h3 className="text-sm font-medium text-[#111827]">Final Interview Availability</h3>
 
-      <div className="flex items-start gap-3 rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+      <div className="flex items-start gap-3 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] p-4">
         <svg
-          className="mt-0.5 h-5 w-5 shrink-0 text-[#0369A1]"
+          className="mt-0.5 h-5 w-5 shrink-0 text-[#2563EB]"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -47,9 +47,9 @@ export default function InterviewAvailabilityEditor({
           <rect width="18" height="18" x="3" y="4" rx="2" />
           <path d="M16 2v4M8 2v4M3 10h18" />
         </svg>
-        <div className="text-sm text-[#0C4A6E]">
+        <div className="text-sm text-[#1E40AF]">
           <p className="font-medium">Availability is automatic — nothing to set up.</p>
-          <p className="mt-1 text-[#075985]">
+          <p className="mt-1 text-[#1E40AF]">
             Candidates can book any <strong>weekday between 9am and 6pm</strong> that&apos;s
             free on your Google Calendar, minus your existing meetings with a 15-minute
             buffer on each side. Just keep your calendar up to date — the bookable times

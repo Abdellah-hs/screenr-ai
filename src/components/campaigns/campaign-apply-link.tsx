@@ -49,13 +49,13 @@ export function CampaignApplyLink({ slug, isActive }: CampaignApplyLinkProps) {
         campaign&apos;s pipeline automatically.
       </p>
       <div className="flex flex-col sm:flex-row items-stretch gap-2">
-        <code className="flex-1 min-w-0 truncate rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2.5 text-sm text-[#334155]">
+        <code className="flex-1 min-w-0 truncate rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-3 py-2.5 text-sm text-[#374151]">
           {url}
         </code>
         <button
           type="button"
           onClick={copy}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 whitespace-nowrap"
+          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-all duration-200 whitespace-nowrap"
         >
           {copied ? (
             <>

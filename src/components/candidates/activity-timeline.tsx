@@ -21,8 +21,8 @@ const actorTone: Record<TransitionActor, string> = {
   // Automated steps are the background hum of the pipeline; a person acting is
   // the thing worth finding when you scan this list, so only that one is inked.
   system: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
-  ai: "text-[#7C3AED] bg-[#F5F3FF] border-[#DDD6FE]",
-  recruiter: "text-[#0369A1] bg-[#F0F9FF] border-[#BAE6FD]",
+  ai: "text-[#4338CA] bg-[#FAFAFF] border-[#C7D2FE]",
+  recruiter: "text-[#111827] bg-[#F9FAFB] border-[#D1D5DB]",
 };
 
 /** Rounded, human duration: "3 days", "6 hours", "under an hour". */
@@ -53,7 +53,7 @@ export function ActivityTimelinePanel({ timeline }: { timeline: ActivityTimeline
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
-          <h3 className="text-sm font-semibold text-[#0C4A6E]">Activity</h3>
+          <h3 className="text-sm font-semibold text-[#111827]">Activity</h3>
           <p className="text-xs text-[#6B7280] mt-0.5">
             Every state change on this application, in order, with who caused it
             and why. Append-only — nothing here can be edited or removed.
@@ -110,7 +110,7 @@ function TimelineRow({ entry, isLast }: { entry: TimelineEntry; isLast: boolean 
           isOverride
             ? "border-[#D97706]"
             : entry.actor === "recruiter"
-              ? "border-[#0369A1]"
+              ? "border-[#111827]"
               : "border-[#D1D5DB]"
         }`}
         aria-hidden="true"

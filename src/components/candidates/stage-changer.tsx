@@ -25,7 +25,7 @@ function stateTone(state: ApplicationState): string {
   if (state === "new" || state === "archived") {
     return "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]";
   }
-  return "text-[#0369A1] bg-[#F0F9FF] border-[#BAE6FD]";
+  return "text-[#2563EB] bg-[#EFF6FF] border-[#BFDBFE]";
 }
 
 export function StageChanger({
@@ -92,7 +92,7 @@ export function StageChanger({
           stateTone(currentState),
           isTerminal
             ? "cursor-default"
-            : "cursor-pointer hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1",
+            : "cursor-pointer hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1",
         )}
       >
         {formatStateLabel(currentState)}
@@ -137,7 +137,7 @@ export function StageChanger({
         {target && (
           <>
             <ModalHeader>
-              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+              <h2 className="text-lg font-semibold text-[#111827]">
                 Change candidate stage
               </h2>
               <p className="mt-1 text-sm text-[#6B7280]">
@@ -178,7 +178,7 @@ export function StageChanger({
                 type="button"
                 onClick={handleConfirm}
                 disabled={isPending || rationale.trim().length === 0}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer transition-colors hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer transition-colors hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isPending ? "Saving…" : "Confirm change"}
               </button>

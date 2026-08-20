@@ -171,7 +171,7 @@ export function HitlReviewPanel({
               <button
                 type="button"
                 onClick={acknowledgeWarning}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] transition-colors"
+                className="px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] transition-colors"
               >
                 Got it
               </button>
@@ -180,7 +180,7 @@ export function HitlReviewPanel({
         ) : (
           <>
             <ModalHeader>
-              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+              <h2 className="text-lg font-semibold text-[#111827]">
                 {isApprove ? "Approve for screening" : "Reject application"}
               </h2>
               <p className="text-sm text-[#6B7280] mt-1">
@@ -200,7 +200,7 @@ export function HitlReviewPanel({
                   ? "e.g. Strong relevant experience; want to see screening answers."
                   : "e.g. Background does not match required stack; declining."
               }
-              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] outline-none resize-y"
+              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none resize-y"
             />
 
             {error && (

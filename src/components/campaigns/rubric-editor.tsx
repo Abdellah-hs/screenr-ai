@@ -117,14 +117,14 @@ export default function RubricEditor({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <label className="block text-sm font-medium text-[#0C4A6E]">
+        <label className="block text-sm font-medium text-[#111827]">
           Evaluation Rubrics
         </label>
         <button
           type="button"
           onClick={handleAutoGenerate}
           disabled={generating}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {generating ? (
             <>
@@ -152,7 +152,7 @@ export default function RubricEditor({
       )}
 
       {/* Stage Tabs */}
-      <div className="flex gap-1 p-1 bg-[#F0F9FF] rounded-lg">
+      <div className="flex gap-1 p-1 bg-[#F3F4F6] rounded-lg">
         {STAGES.map((stage) => {
           const rubric = rubrics.find((r) => r.stage === stage.key);
           const dimCount = rubric?.dimensions.length ?? 0;
@@ -161,15 +161,15 @@ export default function RubricEditor({
               key={stage.key}
               type="button"
               onClick={() => setActiveTab(stage.key)}
-              className={`flex-1 px-3 py-2 text-sm font-medium rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200 ${
+              className={`flex-1 px-3 py-2 text-sm font-medium rounded-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-all duration-200 ${
                 activeTab === stage.key
-                  ? "bg-white text-[#0C4A6E] shadow-sm"
-                  : "text-[#6B7280] hover:text-[#0C4A6E]"
+                  ? "bg-white text-[#111827] shadow-sm"
+                  : "text-[#6B7280] hover:text-[#111827]"
               }`}
             >
               {stage.label}
               {dimCount > 0 && (
-                <span className="ml-1.5 text-xs bg-[#E2E8F0] text-[#6B7280] px-1.5 py-0.5 rounded-full">
+                <span className="ml-1.5 text-xs bg-[#E5E7EB] text-[#6B7280] px-1.5 py-0.5 rounded-full">
                   {dimCount}
                 </span>
               )}
@@ -189,7 +189,7 @@ export default function RubricEditor({
         {dimensions.map((dim) => (
           <div
             key={dim.id}
-            className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 bg-[#F0F9FF] rounded-lg border border-[#E2E8F0]"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 p-3 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]"
           >
             <input
               type="text"
@@ -197,7 +197,7 @@ export default function RubricEditor({
               onChange={(e) => updateDimension(dim.id, "name", e.target.value)}
               placeholder="Dimension name"
               aria-label="Dimension name"
-              className="flex-1 min-w-[180px] px-3 py-1.5 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200"
+              className="flex-1 min-w-[180px] px-3 py-1.5 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] focus-visible:outline-none transition-all duration-200"
             />
 
             <div className="flex items-center gap-1.5">
@@ -251,7 +251,7 @@ export default function RubricEditor({
       <button
         type="button"
         onClick={addDimension}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#0369A1] cursor-pointer rounded-lg hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#4B5563] cursor-pointer rounded-lg hover:bg-[#F3F4F6] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-all duration-200"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -290,7 +290,7 @@ function SegmentedControl<T extends string>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="inline-flex rounded-lg border border-[#E2E8F0] bg-white p-0.5"
+      className="inline-flex rounded-lg border border-[#E5E7EB] bg-white p-0.5"
     >
       {options.map((opt) => {
         const selected = opt.value === value;
@@ -300,10 +300,10 @@ function SegmentedControl<T extends string>({
             type="button"
             aria-pressed={selected}
             onClick={() => onChange(opt.value)}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] ${
+            className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] ${
               selected
-                ? "bg-[#0369A1] text-white shadow-sm"
-                : "text-[#6B7280] hover:text-[#0C4A6E] hover:bg-[#F0F9FF]"
+                ? "bg-[#374151] text-white shadow-sm"
+                : "text-[#6B7280] hover:text-[#111827] hover:bg-[#F3F4F6]"
             }`}
           >
             {opt.label}

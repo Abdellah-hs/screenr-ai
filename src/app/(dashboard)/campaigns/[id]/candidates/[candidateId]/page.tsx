@@ -16,17 +16,21 @@ import ScreeningThread from "@/components/candidates/screening-thread";
 import InterviewTranscript from "@/components/candidates/interview-transcript";
 import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
 import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
+import { AiRail, AiCaption, AiEyebrow } from "@/components/ui";
 import { TIER_LABELS } from "@/lib/constants";
 import { uuidSchema } from "@/lib/validations";
 import type { CandidateScore, ApplicationState } from "@/lib/constants";
 import type { InterviewBooking } from "@/lib/data/scheduling";
 import type { ParsedResumeData } from "@/lib/services/openai";
 
+// Same four tones as the `tier*` Badge variants. Kept as a local map because
+// the tier keys here are the score's own, not the badge's — but the hexes must
+// not drift, or the same verdict reads two different ways on two screens.
 const tierColors: Record<string, string> = {
-  strong: "text-[#059669] bg-[#ECFDF5]",
-  moderate: "text-[#D97706] bg-[#FEF3C7]",
-  weak: "text-[#DC2626] bg-[#FEF2F2]",
-  no_match: "text-[#B91C1C] bg-[#FEE2E2]",
+  strong: "text-tier-strong bg-[#ECFDF5] border border-[#A7F3D0]",
+  moderate: "text-tier-potential bg-[#FEF3C7] border border-[#FDE68A]",
+  weak: "text-tier-weak bg-[#FEF2F2] border border-[#FECACA]",
+  no_match: "text-tier-no-match bg-[#FEE2E2] border border-[#FCA5A5]",
 };
 
 const scoreStageLabels: Record<string, string> = {
@@ -53,102 +57,116 @@ function ScoreCard({
     score.current_rubric_version != null &&
     score.rubric_version !== score.current_rubric_version;
 
+  const scoredAt = new Date(score.scored_at).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  // The rail wraps the WHOLE block, not just the summary paragraph. The number,
+  // the tier, the factor bars and the rationale are one object: you should not
+  // be able to read a 61 without seeing that a model wrote it.
   return (
-    <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-sm font-semibold text-[#0C4A6E]">
-            {scoreStageLabels[score.stage] ?? score.stage}
-          </h3>
-          <RubricMismatchBadge
-            scoredAt={score.rubric_version}
-            currentVersion={score.current_rubric_version}
-          />
-          {score.stage === "resume" && rubricIsStale && (
-            <RescoreResumeButton
-              applicationId={applicationId}
-              campaignActive={campaignActive}
+    <AiRail>
+      <div className="p-5">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="text-sm font-semibold text-[#111827]">
+              {scoreStageLabels[score.stage] ?? score.stage}
+            </h3>
+            <RubricMismatchBadge
+              scoredAt={score.rubric_version}
+              currentVersion={score.current_rubric_version}
             />
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-2xl font-bold text-[#0C4A6E]">
-            {score.overall}
-          </span>
-          {score.tier && (
-            <span
-              className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${tierColors[score.tier]}`}
-            >
-              {TIER_LABELS[score.tier]}
+            {score.stage === "resume" && rubricIsStale && (
+              <RescoreResumeButton
+                applicationId={applicationId}
+                campaignActive={campaignActive}
+              />
+            )}
+          </div>
+          <div className="flex items-baseline gap-2 shrink-0">
+            {/* `/100` is not decoration: a bare "61" invites comparison with
+                the other stages, and there is no composite score to compare. */}
+            <span className="text-2xl font-bold text-[#111827] tabular-nums">
+              {score.overall}
+              <span className="text-sm font-medium text-[#9CA3AF]">/100</span>
             </span>
-          )}
+            {score.tier && (
+              <span
+                className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${tierColors[score.tier]}`}
+              >
+                {TIER_LABELS[score.tier]}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
 
-      <div className="bg-[#F0F9FF] rounded-lg p-3 mb-4">
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <svg
-            className="w-3.5 h-3.5 text-[#0369A1]"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z"
-            />
-          </svg>
-          <span className="text-xs font-medium text-[#0369A1]">
-            AI Summary
-          </span>
+        <div className="mb-4">
+          <AiEyebrow className="mb-1.5">
+            {/* Heroicons: cpu-chip. Deliberately NOT a sparkle — this is a
+                machine reading a document, not magic happening. */}
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z"
+              />
+            </svg>
+            Assessment
+          </AiEyebrow>
+          <p className="text-sm text-[#4B5563] leading-relaxed">
+            {score.ai_summary}
+          </p>
         </div>
-        <p className="text-sm text-[#4B5563] leading-relaxed">
-          {score.ai_summary}
-        </p>
-      </div>
 
-      <div className="space-y-2.5">
-        {score.factors.map((factor) => (
-          <div key={factor.name}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-[#6B7280]">{factor.name}</span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-[#9CA3AF]">
-                  {Math.round(factor.weight * 100)}%
-                </span>
-                <span className="text-xs font-semibold text-[#0C4A6E]">
-                  {factor.score}
-                </span>
+        <div className="space-y-2.5">
+          {score.factors.map((factor) => (
+            <div key={factor.name}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-[#6B7280]">{factor.name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[#9CA3AF] tabular-nums">
+                    {Math.round(factor.weight * 100)}%
+                  </span>
+                  <span className="text-xs font-semibold text-[#111827] tabular-nums">
+                    {factor.score}
+                  </span>
+                </div>
+              </div>
+              <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${
+                    factor.score >= 80
+                      ? "bg-tier-strong"
+                      : factor.score >= 60
+                        ? "bg-tier-potential"
+                        : "bg-tier-weak"
+                  }`}
+                  style={{ width: `${factor.score}%` }}
+                />
               </div>
             </div>
-            <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-200 ${factor.score >= 80
-                    ? "bg-[#22C55E]"
-                    : factor.score >= 60
-                      ? "bg-[#D97706]"
-                      : "bg-[#DC2626]"
-                  }`}
-                style={{ width: `${factor.score}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
-      <p className="text-xs text-[#9CA3AF] mt-3">
-        Scored{" "}
-        {new Date(score.scored_at).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })}
-      </p>
-    </div>
+      <AiCaption
+        className="px-5 py-3"
+        rubricVersion={score.rubric_version}
+        at={scoredAt}
+        fallibility
+      />
+    </AiRail>
   );
 }
 
@@ -171,7 +189,7 @@ function ChipGroup({ label, items }: { label: string; items: string[] }) {
         {unique.map((item, i) => (
           <span
             key={`${item}-${i}`}
-            className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-[#F0F9FF] text-[#0369A1]"
+            className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-[#F3F4F6] text-[#374151]"
           >
             {item}
           </span>
@@ -184,9 +202,9 @@ function ChipGroup({ label, items }: { label: string; items: string[] }) {
 function ExperienceEntry({ exp }: { exp: ParsedResumeData["experience"][number] }) {
   const heading = [exp.title, exp.company].filter(Boolean).join(" · ");
   return (
-    <div className="border-l-2 border-[#E0F2FE] pl-4">
+    <div className="border-l-2 border-[#E5E7EB] pl-4">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-sm font-semibold text-[#0C4A6E] min-w-0 break-words">{heading || "Role"}</p>
+        <p className="text-sm font-semibold text-[#111827] min-w-0 break-words">{heading || "Role"}</p>
         {exp.duration && (
           <span className="text-xs text-[#9CA3AF] shrink-0 whitespace-nowrap">
             {exp.duration}
@@ -203,9 +221,9 @@ function ExperienceEntry({ exp }: { exp: ParsedResumeData["experience"][number] 
 function EducationEntry({ edu }: { edu: ParsedResumeData["education"][number] }) {
   const years = [edu.year_start, edu.year_end].filter(Boolean).join(" – ");
   return (
-    <div className="border-l-2 border-[#E0F2FE] pl-4">
+    <div className="border-l-2 border-[#E5E7EB] pl-4">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-sm font-semibold text-[#0C4A6E] min-w-0 break-words">
+        <p className="text-sm font-semibold text-[#111827] min-w-0 break-words">
           {edu.institution || "Institution"}
         </p>
         {years && (
@@ -391,33 +409,33 @@ export default async function CandidateDetailPage({
       <div className="flex items-baseline gap-2 text-sm text-[#6B7280] mb-4">
         <Link
           href="/campaigns"
-          className="hover:text-[#0369A1] transition-all duration-200"
+          className="hover:text-[#2563EB] transition-all duration-200"
         >
           Campaigns
         </Link>
         <span>/</span>
         <Link
           href={`/campaigns/${id}`}
-          className="hover:text-[#0369A1] transition-all duration-200"
+          className="hover:text-[#2563EB] transition-all duration-200"
         >
           {campaign.title}
         </Link>
         <span>/</span>
         <Link
           href={`/campaigns/${id}/candidates`}
-          className="hover:text-[#0369A1] transition-all duration-200"
+          className="hover:text-[#2563EB] transition-all duration-200"
         >
           Candidates
         </Link>
         <span>/</span>
-        <span className="text-[#0C4A6E]">{candidate.name}</span>
+        <span className="text-[#111827]">{candidate.name}</span>
       </div>
 
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-[#F0F9FF] flex items-center justify-center text-lg font-semibold text-[#0369A1]">
+            <div className="w-12 h-12 rounded-full bg-[#F3F4F6] flex items-center justify-center text-lg font-semibold text-[#111827]">
               {candidate.name
                 .split(" ")
                 .map((n: string) => n[0])
@@ -425,7 +443,7 @@ export default async function CandidateDetailPage({
             </div>
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-semibold text-[#0C4A6E]">
+                <h1 className="text-2xl font-semibold text-[#111827]">
                   {candidate.name}
                 </h1>
                 <StageChanger
@@ -450,7 +468,7 @@ export default async function CandidateDetailPage({
           />
           <Link
             href={`/campaigns/${id}/candidates`}
-            className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#0C4A6E] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
+            className="px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
           >
             Back to List
           </Link>
@@ -462,7 +480,7 @@ export default async function CandidateDetailPage({
         <div className="lg:col-span-1 space-y-6 min-w-0">
           {/* Contact */}
           <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-            <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
+            <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
               Contact
             </h2>
             <div className="space-y-3">
@@ -472,7 +490,7 @@ export default async function CandidateDetailPage({
                 className="flex items-center gap-2.5 group cursor-pointer"
               >
                 <svg
-                  className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                  className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -484,7 +502,7 @@ export default async function CandidateDetailPage({
                     d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
                   />
                 </svg>
-                <span className="text-sm text-[#4B5563] truncate group-hover:text-[#0369A1] transition-all duration-200">
+                <span className="text-sm text-[#4B5563] truncate group-hover:text-[#2563EB] transition-all duration-200">
                   {candidate.email}
                 </span>
               </a>
@@ -496,7 +514,7 @@ export default async function CandidateDetailPage({
                   className="flex items-center gap-2.5 group cursor-pointer"
                 >
                   <svg
-                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -508,7 +526,7 @@ export default async function CandidateDetailPage({
                       d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z"
                     />
                   </svg>
-                  <span className="text-sm text-[#4B5563] group-hover:text-[#0369A1] transition-all duration-200">
+                  <span className="text-sm text-[#4B5563] group-hover:text-[#2563EB] transition-all duration-200">
                     {candidate.phone}
                   </span>
                 </a>
@@ -549,17 +567,17 @@ export default async function CandidateDetailPage({
                   className="flex items-center gap-2.5 group cursor-pointer"
                 >
                   <svg
-                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="currentColor"
                     viewBox="0 0 24 24"
                   >
                     <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
                   </svg>
-                  <span className="text-sm text-[#4B5563] group-hover:text-[#0369A1] transition-all duration-200">
+                  <span className="text-sm text-[#4B5563] group-hover:text-[#2563EB] transition-all duration-200">
                     LinkedIn Profile
                   </span>
                   <svg
-                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -583,17 +601,17 @@ export default async function CandidateDetailPage({
                   className="flex items-center gap-2.5 group cursor-pointer"
                 >
                   <svg
-                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="currentColor"
                     viewBox="0 0 24 24"
                   >
                     <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.513 11.513 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222 0 1.606-.014 2.898-.014 3.293 0 .322.216.694.825.576C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
                   </svg>
-                  <span className="text-sm text-[#4B5563] group-hover:text-[#0369A1] transition-all duration-200">
+                  <span className="text-sm text-[#4B5563] group-hover:text-[#2563EB] transition-all duration-200">
                     GitHub Profile
                   </span>
                   <svg
-                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -617,7 +635,7 @@ export default async function CandidateDetailPage({
                   className="flex items-center gap-2.5 group cursor-pointer"
                 >
                   <svg
-                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-4 h-4 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -629,11 +647,11 @@ export default async function CandidateDetailPage({
                       d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"
                     />
                   </svg>
-                  <span className="text-sm text-[#4B5563] truncate group-hover:text-[#0369A1] transition-all duration-200">
+                  <span className="text-sm text-[#4B5563] truncate group-hover:text-[#2563EB] transition-all duration-200">
                     Portfolio
                   </span>
                   <svg
-                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#0369A1] transition-all duration-200"
+                    className="w-3 h-3 text-[#9CA3AF] shrink-0 group-hover:text-[#2563EB] transition-all duration-200"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -678,7 +696,7 @@ export default async function CandidateDetailPage({
           {/* Summary / About */}
           {parsed?.summary && (
             <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-3">
+              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-3">
                 About
               </h2>
               <p className="text-sm text-[#4B5563] leading-relaxed whitespace-pre-line">
@@ -690,7 +708,7 @@ export default async function CandidateDetailPage({
           {/* Resume */}
           <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider">
+              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
                 Resume
               </h2>
               {candidate.resume_url && (
@@ -698,7 +716,7 @@ export default async function CandidateDetailPage({
                   href={candidate.resume_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] rounded-lg cursor-pointer hover:bg-[#E0F2FE] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
                 >
                   <svg
                     className="w-3.5 h-3.5"
@@ -754,7 +772,7 @@ export default async function CandidateDetailPage({
 
           {parsed && parsed.experience.length > 0 && (
             <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
+              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
                 Experience
               </h2>
               <div className="space-y-4">
@@ -767,7 +785,7 @@ export default async function CandidateDetailPage({
 
           {parsed && parsed.education.length > 0 && (
             <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-              <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
+              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
                 Education
               </h2>
               <div className="space-y-4">
@@ -788,12 +806,12 @@ export default async function CandidateDetailPage({
 
           <InterviewTranscript session={interviewSession} />
 
-          <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider">
+          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
             Evaluation Scores
           </h2>
           {candidate.scores.length === 0 ? (
             <div className="bg-white rounded-xl border border-[#E5E7EB] p-8 text-center">
-              <div className="w-12 h-12 bg-[#F0F9FF] text-[#0EA5E9] rounded-full flex items-center justify-center mx-auto mb-3">
+              <div className="w-12 h-12 bg-[#F3F4F6] text-[#9CA3AF] rounded-full flex items-center justify-center mx-auto mb-3">
                 <svg
                   className="w-6 h-6"
                   fill="none"
@@ -820,7 +838,7 @@ export default async function CandidateDetailPage({
                   </p>
                   <Link
                     href={`/campaigns/${id}/edit`}
-                    className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] rounded-lg cursor-pointer hover:bg-[#E0F2FE] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
+                    className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
                   >
                     <svg
                       className="w-3.5 h-3.5"

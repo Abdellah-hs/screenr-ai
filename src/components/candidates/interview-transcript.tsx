@@ -43,7 +43,7 @@ export default function InterviewTranscript({
     <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
       <div className="flex items-start justify-between mb-4 gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider">
+          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
             AI Video Interview
           </h2>
           <StatusLine session={session} />
@@ -69,13 +69,13 @@ export default function InterviewTranscript({
                 id={transcriptTurnId(ANCHOR, i)}
                 className={`rounded-lg border p-2.5 transition-colors ${TURN_TARGET_HIGHLIGHT} ${
                   isAgent
-                    ? "border-[#BAE6FD] bg-[#F0F9FF]"
+                    ? "border-[#C7D2FE] bg-[#FAFAFF]"
                     : "border-[#E5E7EB] bg-[#F9FAFB]"
                 }`}
               >
                 <span
                   className={`block text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${
-                    isAgent ? "text-[#0369A1]" : "text-[#6B7280]"
+                    isAgent ? "text-[#4338CA]" : "text-[#6B7280]"
                   }`}
                 >
                   {isAgent ? "Interviewer" : "Candidate"}
@@ -103,9 +103,9 @@ export default function InterviewTranscript({
  *  carries the interviewer's strengths/concerns (PRD interview outputs). */
 function InterviewScoreBlock({ score }: { score: InterviewScore }) {
   return (
-    <div className="mb-4 rounded-lg bg-[#F0F9FF] border border-[#BAE6FD] p-3">
+    <div className="mb-4 rounded-lg bg-[#FAFAFF] border border-[#C7D2FE] p-3">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-medium text-[#0369A1] uppercase tracking-wider">
+        <span className="text-xs font-medium text-[#4338CA] uppercase tracking-wider">
           Interview Score
         </span>
         <span className={`text-2xl font-bold ${scoreColor(score.overall_score)}`}>
@@ -124,9 +124,9 @@ function InterviewScoreBlock({ score }: { score: InterviewScore }) {
                 <span className="text-xs text-[#6B7280]" title={d.rationale}>
                   {d.name}
                 </span>
-                <span className="text-xs font-semibold text-[#0C4A6E]">{d.score}</span>
+                <span className="text-xs font-semibold text-[#111827]">{d.score}</span>
               </div>
-              <div className="w-full h-1.5 bg-[#E0F2FE] rounded-full overflow-hidden">
+              <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full ${
                     d.score >= 80 ? "bg-[#22C55E]" : d.score >= 60 ? "bg-[#D97706]" : "bg-[#DC2626]"

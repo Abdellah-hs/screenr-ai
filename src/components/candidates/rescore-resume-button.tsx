@@ -45,7 +45,7 @@ export function RescoreResumeButton({
             ? "Re-score this resume against the current rubric"
             : "This campaign isn't Active — set it to Active to re-score."
         }
-        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-[#0369A1] bg-white border border-[#BAE6FD] rounded-full cursor-pointer hover:bg-[#F0F9FF] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-full cursor-pointer hover:bg-[#F9FAFB] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <svg
           className={`w-3 h-3 ${isPending ? "animate-spin" : ""}`}

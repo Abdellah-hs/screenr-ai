@@ -17,9 +17,9 @@ const IMPORTANCE_LABELS: Record<DimensionImportance, string> = {
 };
 
 const IMPORTANCE_STYLES: Record<DimensionImportance, string> = {
-  high: "bg-[#0369A1] text-white",
-  medium: "bg-[#E0F2FE] text-[#0C4A6E]",
-  low: "bg-[#F1F5F9] text-[#64748B]",
+  high: "bg-[#374151] text-white",
+  medium: "bg-[#E5E7EB] text-[#374151]",
+  low: "bg-[#F3F4F6] text-[#6B7280]",
 };
 
 export default function RubricDisplay({ rubrics }: RubricDisplayProps) {
@@ -28,24 +28,24 @@ export default function RubricDisplay({ rubrics }: RubricDisplayProps) {
   if (activeRubrics.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-xl border border-[#E2E8F0] p-6">
-      <h2 className="text-sm font-semibold text-[#0C4A6E] uppercase tracking-wider mb-4">
+    <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
+      <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
         Evaluation Rubrics
       </h2>
       <div className="space-y-5">
         {activeRubrics.map((rubric) => (
           <div key={rubric.id}>
-            <h3 className="text-sm font-medium text-[#0C4A6E] mb-2">
+            <h3 className="text-sm font-medium text-[#111827] mb-2">
               {STAGE_LABELS[rubric.stage] ?? rubric.stage}
             </h3>
             <div className="space-y-2">
               {rubric.dimensions.map((dim) => (
                 <div
                   key={dim.id}
-                  className="flex items-center justify-between p-3 bg-[#F0F9FF] rounded-lg border border-[#E2E8F0] transition-all duration-200 hover:border-[#0EA5E9]"
+                  className="flex items-center justify-between p-3 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB] transition-colors duration-150 hover:border-[#D1D5DB]"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-[#0C4A6E]">
+                    <span className="text-sm font-medium text-[#111827]">
                       {dim.name}
                     </span>
                     {dim.is_mandatory && (
