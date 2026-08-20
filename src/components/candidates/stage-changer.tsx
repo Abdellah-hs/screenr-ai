@@ -1,13 +1,22 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
 import {
   formatApplicationState as formatStateLabel,
   type ApplicationState,
 } from "@/lib/constants";
 import { recruiterStageOptions } from "@/lib/rules/manual-stage-change";
-import { Modal, ModalFooter, ModalHeader, Textarea } from "@/components/ui";
+import {
+  AnchoredMenu,
+  MenuNote,
+  MENU_ITEM,
+  MENU_LABEL,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Textarea,
+} from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 const FAILURE_STATES: ApplicationState[] = [
@@ -40,6 +49,7 @@ export function StageChanger({
   const [rationale, setRationale] = useState("");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   // Only legal next-states a recruiter may actually set are offered: the state
   // machine's legal transitions minus system-produced states (screening_completed,
@@ -81,6 +91,7 @@ export function StageChanger({
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => !isTerminal && setOpen((o) => !o)}
         disabled={isTerminal}
@@ -108,30 +119,32 @@ export function StageChanger({
         )}
       </button>
 
-      {open && !isTerminal && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div
-            role="menu"
-            className="absolute top-full left-0 mt-1 z-20 min-w-[200px] bg-white border border-[#E5E7EB] rounded-lg py-1 shadow-lg"
+      {/* Portalled rather than absolutely positioned: this chip renders inside
+          table cells and scroll regions, where an absolute menu is clipped by
+          the first ancestor with an overflow. */}
+      <AnchoredMenu
+        open={open && !isTerminal}
+        onClose={() => setOpen(false)}
+        anchorRef={triggerRef}
+        align="left"
+      >
+        <p className={MENU_LABEL}>Move to</p>
+        {nextStates.map((state) => (
+          <button
+            key={state}
+            type="button"
+            role="menuitem"
+            onClick={() => pickTarget(state)}
+            className={MENU_ITEM}
           >
-            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
-              Move to
-            </p>
-            {nextStates.map((state) => (
-              <button
-                key={state}
-                type="button"
-                role="menuitem"
-                onClick={() => pickTarget(state)}
-                className="w-full text-left px-3 py-1.5 text-xs text-[#4B5563] cursor-pointer transition-colors hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:bg-[#F9FAFB]"
-              >
-                {formatStateLabel(state)}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+            {formatStateLabel(state)}
+          </button>
+        ))}
+        <MenuNote>
+          Every manual move asks for a written reason and lands in the
+          transition log.
+        </MenuNote>
+      </AnchoredMenu>
 
       <Modal open={target !== null} onClose={closeModal}>
         {target && (

@@ -205,6 +205,7 @@ export default function CampaignFilters({ campaigns }: { campaigns: Campaign[] }
                       <CampaignRowActions
                         campaignId={campaign.id}
                         campaignTitle={campaign.title}
+                        publicSlug={campaign.public_slug}
                       />
                     </td>
                   </tr>

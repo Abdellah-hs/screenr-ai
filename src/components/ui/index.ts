@@ -7,5 +7,11 @@ export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, 
 export { Badge, type BadgeProps } from "./badge";
 export { AiRail, AiCaption, AiEyebrow } from "./ai-attribution";
 export { Modal, ModalHeader, ModalFooter, type ModalProps } from "./modal";
-export { AnchoredMenu } from "./anchored-menu";
+export {
+  AnchoredMenu,
+  MenuNote,
+  MENU_ITEM,
+  MENU_ITEM_DANGER,
+  MENU_LABEL,
+} from "./anchored-menu";
 export { DottedSurface } from "./dotted-surface";

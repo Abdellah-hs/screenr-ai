@@ -9,7 +9,7 @@ import {
   type CampaignStatusSelection,
 } from "@/lib/constants";
 import { settableStatusSelections, encodeStatusSelection } from "@/lib/rules/campaign-status";
-import { AnchoredMenu } from "@/components/ui";
+import { AnchoredMenu, MENU_ITEM, MENU_LABEL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<CampaignStatus, string> = Object.fromEntries(
@@ -112,16 +112,14 @@ export function CampaignStatusChanger({
         anchorRef={triggerRef}
         align="left"
       >
-        <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
-          Change status to
-        </p>
+        <p className={MENU_LABEL}>Change status to</p>
         {options.map((selection) => (
           <button
             key={selection}
             type="button"
             role="menuitem"
             onClick={() => pick(selection)}
-            className="w-full text-left px-3 py-1.5 text-xs text-[#4B5563] cursor-pointer transition-colors hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:bg-[#F9FAFB]"
+            className={MENU_ITEM}
           >
             {SELECTION_LABEL[selection]}
           </button>

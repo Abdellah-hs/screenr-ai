@@ -7,7 +7,15 @@ import {
 } from "@/lib/actions/campaigns";
 import { CAMPAIGN_STATUSES, type CampaignStatus } from "@/lib/constants";
 import { commonSettableCampaignStatuses } from "@/lib/rules/campaign-status";
-import { AnchoredMenu, Modal, ModalFooter, ModalHeader } from "@/components/ui";
+import {
+  AnchoredMenu,
+  MenuNote,
+  MENU_ITEM,
+  MENU_LABEL,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+} from "@/components/ui";
 
 const STATUS_LABEL: Record<CampaignStatus, string> = Object.fromEntries(
   CAMPAIGN_STATUSES.map((s) => [s.value, s.label]),
@@ -94,20 +102,21 @@ export function CampaignBulkActions({
           anchorRef={statusBtnRef}
           align="left"
         >
-          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
-            Change status to
-          </p>
+          <p className={MENU_LABEL}>Change status to</p>
           {statusOptions.map((status) => (
             <button
               key={status}
               type="button"
               role="menuitem"
               onClick={() => runStatus(status)}
-              className="w-full text-left px-3 py-1.5 text-xs text-[#4B5563] cursor-pointer transition-colors hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:bg-[#F9FAFB]"
+              className={MENU_ITEM}
             >
               {STATUS_LABEL[status]}
             </button>
           ))}
+          <MenuNote>
+            Only statuses all {selectedIds.length} can move to are offered.
+          </MenuNote>
         </AnchoredMenu>
       </div>
 
