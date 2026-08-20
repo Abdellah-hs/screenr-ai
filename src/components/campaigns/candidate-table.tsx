@@ -9,6 +9,8 @@ import {
   type CandidateSortField,
 } from "@/lib/candidates/table-view";
 import { CandidateBulkActions } from "./candidate-bulk-actions";
+import { StageChanger } from "@/components/candidates/stage-changer";
+import { MENU_ITEM } from "@/components/ui";
 import type {
   Candidate,
   CandidateScore,
@@ -214,6 +216,20 @@ export default function CandidateTable({
 
   const stickyHeader = filtered.length >= STICKY_HEADER_MIN_ROWS;
 
+  // Named in the same words the controls use, so a recruiter can undo the one
+  // they did not mean to set.
+  const narrowings = [
+    search.trim() ? `search “${search.trim()}”` : null,
+    effectiveFilter === "all"
+      ? null
+      : effectiveFilter === "pending_review"
+        ? "awaiting review"
+        : effectiveFilter === "archived"
+          ? "archived"
+          : stageLabels[effectiveFilter as CandidateStage],
+    overdueActive ? "past SLA" : null,
+  ].filter(Boolean) as string[];
+
   return (
     <div className="space-y-4">
       {/* Pipeline funnel — doubles as the stage filter. Click a card to filter,
@@ -313,7 +329,7 @@ export default function CandidateTable({
       )}
 
       {/* Search + Sort */}
-      <div className="flex flex-col sm:flex-row items-center gap-3">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
         <div className="relative w-full sm:max-w-sm">
           <svg
             className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9CA3AF]"
@@ -351,6 +367,17 @@ export default function CandidateTable({
             <option value="stage_age">Sort by Longest in stage</option>
           )}
         </select>
+
+        {/* What the list currently is, spelled out. Three narrowings can be
+            active at once (search, a stage pill, the overdue toggle) and only
+            one of them is visible from the table itself. */}
+        <p className="text-sm text-[#6B7280] sm:ml-auto">
+          <span className="font-semibold tabular-nums text-ink">
+            {filtered.length}
+          </span>{" "}
+          of {candidates.length}
+          {narrowings.length > 0 && ` · ${narrowings.join(", ")}`}
+        </p>
       </div>
 
       {/* Table */}
@@ -451,7 +478,10 @@ export default function CandidateTable({
                   <th scope="col" className="px-6 py-3">
                     Applied
                   </th>
-                  <th scope="col" className="px-6 py-3 text-center" />
+                  <th scope="col" className="px-6 py-3">
+                    Last activity
+                  </th>
+                  <th scope="col" className="w-14 px-6 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5E7EB]">
@@ -570,25 +600,33 @@ export default function CandidateTable({
                           }
                         )}
                       </td>
-                      <td className="px-6 py-3 text-center">
-                        <Link
-                          href={`/campaigns/${campaignId}/candidates/${candidate.id}`}
-                          className="text-[#9CA3AF] hover:text-[#2563EB] transition-colors"
-                        >
-                          <svg
-                            className="w-5 h-5 mx-auto"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M9 5l7 7-7 7"
-                            />
-                          </svg>
-                        </Link>
+                      {/* An absolute date, not "3d ago": a relative label
+                          computed after hydration disagrees with the one the
+                          server rendered. */}
+                      <td className="px-6 py-3 text-[#4B5563] tabular-nums">
+                        {new Date(candidate.updated_at).toLocaleDateString(
+                          "en-US",
+                          { month: "short", day: "numeric", year: "numeric" }
+                        )}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        {/* The chevron here was decoration — it went where the
+                            row already went. The menu is the row's actions,
+                            portalled so the table's scroll cannot clip it. */}
+                        <StageChanger
+                          applicationId={candidate.id}
+                          currentState={candidate.status}
+                          trigger="menu"
+                          leadingItems={
+                            <Link
+                              href={`/campaigns/${campaignId}/candidates/${candidate.id}`}
+                              role="menuitem"
+                              className={MENU_ITEM}
+                            >
+                              Open the evidence file
+                            </Link>
+                          }
+                        />
                       </td>
                     </tr>
                   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useRef, useState, useTransition, type ReactNode } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
 import {
   formatApplicationState as formatStateLabel,
@@ -40,9 +40,20 @@ function stateTone(state: ApplicationState): string {
 export function StageChanger({
   applicationId,
   currentState,
+  trigger = "chip",
+  leadingItems,
 }: {
   applicationId: string;
   currentState: ApplicationState;
+  /**
+   * `chip` — the state itself, clickable, for a detail page.
+   * `menu` — a "…" row-actions button, for a table row where the state already
+   *   has its own column and a second copy of it would be noise.
+   */
+  trigger?: "chip" | "menu";
+  /** Rows rendered above the "Move to" group — a row menu is rarely only
+   *  about the state machine. */
+  leadingItems?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<ApplicationState | null>(null);
@@ -90,6 +101,30 @@ export function StageChanger({
 
   return (
     <div className="relative">
+      {trigger === "menu" ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Row actions"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-[#9CA3AF] transition-colors duration-150 cursor-pointer hover:bg-[#F3F4F6] hover:text-[#4B5563] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="5" r="1" />
+            <circle cx="12" cy="12" r="1" />
+            <circle cx="12" cy="19" r="1" />
+          </svg>
+        </button>
+      ) : (
       <button
         ref={triggerRef}
         type="button"
@@ -118,32 +153,39 @@ export function StageChanger({
           </svg>
         )}
       </button>
+      )}
 
       {/* Portalled rather than absolutely positioned: this chip renders inside
           table cells and scroll regions, where an absolute menu is clipped by
           the first ancestor with an overflow. */}
       <AnchoredMenu
-        open={open && !isTerminal}
+        open={open && (!isTerminal || Boolean(leadingItems))}
         onClose={() => setOpen(false)}
         anchorRef={triggerRef}
-        align="left"
+        align={trigger === "menu" ? "right" : "left"}
       >
-        <p className={MENU_LABEL}>Move to</p>
-        {nextStates.map((state) => (
-          <button
-            key={state}
-            type="button"
-            role="menuitem"
-            onClick={() => pickTarget(state)}
-            className={MENU_ITEM}
-          >
-            {formatStateLabel(state)}
-          </button>
-        ))}
-        <MenuNote>
-          Every manual move asks for a written reason and lands in the
-          transition log.
-        </MenuNote>
+        {leadingItems && <div onClick={() => setOpen(false)}>{leadingItems}</div>}
+
+        {!isTerminal && (
+          <>
+            <p className={MENU_LABEL}>Move to</p>
+            {nextStates.map((state) => (
+              <button
+                key={state}
+                type="button"
+                role="menuitem"
+                onClick={() => pickTarget(state)}
+                className={MENU_ITEM}
+              >
+                {formatStateLabel(state)}
+              </button>
+            ))}
+            <MenuNote>
+              Every manual move asks for a written reason and lands in the
+              transition log.
+            </MenuNote>
+          </>
+        )}
       </AnchoredMenu>
 
       <Modal open={target !== null} onClose={closeModal}>
