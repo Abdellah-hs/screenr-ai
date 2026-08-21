@@ -11,15 +11,23 @@ import type {
  * the data function's return type) keeps the dependency arrow pointing
  * rules → constants only, never rules → data.
  *
- * `screening_threshold` now applies to the **ranking** score, which only exists
- * for a candidate who already cleared every must-have. It is a bar on how good
- * an eligible candidate is, never a way to become eligible.
+ * `resume_threshold` applies to the **ranking** score, which only exists for a
+ * candidate who already cleared every must-have. It is a bar on how good an
+ * eligible candidate is, never a way to become eligible.
  */
 export interface CampaignScoringConfig {
   id: string;
   description: string;
   automation_mode: AutomationMode;
-  screening_threshold: number;
+  /**
+   * The CV stage's own pass mark. Distinct from the campaign's
+   * `screening_threshold`, which belongs to the voice-screening rule: a resume
+   * ranking orders a pile of CVs against a rubric and a screening score grades
+   * spoken answers, so the two numbers do not mean the same thing and must not
+   * share a fail line. `screening_threshold` is deliberately absent from this
+   * interface — the resume decision structurally cannot reach the other bar.
+   */
+  resume_threshold: number;
   screening_criteria: ResumeCriterion[];
 }
 
@@ -78,7 +86,7 @@ export function evaluateResumeScoringOutcome(
   // Eligible always carries a ranking score by construction
   // (`calculateNiceToHaveRanking`); the fallback only keeps this total.
   const ranking = result.ranking_score ?? 0;
-  const scoreLine = `Eligible — ranking score ${ranking} vs threshold ${config.screening_threshold}`;
+  const scoreLine = `Eligible — ranking score ${ranking} vs threshold ${config.resume_threshold}`;
 
   if (config.automation_mode === "human_in_loop") {
     return {
@@ -87,7 +95,7 @@ export function evaluateResumeScoringOutcome(
     };
   }
 
-  if (ranking >= config.screening_threshold) {
+  if (ranking >= config.resume_threshold) {
     return {
       toState: "screening_approved",
       rationale: `${scoreLine} — passed`,
@@ -99,7 +107,7 @@ export function evaluateResumeScoringOutcome(
     rationale: `${scoreLine} — below threshold`,
     disposition: {
       code: "LOW_SCORE",
-      description: `Met every must-have but ranked ${ranking}, below the campaign threshold of ${config.screening_threshold}`,
+      description: `Met every must-have but ranked ${ranking}, below the campaign resume threshold of ${config.resume_threshold}`,
     },
   };
 }

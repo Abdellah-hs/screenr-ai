@@ -1,4 +1,8 @@
-import { AUTOMATION_MODES, INTERVIEW_PERSONAS } from "@/lib/constants";
+import {
+  AUTOMATION_MODES,
+  DEFAULT_SCORE_THRESHOLD,
+  INTERVIEW_PERSONAS,
+} from "@/lib/constants";
 import type { AutomationMode, InterviewPersona } from "@/lib/constants";
 
 const fieldClass =
@@ -6,19 +10,21 @@ const fieldClass =
 
 interface AiSettingsFieldsProps {
   defaultAutomationMode?: AutomationMode;
+  defaultResumeThreshold?: number;
   defaultScreeningThreshold?: number;
   defaultInterviewPersona?: InterviewPersona;
 }
 
 export default function AiSettingsFields({
   defaultAutomationMode = "human_in_loop",
-  defaultScreeningThreshold = 70,
+  defaultResumeThreshold = DEFAULT_SCORE_THRESHOLD,
+  defaultScreeningThreshold = DEFAULT_SCORE_THRESHOLD,
   defaultInterviewPersona = "neutral",
 }: AiSettingsFieldsProps) {
   return (
     <div className="pt-4 border-t border-[#E5E7EB] mt-2">
       <p className="text-sm font-medium text-[#111827] mb-3">AI Settings</p>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div>
           <label htmlFor="automation_mode" className="block text-sm font-medium text-[#111827] mb-1">
             Automation Mode
@@ -36,6 +42,28 @@ export default function AiSettingsFields({
           <p className="text-xs text-[#6B7280] mt-1">Controls how much AI acts autonomously</p>
         </div>
 
+        {/* Two bars, not one. A resume score ranks CVs against a rubric; a
+            screening score grades spoken answers. They are different kinds of
+            number, so they get their own fail lines and their own labels. */}
+        <div>
+          <label htmlFor="resume_threshold" className="block text-sm font-medium text-[#111827] mb-1">
+            Resume Threshold
+          </label>
+          <input
+            id="resume_threshold"
+            name="resume_threshold"
+            type="number"
+            min={0}
+            max={100}
+            defaultValue={defaultResumeThreshold}
+            className={fieldClass}
+          />
+          <p className="text-xs text-[#6B7280] mt-1">
+            CV score 0-100. Below this is auto-rejected in Fully Automatic; in
+            Human-in-the-Loop it only sorts your queue.
+          </p>
+        </div>
+
         <div>
           <label htmlFor="screening_threshold" className="block text-sm font-medium text-[#111827] mb-1">
             Screening Threshold
@@ -49,7 +77,10 @@ export default function AiSettingsFields({
             defaultValue={defaultScreeningThreshold}
             className={fieldClass}
           />
-          <p className="text-xs text-[#6B7280] mt-1">Score 0-100; below = auto-reject</p>
+          <p className="text-xs text-[#6B7280] mt-1">
+            Voice-answer score 0-100. Reaching it invites the candidate to the AI
+            interview; below it is auto-rejected in Fully Automatic only.
+          </p>
         </div>
 
         <div>

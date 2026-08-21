@@ -103,7 +103,11 @@ beforeEach(() => {
     id: "camp-1",
     description: "Senior engineer",
     automation_mode: "fully_auto",
-    screening_threshold: 70,
+    resume_threshold: 70,
+    // Diverging on purpose: the resume path must read the CV bar. The rule's
+    // CampaignScoringConfig does not even declare screening_threshold, so this
+    // value exists only to make a regression obvious if that ever loosens.
+    screening_threshold: 95,
     screening_criteria: [
       { id: "c1", label: "TypeScript", priority: "must_have" },
       { id: "c2", label: "Testing", priority: "nice_to_have" },
@@ -128,7 +132,8 @@ describe("evaluateApplicationResume", () => {
       id: "camp-1",
       description: "Senior engineer",
       automation_mode: "fully_auto",
-      screening_threshold: 70,
+      resume_threshold: 70,
+      screening_threshold: 95,
       screening_criteria: [],
     });
 
@@ -299,7 +304,8 @@ describe("evaluateApplicationResume", () => {
       id: "camp-1",
       description: "Senior engineer",
       automation_mode: "fully_auto",
-      screening_threshold: 70,
+      resume_threshold: 70,
+      screening_threshold: 95,
       screening_criteria: [
         { id: "c1", label: "TypeScript", priority: "must_have" },
         { id: "c2", label: "Testing", priority: "must_have" }, // was nice_to_have

@@ -8,8 +8,13 @@ const mockEqUser = vi.fn(() => ({ is: mockIs }));
 const mockEqId = vi.fn(() => ({ eq: mockEqUser }));
 const mockSelect = vi.fn(() => ({ eq: mockEqId }));
 // Return type is widened so describes below can override the implementation with
-// update/insert chains (updateCampaignStatusTx) without a type clash.
-const mockFrom = vi.fn((): Record<string, unknown> => ({ select: mockSelect }));
+// update/insert chains (updateCampaignStatusTx) without a type clash. The table
+// name is declared so a describe can dispatch on it (fetchCampaignScoringConfig
+// reads three tables in one call).
+const mockFrom = vi.fn((table?: string): Record<string, unknown> => {
+  void table;
+  return { select: mockSelect };
+});
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve({ from: mockFrom })),
@@ -17,6 +22,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   dimensionsEqual,
+  fetchCampaignScoringConfig,
   fetchCampaignStatus,
   fetchCampaignBySlug,
   insertCampaignTx,
@@ -438,5 +444,98 @@ describe("insertCampaignTx", () => {
       insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1"),
     ).rejects.toThrow("db down");
     expect(insertedPayloads).toHaveLength(1);
+  });
+});
+
+describe("fetchCampaignScoringConfig", () => {
+  // The scoring config is the one place where the resume rule's bar could be
+  // wired to the wrong column: both thresholds are integers, so TypeScript is
+  // blind to a swap. These tests read the two columns apart.
+  type ScoringRow = {
+    id: string;
+    description: string;
+    automation_mode: string;
+    resume_threshold: number;
+    screening_threshold: number;
+  };
+
+  let selectedColumns: string;
+
+  function stubTables(row: ScoringRow | null): void {
+    selectedColumns = "";
+    mockFrom.mockImplementation((table?: string) => {
+      if (table === "campaigns") {
+        return {
+          select: (columns: string) => {
+            selectedColumns = columns;
+            return {
+              eq: () => ({
+                eq: () => ({
+                  is: () => ({ single: () => Promise.resolve({ data: row }) }),
+                }),
+              }),
+            };
+          },
+        };
+      }
+      if (table === "evaluation_rubrics") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({ maybeSingle: () => Promise.resolve({ data: { id: "rub-1" } }) }),
+              }),
+            }),
+          }),
+        };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            is: () => ({ order: () => Promise.resolve({ data: [] }) }),
+          }),
+        }),
+      };
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("maps each threshold from its own column", async () => {
+    stubTables({
+      id: "camp-1",
+      description: "Backend engineer",
+      automation_mode: "fully_auto",
+      resume_threshold: 55,
+      screening_threshold: 80,
+    });
+
+    const config = await fetchCampaignScoringConfig("camp-1", "user-1");
+
+    expect(config?.resume_threshold).toBe(55);
+    expect(config?.screening_threshold).toBe(80);
+  });
+
+  it("selects both threshold columns", async () => {
+    stubTables({
+      id: "camp-1",
+      description: "Backend engineer",
+      automation_mode: "fully_auto",
+      resume_threshold: 55,
+      screening_threshold: 80,
+    });
+
+    await fetchCampaignScoringConfig("camp-1", "user-1");
+
+    expect(selectedColumns).toContain("resume_threshold");
+    expect(selectedColumns).toContain("screening_threshold");
+  });
+
+  it("returns null when the campaign is missing or not owned by the caller", async () => {
+    stubTables(null);
+
+    expect(await fetchCampaignScoringConfig("camp-1", "user-1")).toBeNull();
   });
 });

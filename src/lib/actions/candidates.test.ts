@@ -638,7 +638,7 @@ function scoredOutcome(
       id: VALID_CAMPAIGN_ID,
       description: "Senior engineer role",
       automation_mode: "fully_auto",
-      screening_threshold: 70,
+      resume_threshold: 70,
       screening_criteria: [{ id: "c1", label: "React", priority: "nice_to_have" }],
       ...configOver,
     },

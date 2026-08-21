@@ -17,7 +17,7 @@ function makeConfig(overrides: Partial<CampaignScoringConfig> = {}): CampaignSco
     id: "campaign-1",
     description: "Senior engineer",
     automation_mode: "fully_auto",
-    screening_threshold: 70,
+    resume_threshold: 70,
     screening_criteria: [],
     ...overrides,
   };
@@ -103,7 +103,7 @@ describe("evaluateResumeScoringOutcome", () => {
         { label: "Docker", priority: "nice_to_have", level: "not_present" },
       ]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 0 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 0 }));
 
       expect(decision.toState).toBe("screening_approved");
     });
@@ -115,7 +115,7 @@ describe("evaluateResumeScoringOutcome", () => {
         { label: "Testing", priority: "nice_to_have", level: "very_strong" }, // 100
       ]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 0 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 0 }));
 
       expect(decision.toState).toBe("rejected");
     });
@@ -130,7 +130,7 @@ describe("evaluateResumeScoringOutcome", () => {
 
       const decision = evaluateResumeScoringOutcome(
         result,
-        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 50 }),
+        makeConfig({ automation_mode: "human_in_loop", resume_threshold: 50 }),
       );
 
       expect(decision.toState).toBe("screening_review_pending");
@@ -145,7 +145,7 @@ describe("evaluateResumeScoringOutcome", () => {
 
       const decision = evaluateResumeScoringOutcome(
         result,
-        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 70 }),
+        makeConfig({ automation_mode: "human_in_loop", resume_threshold: 70 }),
       );
 
       expect(decision.toState).toBe("screening_review_pending");
@@ -159,7 +159,7 @@ describe("evaluateResumeScoringOutcome", () => {
         { label: "Docker", priority: "nice_to_have", level: "very_strong" }, // ranking 100
       ]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 70 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
 
       expect(decision.toState).toBe("screening_approved");
       expect(decision.rationale).toContain("ranking score 100");
@@ -171,7 +171,7 @@ describe("evaluateResumeScoringOutcome", () => {
         { label: "Docker", priority: "nice_to_have", level: "weak" }, // ranking 25
       ]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 70 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
 
       expect(decision.toState).toBe("rejected");
       expect(decision.rationale).toContain("below threshold");
@@ -181,7 +181,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("approves an eligible candidate with no nice-to-haves at all", () => {
       const result = makeResult([{ label: "React", priority: "must_have", level: "strong" }]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 70 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
 
       expect(decision.toState).toBe("screening_approved");
     });
@@ -192,7 +192,7 @@ describe("evaluateResumeScoringOutcome", () => {
         { label: "Docker", priority: "nice_to_have", level: "partial" }, // ranking 55
       ]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 55 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 55 }));
 
       expect(decision.toState).toBe("screening_approved");
     });
@@ -205,7 +205,7 @@ describe("evaluateResumeScoringOutcome", () => {
         { label: "Docker", priority: "nice_to_have", level: "partial" },
       ]);
 
-      const decision = evaluateResumeScoringOutcome(result, makeConfig({ screening_threshold: 75 }));
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 75 }));
 
       expect(decision.rationale).toContain("ranking score 55");
       expect(decision.rationale).toContain("threshold 75");

@@ -99,7 +99,10 @@ beforeEach(() => {
       id: "camp-1",
       description: "Backend engineer",
       automation_mode: "fully_auto",
-      screening_threshold: 70,
+      // Only the CV bar is reachable from here: CampaignScoringConfig no longer
+      // declares screening_threshold at all, so "the resume decision read the
+      // wrong threshold" is now a compile error rather than a test assertion.
+      resume_threshold: 70,
       screening_criteria: [{ id: "d1", label: "React", priority: "must_have" }],
     },
   });

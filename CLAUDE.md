@@ -235,6 +235,39 @@ This replaced a prompt that asked for per-criterion 0-100 scores. Two reasons:
   scoring-rules version. Only the *evidence* is cached; the deterministic score
   is always recomputed, so a cached result can never predate its rules.
 
+#### Two thresholds, not one, and none on the interview (decision 2026-08-21)
+
+There are exactly **two** score gates on a campaign, and they are separate columns:
+
+| Column | Read by | Passing it means |
+| --- | --- | --- |
+| `resume_threshold` | `evaluateResumeScoringOutcome` | the CV's **ranking** score clears the bar → `screening_approved` |
+| `screening_threshold` | `evaluateScreeningScoringOutcome` | the voice answers clear the bar → `interview_invited` |
+
+`resume_threshold` is **not** the must-have gate — that runs first and is not a
+threshold at all (see the previous section). It is the bar on how good an
+*already eligible* candidate is, applied to the nice-to-have ranking.
+
+Until 2026-08-21 both rules read `screening_threshold` while the UI showed one
+box, so a recruiter raising the bar to stop weak CVs was silently also raising
+the bar on candidates who had already answered well. **They are not the same kind
+of number** — a resume ranking orders a pile of CVs against a rubric, a screening
+score grades spoken answers — so they must never share a fail line. The DB
+default was also 50 while the form sent 70; both are now `DEFAULT_SCORE_THRESHOLD`
+(70) in `src/lib/constants.ts`, which the columns, the Zod parser and the form
+defaults all read.
+
+`fetchCampaignScoringConfig` returns both because two callers share it, but the
+resume rule's own `CampaignScoringConfig` declares **only** `resume_threshold` —
+the resume decision structurally cannot reach for the screening bar.
+
+**There is deliberately no interview threshold.** See the next section: the
+interview never gates and never auto-rejects, so it has no bar to set. If the
+problem is "too many scored interviews to work through", the answer is ordering
+the `manager_review` queue, not a gate — a threshold there would auto-reject
+someone who sat a whole interview, on the least reviewable evidence in the
+product (there is no recording to check a decision against).
+
 #### Interview scoring is not a gate (decision 2026-08-18)
 
 `evaluateInterviewScoringOutcome` always records `interview_scored` first, then follows `automation_mode`:

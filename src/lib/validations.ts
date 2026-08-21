@@ -3,6 +3,7 @@ import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 import { MANAGER_REJECTION_CODES } from "@/lib/rules/manager-review";
 import {
   AI_AUDIT_STAGE_VALUES,
+  DEFAULT_SCORE_THRESHOLD,
   MAX_POOL_NOTES_LENGTH,
   MAX_POOL_TAGS,
   MAX_POOL_TAG_LENGTH,
@@ -28,6 +29,10 @@ export const campaignFormSchema = z.object({
   deadline_enforced: z.boolean(),
   location: z.string().max(200).nullable(),
   automation_mode: z.enum(automationModeValues),
+  // Two stages, two bars. A resume score ranks CVs against a rubric and a
+  // screening score grades spoken answers, so one number cannot set the
+  // auto-reject line for both.
+  resume_threshold: z.number().int().min(0).max(100),
   screening_threshold: z.number().int().min(0).max(100),
   interview_persona: z.enum(interviewPersonaValues),
   // AI-interview availability config (PRD 3.5.6). Slots are generated from the
@@ -116,6 +121,7 @@ export const availabilityRuleSchema = z
  */
 export function parseCampaignFormData(formData: FormData) {
   const rawPositions = parseInt(formData.get("positions") as string);
+  const rawResumeThreshold = parseInt(formData.get("resume_threshold") as string);
   const rawThreshold = parseInt(formData.get("screening_threshold") as string);
   const rawSlotMinutes = parseInt(formData.get("interview_slot_minutes") as string);
   const rawHorizon = parseInt(formData.get("interview_booking_horizon_days") as string);
@@ -134,7 +140,16 @@ export function parseCampaignFormData(formData: FormData) {
     deadline_enforced: formData.get("deadline_enforced") === "true",
     location: (formData.get("location") as string) || null,
     automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
-    screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
+    // 70 is the fallback for both, matching the column defaults. Before the
+    // split the DB defaulted to 50 while this parser sent 70, so a campaign
+    // created through the form and one created any other way rejected at
+    // different bars.
+    resume_threshold: Number.isNaN(rawResumeThreshold)
+      ? DEFAULT_SCORE_THRESHOLD
+      : Math.min(100, Math.max(0, rawResumeThreshold)),
+    screening_threshold: Number.isNaN(rawThreshold)
+      ? DEFAULT_SCORE_THRESHOLD
+      : Math.min(100, Math.max(0, rawThreshold)),
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
     interview_slot_minutes: Number.isNaN(rawSlotMinutes) ? null : rawSlotMinutes,
     interview_timezone: (formData.get("interview_timezone") as string)?.trim() || null,
