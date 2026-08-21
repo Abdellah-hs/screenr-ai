@@ -36,7 +36,14 @@ export interface CampaignScoringConfig {
   id: string;
   description: string;
   automation_mode: AutomationMode;
-  screening_threshold: number;
+  /**
+   * The CV stage's own pass mark. Distinct from the campaign's
+   * `screening_threshold`, which belongs to the voice-screening rule: a resume
+   * score ranks a pile of CVs against a rubric and a screening score grades
+   * spoken answers, so the two numbers do not mean the same thing and must not
+   * share a fail line.
+   */
+  resume_threshold: number;
   screening_criteria: ScoringCriterion[];
 }
 
@@ -103,7 +110,7 @@ export function evaluateResumeScoringOutcome(
   result: ResumeScoreResult,
   config: CampaignScoringConfig,
 ): TransitionDescriptor {
-  const scoreLine = `Resume score ${result.overall_score} vs threshold ${config.screening_threshold}`;
+  const scoreLine = `Resume score ${result.overall_score} vs threshold ${config.resume_threshold}`;
 
   const failedRequired = failedMandatoryCriteria(result, config);
   if (failedRequired.length > 0) {
@@ -125,7 +132,7 @@ export function evaluateResumeScoringOutcome(
     };
   }
 
-  if (result.overall_score >= config.screening_threshold) {
+  if (result.overall_score >= config.resume_threshold) {
     return {
       toState: "screening_approved",
       rationale: `${scoreLine} — passed`,
@@ -137,7 +144,7 @@ export function evaluateResumeScoringOutcome(
     rationale: `${scoreLine} — below threshold`,
     disposition: {
       code: "LOW_SCORE",
-      description: `Resume scored ${result.overall_score}, threshold ${config.screening_threshold}`,
+      description: `Resume scored ${result.overall_score}, threshold ${config.resume_threshold}`,
     },
   };
 }

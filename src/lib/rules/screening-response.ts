@@ -128,6 +128,12 @@ export function isResponseExpired(
  */
 export interface ScreeningScoringConfig {
   automation_mode: "fully_auto" | "human_in_loop";
+  /**
+   * The voice-screening stage's own pass mark. Distinct from the campaign's
+   * `resume_threshold`, which belongs to the resume rule: a screening score
+   * grades spoken answers and a resume score ranks CVs against a rubric, so the
+   * two numbers do not mean the same thing and must not share a fail line.
+   */
   screening_threshold: number;
 }
 

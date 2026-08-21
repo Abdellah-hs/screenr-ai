@@ -134,6 +134,9 @@ beforeEach(() => {
     id: "camp-1",
     description: "We need a backend engineer who can scale systems.",
     automation_mode: "human_in_loop",
+    // Deliberately different from screening_threshold: this path must read the
+    // screening bar, never the CV one.
+    resume_threshold: 95,
     screening_threshold: 70,
     screening_criteria: [],
   });

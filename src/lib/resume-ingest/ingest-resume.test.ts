@@ -102,7 +102,11 @@ beforeEach(() => {
     id: "camp-1",
     description: "Backend engineer",
     automation_mode: "fully_auto",
-    screening_threshold: 70,
+    // Deliberately different from screening_threshold: the resume decision must
+    // read the CV bar, never the voice-screening one. A score of 80 passes 70
+    // and would fail 95, so a regression here changes the outcome.
+    resume_threshold: 70,
+    screening_threshold: 95,
     screening_criteria: [{ id: "d1", label: "React", weight: 1, is_mandatory: true, min_score: 50 }],
   });
   mockFetchRubric.mockResolvedValue(1);

@@ -91,6 +91,7 @@ function assembleCampaign(
     timezone: (row.timezone as string) || null,
     public_slug: (row.public_slug as string) || null,
     automation_mode: row.automation_mode as AutomationMode,
+    resume_threshold: row.resume_threshold as number,
     screening_threshold: row.screening_threshold as number,
     interview_persona: row.interview_persona as InterviewPersona,
     rubrics,
@@ -510,7 +511,7 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
 
   const { data: row } = await supabase
     .from("campaigns")
-    .select("id, description, automation_mode, screening_threshold")
+    .select("id, description, automation_mode, resume_threshold, screening_threshold")
     .eq("id", campaignId)
     .eq("user_id", userId)
     .is("deleted_at", null)
@@ -543,6 +544,12 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
     id: row.id as string,
     description: row.description as string,
     automation_mode: row.automation_mode as AutomationMode,
+    // Both bars are returned because two callers share this fetcher: the resume
+    // rule reads `resume_threshold`, the screening scorer reads
+    // `screening_threshold`. The rule's own `CampaignScoringConfig` declares
+    // only the resume bar, so the resume decision structurally cannot reach for
+    // the screening one.
+    resume_threshold: row.resume_threshold as number,
     screening_threshold: row.screening_threshold as number,
     screening_criteria: (dimensions || []).map((d) => ({
       id: d.id,
@@ -889,6 +896,7 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
       deadline_enforced: source.deadline_enforced,
       location: source.location,
       automation_mode: source.automation_mode,
+      resume_threshold: source.resume_threshold,
       screening_threshold: source.screening_threshold,
       interview_persona: source.interview_persona,
       interview_slot_minutes: source.interview_slot_minutes,

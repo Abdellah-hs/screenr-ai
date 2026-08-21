@@ -21,7 +21,7 @@ function makeConfig(overrides: Partial<CampaignScoringConfig> = {}): CampaignSco
     id: "campaign-1",
     description: "Senior engineer",
     automation_mode: "fully_auto",
-    screening_threshold: 70,
+    resume_threshold: 70,
     screening_criteria: [],
     ...overrides,
   };
@@ -32,7 +32,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("routes to screening_review_pending regardless of how high the score is", () => {
       const decision = evaluateResumeScoringOutcome(
         makeResult({ overall_score: 99 }),
-        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 50 }),
+        makeConfig({ automation_mode: "human_in_loop", resume_threshold: 50 }),
       );
 
       expect(decision.toState).toBe("screening_review_pending");
@@ -42,7 +42,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("routes to screening_review_pending even when the score is below threshold", () => {
       const decision = evaluateResumeScoringOutcome(
         makeResult({ overall_score: 10 }),
-        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 70 }),
+        makeConfig({ automation_mode: "human_in_loop", resume_threshold: 70 }),
       );
 
       expect(decision.toState).toBe("screening_review_pending");
@@ -54,7 +54,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("routes to screening_approved when score is above threshold", () => {
       const decision = evaluateResumeScoringOutcome(
         makeResult({ overall_score: 85 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+        makeConfig({ automation_mode: "fully_auto", resume_threshold: 70 }),
       );
 
       expect(decision.toState).toBe("screening_approved");
@@ -64,7 +64,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("routes to screening_approved when score equals threshold (boundary)", () => {
       const decision = evaluateResumeScoringOutcome(
         makeResult({ overall_score: 70 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+        makeConfig({ automation_mode: "fully_auto", resume_threshold: 70 }),
       );
 
       expect(decision.toState).toBe("screening_approved");
@@ -73,7 +73,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("routes to rejected when score is below threshold", () => {
       const decision = evaluateResumeScoringOutcome(
         makeResult({ overall_score: 40 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+        makeConfig({ automation_mode: "fully_auto", resume_threshold: 70 }),
       );
 
       expect(decision.toState).toBe("rejected");
@@ -91,7 +91,7 @@ describe("evaluateResumeScoringOutcome", () => {
       return {
         config: makeConfig({
           automation_mode: "fully_auto",
-          screening_threshold: 70,
+          resume_threshold: 70,
           screening_criteria: criteria.map((c, i) => ({
             id: `crit-${i}`,
             label: c.label,
@@ -217,7 +217,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("falls through to normal threshold logic when no factor is paired to a mandatory criterion (malformed AI output)", () => {
       const config = makeConfig({
         automation_mode: "fully_auto",
-        screening_threshold: 70,
+        resume_threshold: 70,
         screening_criteria: [{ id: "c1", label: "React", weight: 100, is_mandatory: true, min_score: 30 }],
       });
       const result = makeResult({ overall_score: 85, factors: [] });
@@ -232,7 +232,7 @@ describe("evaluateResumeScoringOutcome", () => {
     it("includes the overall score and the threshold numerically", () => {
       const decision = evaluateResumeScoringOutcome(
         makeResult({ overall_score: 63 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 75 }),
+        makeConfig({ automation_mode: "fully_auto", resume_threshold: 75 }),
       );
 
       expect(decision.rationale).toContain("Resume score 63");

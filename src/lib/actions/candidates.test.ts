@@ -638,7 +638,10 @@ describe("scoreUnscoredCampaignCandidates", () => {
     vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
       description: "Senior engineer role",
       automation_mode: "fully_auto",
-      screening_threshold: 70,
+      // Diverging on purpose: the resume decision must read the CV bar. A score
+      // of 85 clears 70 and would fail 95, so a regression flips the outcome.
+      resume_threshold: 70,
+      screening_threshold: 95,
       screening_criteria: [
         { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
       ],
@@ -718,7 +721,8 @@ describe("rescoreCandidateResume", () => {
     vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
       description: "Senior engineer role",
       automation_mode: "human_in_loop",
-      screening_threshold: 70,
+      resume_threshold: 70,
+      screening_threshold: 95,
       screening_criteria: [
         { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
       ],

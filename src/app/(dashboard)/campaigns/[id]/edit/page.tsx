@@ -220,6 +220,7 @@ export default function EditCampaignPage({
 
         <AiSettingsFields
           defaultAutomationMode={campaign.automation_mode}
+          defaultResumeThreshold={campaign.resume_threshold}
           defaultScreeningThreshold={campaign.screening_threshold}
           defaultInterviewPersona={campaign.interview_persona}
         />

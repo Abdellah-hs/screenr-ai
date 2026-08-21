@@ -368,6 +368,7 @@ export type Database = {
           location: string | null
           positions: number
           public_slug: string | null
+          resume_threshold: number
           screening_threshold: number
           status: Database["public"]["Enums"]["campaign_status_enum"]
           timezone: string | null
@@ -393,6 +394,7 @@ export type Database = {
           location?: string | null
           positions?: number
           public_slug?: string | null
+          resume_threshold?: number
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null
@@ -418,6 +420,7 @@ export type Database = {
           location?: string | null
           positions?: number
           public_slug?: string | null
+          resume_threshold?: number
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null

@@ -167,13 +167,42 @@ For every AI call, persist: `raw_output`, `normalized_fields`, `model_version`, 
 All advancement decisions are rule-driven. Example:
 
 ```
-IF resume_score >= threshold AND automation_mode = fully_auto:
+IF resume_score >= resume_threshold AND automation_mode = fully_auto:
   transition(app, 'screening_approved', actor='system', rationale='score>=threshold')
 ELSE IF automation_mode = hitl:
   transition(app, 'screening_review_pending', actor='system', rationale='awaiting review')
 ELSE:
   transition(app, 'screening_rejected', actor='system', rationale='score<threshold', disposition='LOW_SCORE')
 ```
+
+#### Two thresholds, not one, and none on the interview (decision 2026-08-21)
+
+There are exactly **two** score gates on a campaign, and they are separate columns:
+
+| Column | Read by | Passing it means |
+| --- | --- | --- |
+| `resume_threshold` | `evaluateResumeScoringOutcome` | the CV clears the bar → `screening_approved` |
+| `screening_threshold` | `evaluateScreeningScoringOutcome` | the voice answers clear the bar → `interview_invited` |
+
+Until 2026-08-21 both rules read `screening_threshold` while the UI showed one
+box, so a recruiter raising the bar to stop weak CVs was silently also raising
+the bar on candidates who had already answered well. **They are not the same kind
+of number** — a resume score ranks a pile of CVs against a rubric, a screening
+score grades spoken answers — so they must never share a fail line. The DB
+default was also 50 while the form sent 70; both are now `DEFAULT_SCORE_THRESHOLD`
+(70) in `src/lib/constants.ts`, which the columns, the Zod parser and the form
+defaults all read.
+
+`fetchCampaignScoringConfig` returns both because two callers share it, but the
+resume rule's own `CampaignScoringConfig` declares **only** `resume_threshold` —
+the resume decision structurally cannot reach for the screening bar.
+
+**There is deliberately no interview threshold.** See the next section: the
+interview never gates and never auto-rejects, so it has no bar to set. If the
+problem is "too many scored interviews to work through", the answer is ordering
+the `manager_review` queue, not a gate — a threshold there would auto-reject
+someone who sat a whole interview, on the least reviewable evidence in the
+product (there is no recording to check a decision against).
 
 #### Interview scoring is not a gate (decision 2026-08-18)
 

@@ -134,6 +134,11 @@ export interface Campaign {
   /** URL-safe slug for the public apply page (`/apply/<slug>`). */
   public_slug: string | null;
   automation_mode: AutomationMode;
+  /** Pass mark (0-100) for the CV stage. */
+  resume_threshold: number;
+  /** Pass mark (0-100) for the voice-screening stage. Separate from
+   *  `resume_threshold` because the two scores are different kinds of number —
+   *  one ranks CVs against a rubric, the other grades spoken answers. */
   screening_threshold: number;
   interview_persona: InterviewPersona;
   rubrics: EvaluationRubric[];
@@ -192,6 +197,14 @@ export const STATUS_COLORS: Record<CampaignStatus, string> = {
   paused: "bg-amber-100 text-amber-700",
   closed: "bg-red-100 text-red-700",
 };
+
+/**
+ * Default pass mark for both scored gates (resume and voice screening) when a
+ * form omits one. Kept here so the campaign wizard, the edit form and the Zod
+ * parser cannot drift apart, and matched to the column defaults in
+ * `20260821120000_split_resume_screening_thresholds.sql`.
+ */
+export const DEFAULT_SCORE_THRESHOLD = 70;
 
 export const AUTOMATION_MODES: { value: AutomationMode; label: string; description: string }[] = [
   { value: "fully_auto", label: "Fully Automatic", description: "AI handles the entire pipeline autonomously" },

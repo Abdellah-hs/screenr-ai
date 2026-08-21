@@ -152,6 +152,10 @@ export default async function CampaignDetailPage({
             </p>
           </div>
           <div>
+            <p className="text-xs text-[#6B7280] mb-1">Resume Threshold</p>
+            <p className="text-sm font-medium text-[#111827]">{campaign.resume_threshold}%</p>
+          </div>
+          <div>
             <p className="text-xs text-[#6B7280] mb-1">Screening Threshold</p>
             <p className="text-sm font-medium text-[#111827]">{campaign.screening_threshold}%</p>
           </div>
