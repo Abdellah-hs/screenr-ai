@@ -17,8 +17,8 @@ import type { TranscriptTurn } from "@/lib/screening-scoring";
 const ORIGINAL_API_KEY = process.env.OPENAI_API_KEY;
 
 const questions = [
-  { id: "q-1", prompt: "Walk me through a hard system design.", is_required: true },
-  { id: "q-2", prompt: "What is your debugging approach?", is_required: false },
+  { id: "q-1", prompt: "Walk me through a hard system design." },
+  { id: "q-2", prompt: "What is your debugging approach?" },
 ];
 
 const transcript: TranscriptTurn[] = [

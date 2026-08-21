@@ -94,7 +94,6 @@ export async function runScreeningScoring(
   const questionsForScoring = questions.map((q) => ({
     id: q.id,
     prompt: q.prompt,
-    is_required: q.is_required,
   }));
 
   const [scoring, rubricVersion] = await Promise.all([
@@ -248,7 +247,7 @@ interface ScreeningScoringOutput {
  */
 async function scoreVoiceTranscript(params: {
   jobDescription: string;
-  questions: { id: string; prompt: string; is_required: boolean }[];
+  questions: { id: string; prompt: string }[];
   transcript: { role: "agent" | "candidate"; text: string; at: string }[];
 }): Promise<ScreeningScoringOutput> {
   const extracted = await extractTranscriptEvidence(params);
@@ -306,7 +305,7 @@ function toPersistedAnswer(answer: ScoredScreeningAnswer) {
  */
 async function scoreLegacyTextAnswers(params: {
   jobDescription: string;
-  questions: { id: string; prompt: string; is_required: boolean }[];
+  questions: { id: string; prompt: string }[];
   answers: { question_id: string; answer_text: string }[];
 }): Promise<ScreeningScoringOutput> {
   const evidence = await scoreAnswers(params);

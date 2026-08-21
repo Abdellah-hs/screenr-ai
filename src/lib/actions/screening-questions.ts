@@ -54,7 +54,7 @@ export async function getScreeningQuestions(
  */
 export async function generateScreeningQuestions(
   campaignId: string
-): Promise<{ prompt: string; is_required: boolean }[]> {
+): Promise<{ prompt: string }[]> {
   const userId = await requireCampaignOwner(campaignId);
 
   // Reuse the AI generation bucket — same OpenAI quota concern applies.
@@ -84,7 +84,7 @@ export async function generateScreeningQuestions(
  */
 export async function saveScreeningQuestions(
   campaignId: string,
-  questions: { id?: string; prompt: string; is_required: boolean }[]
+  questions: { id?: string; prompt: string }[]
 ): Promise<void> {
   await requireCampaignOwner(campaignId);
 
@@ -92,7 +92,7 @@ export async function saveScreeningQuestions(
 
   await replaceScreeningQuestions(
     campaignId,
-    validated.map((q) => ({ prompt: q.prompt, is_required: q.is_required }))
+    validated.map((q) => ({ prompt: q.prompt }))
   );
 
   // The question set surfaces on every candidate detail page under this

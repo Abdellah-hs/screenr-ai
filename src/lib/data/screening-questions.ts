@@ -180,7 +180,6 @@ export interface ScreeningQuestionRow {
   id: string;
   campaign_id: string;
   prompt: string;
-  is_required: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -261,7 +260,7 @@ export async function fetchScreeningQuestionsByCampaignId(
 
 export async function replaceScreeningQuestions(
   campaignId: string,
-  questions: { prompt: string; is_required: boolean }[]
+  questions: { prompt: string }[]
 ): Promise<ScreeningQuestionRow[]> {
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -284,7 +283,6 @@ export async function replaceScreeningQuestions(
   const rows = questions.map((q, i) => ({
     campaign_id: campaignId,
     prompt: q.prompt,
-    is_required: q.is_required,
     sort_order: i,
   }));
 

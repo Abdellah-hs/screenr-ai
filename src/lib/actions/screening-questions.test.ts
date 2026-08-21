@@ -87,7 +87,6 @@ const question: ScreeningQuestionRow = {
   id: "q1",
   campaign_id: "camp-1",
   prompt: "Describe a scaling problem you solved.",
-  is_required: true,
   sort_order: 0,
   created_at: "2026-06-03T09:00:00.000Z",
   updated_at: "2026-06-03T09:00:00.000Z",
@@ -333,11 +332,11 @@ describe("saveScreeningQuestions", () => {
     vi.mocked(replaceScreeningQuestions).mockResolvedValue([]);
 
     await saveScreeningQuestions(CAMPAIGN_ID, [
-      { prompt: "Describe a scaling problem you solved recently.", is_required: true },
+      { prompt: "Describe a scaling problem you solved recently." },
     ]);
 
     expect(vi.mocked(replaceScreeningQuestions)).toHaveBeenCalledWith(CAMPAIGN_ID, [
-      { prompt: "Describe a scaling problem you solved recently.", is_required: true },
+      { prompt: "Describe a scaling problem you solved recently." },
     ]);
     // "layout" is the regression under test: candidate detail pages under the
     // campaign render the question set (screening thread, HITL approve gate)

@@ -309,7 +309,6 @@ export const campaignIdsSchema = z
 export const screeningQuestionSchema = z.object({
   id: z.string().optional(),
   prompt: z.string().min(10, "Question is too short").max(1000, "Question is too long"),
-  is_required: z.boolean(),
 });
 
 export const screeningQuestionsArraySchema = z

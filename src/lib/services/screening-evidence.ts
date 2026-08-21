@@ -47,7 +47,7 @@ export interface TranscriptEvidenceResult {
  */
 export async function extractTranscriptEvidence(params: {
   jobDescription: string;
-  questions: { id: string; prompt: string; is_required: boolean }[];
+  questions: { id: string; prompt: string }[];
   transcript: TranscriptTurn[];
 }): Promise<TranscriptEvidenceResult> {
   const { jobDescription, questions, transcript } = params;
@@ -64,7 +64,7 @@ export async function extractTranscriptEvidence(params: {
   }
 
   const questionList = questions
-    .map((q) => `- [${q.id}]${q.is_required ? " (required)" : ""} ${q.prompt}`)
+    .map((q) => `- [${q.id}] ${q.prompt}`)
     .join("\n");
 
   const levelDefinitions = Object.entries(SCREENING_EVIDENCE_LEVEL_DEFINITIONS)

@@ -273,11 +273,20 @@ document, penalising a candidate for not reciting job titles out loud.
   snapshot, so a stored score always says which arithmetic produced it and what
   was corrected on the way.
 
-**There is deliberately no must-have gate on screening**, even though questions
-carry `is_required`. A resume must-have is objective and checkable against the
-document; a screening answer is speech, transcribed, and noisier. A weak answer
-to a required question lowers the score — it does not auto-reject. The
-`screening_threshold` gate in `evaluateScreeningScoringOutcome` is unchanged.
+**There is deliberately no must-have gate on screening.** A resume must-have is
+objective and checkable against the document; a screening answer is speech,
+transcribed, and noisier. A weak answer lowers the score — it never
+auto-rejects. The `screening_threshold` gate in
+`evaluateScreeningScoringOutcome` is unchanged.
+
+`screening_questions.is_required` was **dropped** on 2026-08-21 as part of this.
+It gated nothing — no rule read it and no submission was blocked by it — so
+after the no-gate decision it labelled a rule that does not exist, which is
+worse than no label: a recruiter ticking "Required" reasonably expects a weak
+answer there to cost more, and it does not. It also worked against the scoring:
+the voice agent was told optional topics were "if time allows", so it could
+legitimately skip one, while the overall is the mean over **every** question —
+a skipped topic scores 0. The agent is now told to cover all of them and why.
 
 The **legacy text path** (`scoreAnswers`) still uses the old numeric prompt. The
 typed-answer form was retired in #161, so it only runs when a recruiter
@@ -377,6 +386,7 @@ Non-negotiable product behaviors from `docs/prd.md`. Do not assume a feature is 
 
 - Candidate responses are **spoken**, captured as a live voice call and stored as a server-side transcript. **The text form was retired in #161** — there is no typed-answer path left, and no env flag re-enables one. Video responses remain an accepted divergence (#48); audio is what ships.
 - The flow includes a **practice question** before scored questions.
+- Questions are **not** individually required or optional (`is_required` was dropped 2026-08-21). Every question is asked and every question is scored — see "Screening answers are evidence-based too".
 - Candidates may re-record before final submission.
 - AI transcribes responses; per-question scores and the overall screening score must be traceable to transcript excerpts — persist the transcript alongside the score.
 

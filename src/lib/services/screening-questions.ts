@@ -5,7 +5,6 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export interface GeneratedScreeningQuestion {
   prompt: string;
-  is_required: boolean;
 }
 
 export async function generateQuestionsForRole(params: {
@@ -35,7 +34,7 @@ export async function generateQuestionsForRole(params: {
 Return JSON in this exact format:
 {
   "questions": [
-    { "prompt": "string", "is_required": boolean }
+    { "prompt": "string" }
   ]
 }
 
@@ -45,7 +44,6 @@ Rules:
 - Each prompt is 1-2 sentences, phrased in second person ("Tell us about...", "Describe a time when...")
 - Avoid yes/no questions — every question must invite a written narrative answer
 - Cover every must-have criterion explicitly; touch the nice-to-have ones when there is room
-- Mark at least half the questions as required (the ones tied to must-have criteria)
 - Do not ask for information already on a typical resume (work history, job titles, dates)`,
       },
       {
@@ -65,7 +63,7 @@ ${criteriaList || "(no explicit criteria — use the job description to infer wh
   }
 
   const parsed = JSON.parse(content) as {
-    questions?: { prompt: string; is_required: boolean }[];
+    questions?: { prompt: string }[];
   };
 
   if (!parsed.questions?.length) {
@@ -74,7 +72,6 @@ ${criteriaList || "(no explicit criteria — use the job description to infer wh
 
   return parsed.questions.map((q) => ({
     prompt: String(q.prompt).trim(),
-    is_required: Boolean(q.is_required),
   }));
 }
 
@@ -123,7 +120,7 @@ export interface AnswerScoringEvidence {
  */
 export async function scoreAnswers(params: {
   jobDescription: string;
-  questions: { id: string; prompt: string; is_required: boolean }[];
+  questions: { id: string; prompt: string }[];
   answers: { question_id: string; answer_text: string }[];
 }): Promise<AnswerScoringEvidence> {
   if (!process.env.OPENAI_API_KEY) {
@@ -136,7 +133,7 @@ export async function scoreAnswers(params: {
     .map((q) => {
       const match = answers.find((a) => a.question_id === q.id);
       const answerText = match?.answer_text?.trim() || "(no answer provided)";
-      return `### Question [${q.id}]${q.is_required ? " (required)" : ""}
+      return `### Question [${q.id}]
 ${q.prompt}
 
 Answer:

@@ -32,8 +32,8 @@ afterEach(() => {
 });
 
 const sampleQuestions = [
-  { id: "q-1", prompt: "Walk me through a hard system design.", is_required: true },
-  { id: "q-2", prompt: "What's your debugging approach?", is_required: false },
+  { id: "q-1", prompt: "Walk me through a hard system design." },
+  { id: "q-2", prompt: "What's your debugging approach?" },
 ];
 
 const sampleAnswers = [
