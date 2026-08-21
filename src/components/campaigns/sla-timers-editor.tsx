@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { type SlaTimer, SLA_STAGES } from "@/lib/constants";
+import { EDITOR_HEAD_BUTTON, EDITOR_TITLE, FIELD_SM, LABEL_SM, RemoveButton, SelectChevron } from "./editor-parts";
 
 interface Props {
+  /** Uncontrolled seed. Ignored when `value` is passed. */
   initialTimers?: SlaTimer[];
-  /** Reports the current timer set so a caller can describe what will run. */
+  /** Controlled mode — required by the wizard, whose steps unmount. */
+  value?: SlaTimer[];
   onChange?: (timers: SlaTimer[]) => void;
 }
 
@@ -16,126 +19,146 @@ const DEFAULT_SLA: SlaTimer = {
   escalation_threshold_hours: 44,
 };
 
-export default function SlaTimersEditor({ initialTimers = [], onChange }: Props) {
-  const [timers, setTimers] = useState<SlaTimer[]>(initialTimers);
+export default function SlaTimersEditor({ initialTimers = [], value, onChange }: Props) {
+  const [internal, setInternal] = useState<SlaTimer[]>(initialTimers);
+  const timers = value ?? internal;
 
-  // Report after commit rather than from each mutator: the timers change from
-  // six different handlers, and one effect cannot forget one of them.
-  useEffect(() => {
-    onChange?.(timers);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timers]);
+  function setTimers(next: SlaTimer[]) {
+    if (value === undefined) setInternal(next);
+    onChange?.(next);
+  }
 
-  const addTimer = () => {
-    // Default a new timer to the first stage that has no timer yet, so the new
-    // card is visibly distinct (a different stage) rather than a confusing
-    // duplicate of an existing one — and never creates two timers for one stage.
-    const nextStage = SLA_STAGES.find((s) => !timers.some((t) => t.stage === s.key));
-    if (!nextStage) return;
-    setTimers([...timers, { ...DEFAULT_SLA, stage: nextStage.key }]);
-  };
-
-  const removeTimer = (index: number) => {
-    setTimers(timers.filter((_, i) => i !== index));
-  };
-
-  const updateTimer = <K extends keyof SlaTimer>(index: number, field: K, value: SlaTimer[K]) => {
-    const newTimers = [...timers];
-    newTimers[index] = { ...newTimers[index], [field]: value };
-    setTimers(newTimers);
-  };
-
+  // Default a new timer to the first stage with no timer yet, so the new card
+  // is visibly distinct rather than a confusing duplicate — and one stage can
+  // never end up with two timers.
   const availableStages = SLA_STAGES.filter(
-    (stage) => !timers.some((t) => t.stage === stage.key)
+    (stage) => !timers.some((t) => t.stage === stage.key),
   );
 
+  function updateTimer<K extends keyof SlaTimer>(index: number, field: K, next: SlaTimer[K]) {
+    setTimers(timers.map((t, i) => (i === index ? { ...t, [field]: next } : t)));
+  }
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[#111827]">
-          SLA Timers
+    <div>
+      <div className="mb-3.5 flex items-center justify-between gap-3">
+        <p className={EDITOR_TITLE}>
+          SLA timers
           {timers.length > 0 && (
-            <span className="ml-2 text-xs font-normal text-[#6B7280]">({timers.length})</span>
+            <span className="ml-2 text-xs font-normal text-[#6B7280]">
+              {timers.length}
+            </span>
           )}
-        </h3>
+        </p>
         {availableStages.length > 0 && (
           <button
             type="button"
-            onClick={addTimer}
-            className="text-sm text-[#2563EB] hover:text-[#1D4ED8]"
+            onClick={() =>
+              setTimers([...timers, { ...DEFAULT_SLA, stage: availableStages[0].key }])
+            }
+            className={EDITOR_HEAD_BUTTON}
           >
-            + Add Timer
+            Add timer
           </button>
         )}
       </div>
-      <p className="text-sm text-[#6B7280]">
-        Set Service Level Agreements for how long candidates can stay in a specific pipeline stage before triggering alerts.
-      </p>
 
       {timers.length === 0 ? (
-        <div className="p-4 bg-gray-50 border border-gray-200 border-dashed rounded-lg text-center text-sm text-gray-500">
-          No SLA Timers configured.
-        </div>
+        <p className="rounded-lg border border-dashed border-[#E5E7EB] px-4 py-5 text-center text-[13px] text-[#6B7280]">
+          No timers. Nothing will chase a candidate who stalls — and nothing will
+          reject one either.
+        </p>
       ) : (
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {timers.map((timer, index) => (
-            <div key={index} className="p-4 bg-white border border-[#D1D5DB] rounded-lg space-y-3 relative group">
-              <button
-                type="button"
-                onClick={() => removeTimer(index)}
-                className="absolute top-3 right-3 text-gray-400 hover:text-red-500"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              
-              <div className="grid grid-cols-2 gap-4">
+            <div
+              key={index}
+              className="relative rounded-lg border border-[#D1D5DB] p-4"
+            >
+              <RemoveButton
+                label={`Remove the ${
+                  SLA_STAGES.find((s) => s.key === timer.stage)?.name ?? timer.stage
+                } timer`}
+                onClick={() => setTimers(timers.filter((_, i) => i !== index))}
+                className="absolute right-2.5 top-2.5 h-8 w-8"
+              />
+
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <div>
-                  <label className="block text-xs text-[#374151] mb-1">Stage</label>
-                  <select
-                    value={timer.stage}
-                    onChange={(e) => updateTimer(index, "stage", e.target.value as SlaTimer["stage"])}
-                    className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
-                  >
-                    <option value={timer.stage}>
-                      {SLA_STAGES.find((s) => s.key === timer.stage)?.name || timer.stage}
-                    </option>
-                    {availableStages.map((stage) => (
-                      <option key={stage.key} value={stage.key}>
-                        {stage.name}
+                  <label htmlFor={`sla-stage-${index}`} className={LABEL_SM}>
+                    Stage
+                  </label>
+                  <span className="relative block">
+                    <select
+                      id={`sla-stage-${index}`}
+                      value={timer.stage}
+                      onChange={(e) =>
+                        updateTimer(index, "stage", e.target.value as SlaTimer["stage"])
+                      }
+                      className={`${FIELD_SM} cursor-pointer appearance-none pr-[30px]`}
+                    >
+                      <option value={timer.stage}>
+                        {SLA_STAGES.find((s) => s.key === timer.stage)?.name ?? timer.stage}
                       </option>
-                    ))}
-                  </select>
+                      {availableStages.map((stage) => (
+                        <option key={stage.key} value={stage.key}>
+                          {stage.name}
+                        </option>
+                      ))}
+                    </select>
+                    <SelectChevron />
+                  </span>
                 </div>
+
                 <div>
-                  <label className="block text-xs text-[#374151] mb-1">Time Limit (Hours)</label>
+                  <label htmlFor={`sla-limit-${index}`} className={LABEL_SM}>
+                    Time limit (hours)
+                  </label>
                   <input
+                    id={`sla-limit-${index}`}
                     type="number"
-                    min="1"
+                    min={1}
                     value={timer.time_limit_hours}
-                    onChange={(e) => updateTimer(index, "time_limit_hours", parseInt(e.target.value) || 1)}
-                    className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
+                    onChange={(e) =>
+                      updateTimer(index, "time_limit_hours", parseInt(e.target.value) || 1)
+                    }
+                    className={`${FIELD_SM} tabular-nums`}
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs text-[#374151] mb-1">Alert Threshold (Hours)</label>
+                  <label htmlFor={`sla-alert-${index}`} className={LABEL_SM}>
+                    Alert threshold (hours)
+                  </label>
                   <input
+                    id={`sla-alert-${index}`}
                     type="number"
-                    min="0"
+                    min={1}
                     value={timer.alert_threshold_hours}
-                    onChange={(e) => updateTimer(index, "alert_threshold_hours", parseInt(e.target.value) || 0)}
-                    className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
+                    onChange={(e) =>
+                      updateTimer(index, "alert_threshold_hours", parseInt(e.target.value) || 1)
+                    }
+                    className={`${FIELD_SM} tabular-nums`}
                   />
                 </div>
+
                 <div>
-                  <label className="block text-xs text-[#374151] mb-1">Escalation Threshold (Hours)</label>
+                  <label htmlFor={`sla-esc-${index}`} className={LABEL_SM}>
+                    Escalation threshold (hours)
+                  </label>
                   <input
+                    id={`sla-esc-${index}`}
                     type="number"
-                    min="0"
+                    min={1}
                     value={timer.escalation_threshold_hours}
-                    onChange={(e) => updateTimer(index, "escalation_threshold_hours", parseInt(e.target.value) || 0)}
-                    className="w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors"
+                    onChange={(e) =>
+                      updateTimer(
+                        index,
+                        "escalation_threshold_hours",
+                        parseInt(e.target.value) || 1,
+                      )
+                    }
+                    className={`${FIELD_SM} tabular-nums`}
                   />
                 </div>
               </div>
@@ -144,7 +167,7 @@ export default function SlaTimersEditor({ initialTimers = [], onChange }: Props)
         </div>
       )}
 
-      {/* Hidden input to pass data to Server Action */}
+      {/* The uncontrolled caller (the edit form) posts through this. */}
       <input type="hidden" name="sla_timers_json" value={JSON.stringify(timers)} />
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { generateCampaignDescription } from "@/lib/actions/ai-generate";
 import type { GenerateDescriptionInput } from "@/lib/validations";
 import { cn } from "@/lib/utils";
@@ -22,19 +22,28 @@ type Mode = GenerateDescriptionInput["mode"];
  */
 export function DescriptionField({
   initialValue = "",
+  value: controlledValue,
   onChange,
+  rows = 4,
 }: {
+  /** Uncontrolled seed. Ignored when `value` is passed. */
   initialValue?: string;
+  /** Controlled mode — required by the wizard, whose steps unmount. */
+  value?: string;
   /** Reports the current text — the AI-assist buttons write to it too, so a
    *  caller cannot get this from the textarea's own change events. */
   onChange?: (value: string) => void;
+  rows?: number;
 }) {
-  const [value, setValue] = useState(initialValue);
+  const [internal, setInternal] = useState(initialValue);
+  const value = controlledValue ?? internal;
 
-  useEffect(() => {
-    onChange?.(value);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+  function setValue(next: string | ((current: string) => string)) {
+    const resolved = typeof next === "function" ? next(value) : next;
+    if (controlledValue === undefined) setInternal(resolved);
+    onChange?.(resolved);
+  }
+
   const [panelOpen, setPanelOpen] = useState(false);
 
   const [seniority, setSeniority] = useState("");
@@ -145,7 +154,7 @@ export function DescriptionField({
         id="description"
         name="description"
         required
-        rows={panelOpen ? 8 : 4}
+        rows={panelOpen ? rows + 3 : rows}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         className="w-full resize-y rounded-lg border border-[#E5E7EB] bg-white px-4 py-2 text-sm text-[#111827] outline-none transition-colors focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB]"
