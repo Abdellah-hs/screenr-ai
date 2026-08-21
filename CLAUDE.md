@@ -52,7 +52,7 @@ A strict layered pattern is enforced for all data flow. Respect the boundaries �
 2. **Rules Layer** (`src/lib/rules/`) — **pure** decision functions. Reads already-validated evidence (e.g. an AI score, a response status, a list of required questions vs answers) and returns a decision — usually a `TransitionDescriptor` `{ toState, rationale }` or a guard that throws on bad state. The action executes the transition; the rule only decides. **MUST NOT** import from `@/lib/supabase/*`, `@/lib/actions/*`, or call `revalidatePath` / `redirect`. See `src/lib/rules/README.md` for the full contract. This is the layer that implements "Control > AI > Data" — AI produces evidence, rules decide.
 3. **Data Layer** (`src/lib/data/`) — pure Supabase query/mutation functions (e.g. `insertCampaignTx`, `fetchCandidatesByCampaignId`, `transitionApplication`). No auth checks, no validation — that is the action's job. Functions ending in `Tx` perform multi-table writes that should be treated as a logical transaction. **All `applications.status` writes go through `transitionApplication()` in `src/lib/data/transitions.ts`** — never `.update({ status: ... })` directly.
 4. **Services** (`src/lib/services/`) — third-party integrations: `openai.ts` (resume extraction, screening criteria/rubric generation, scoring), `gmail.ts` (inbox sync for resume ingestion), `pdf.ts` (PDF text extraction via `pdf-parse`), `email.ts`, `screening-questions.ts`, `email-templates/`.
-5. **Pure domain packages** (`src/lib/resume-scoring/`, `src/lib/proctoring/`, `src/lib/talent-pool/`) — versioned, dependency-free logic that is too big for a rule but must never touch I/O. `resume-scoring` owns the whole evidence→score path: the priority model, the LLM evidence schema, quote verification, the deterministic scoring/eligibility/ranking functions, and the cache key. No OpenAI calls, no Supabase, no clock.
+5. **Pure domain packages** (`src/lib/resume-scoring/`, `src/lib/screening-scoring/`, `src/lib/scoring/`, `src/lib/proctoring/`, `src/lib/talent-pool/`) — versioned, dependency-free logic that is too big for a rule but must never touch I/O. `resume-scoring` owns the whole evidence→score path: the priority model, the LLM evidence schema, quote verification, the deterministic scoring/eligibility/ranking functions, and the cache key. `screening-scoring` is its mirror for the voice stage. `scoring` holds only what both must share — the evidence-level enum and the level → score table — so the two stages cannot drift onto different ladders. No OpenAI calls, no Supabase, no clock.
 6. **Orchestration / Pipelines** (`src/lib/resume-ingest/`, `src/lib/screening/`, `src/lib/scheduling/`) — multi-step **use-cases** that compose the lower layers (services → data → rules → `transition()`) into one reusable flow. They exist because a flow like resume ingest may be driven from **more than one entry point** (today the public apply action; a session-less caller like a cron sweep could reuse it tomorrow), so it can't live inside any single action. A pipeline runs on an **injected `db` client** (`SupabaseDb`) so it works with or without a recruiter session (service-role for cron). **MUST NOT** perform auth, Zod validation, or rate-limiting — those stay in the action that calls it (a cron route does its own `CRON_SECRET` guard). It **MUST** still route every `applications.status` change through `transition()` and keep AI advisory (score → rule decides → transition). Think of it as an "action body" lifted out so several callers can share it. The canonical example is `ingestResumeDocument` (extract → classify → upload → upsert → score → rule → advance). Resume evaluation itself is a second one: `evaluateApplicationResume` (`src/lib/resume-ingest/score-resume.ts`) is shared by the ingest pipeline and the recruiter re-score action so a CV cannot be graded two different ways depending on how it arrived.
 
 Auto-generated Supabase types live in `src/types/database.types.ts`. The `src/app/api/` directory exists but is currently empty — there are **no API routes**; everything goes through Server Actions.
@@ -235,6 +235,55 @@ This replaced a prompt that asked for per-criterion 0-100 scores. Two reasons:
   scoring-rules version. Only the *evidence* is cached; the deterministic score
   is always recomputed, so a cached result can never predate its rules.
 
+#### Screening answers are evidence-based too (decision 2026-08-21)
+
+**The model never returns a number for a screening answer either.** It reads the
+voice transcript and reports, per question, an `evidence_level` plus verbatim
+candidate quotes; `src/lib/screening-scoring/` derives every score. Same reason
+as the resume stage, and the same ladder — the level → score table lives in
+`src/lib/scoring/evidence-levels.ts` and is shared by both, so a `strong`
+reading is worth 80 wherever it was read. A recruiter comparing a resume score
+to a screening score is comparing two numbers made the same way.
+
+What each level *means* is deliberately **not** shared
+(`SCREENING_EVIDENCE_LEVEL_DEFINITIONS`). A CV proves a skill by listing a role
+and a duration; an answer proves it by what the candidate can say about the work
+when asked. Reusing the resume wording would grade speech as though it were a
+document, penalising a candidate for not reciting job titles out loud.
+
+**The rules:**
+
+- Quotes are verified against the **candidate's half** of the transcript, never
+  the whole thing. The interviewer states the topic of every question, so a
+  quote lifted from their turn would verify cleanly and award credit for the
+  question merely having been asked.
+- An unverifiable quote is discarded; a question left with no verified quote is
+  downgraded to `unclear` (score 0). **Never award credit on an unverified
+  quote.** Structural failures (wrong answer count, duplicate or unknown
+  question id) reject the run; evidential failures downgrade and warn.
+- Validation can only ever lower a level, never raise one.
+- The overall is the mean of **every** question, answered or not. Dropping
+  unanswered questions from the denominator would let a candidate who answered
+  one question well and skipped four outscore one who answered all five
+  adequately.
+- A transcript with no candidate speech is scored `not_present` across the board
+  **in code, without calling the model** — a model handed silence invents
+  answers to fill it.
+- `scoring_rules_version` and the validation warnings are persisted in the audit
+  snapshot, so a stored score always says which arithmetic produced it and what
+  was corrected on the way.
+
+**There is deliberately no must-have gate on screening**, even though questions
+carry `is_required`. A resume must-have is objective and checkable against the
+document; a screening answer is speech, transcribed, and noisier. A weak answer
+to a required question lowers the score — it does not auto-reject. The
+`screening_threshold` gate in `evaluateScreeningScoringOutcome` is unchanged.
+
+The **legacy text path** (`scoreAnswers`) still uses the old numeric prompt. The
+typed-answer form was retired in #161, so it only runs when a recruiter
+re-scores a response captured before that; converting a path no new response can
+reach would mean maintaining a second evidence prompt for no live benefit.
+
 #### Two thresholds, not one, and none on the interview (decision 2026-08-21)
 
 There are exactly **two** score gates on a campaign, and they are separate columns:
@@ -316,9 +365,9 @@ Search (PRD 3.11.2) is a pure function, `filterTalentPool` in `src/lib/talent-po
 - Overwriting historical AI outputs or rubrics (append/version instead)
 - Non-versioned AI prompts or rubrics
 - Silent failures — every error path ends in an explicit failure state
-- Asking a model for a numeric resume score, weight, tier, eligibility, or hire/no-hire verdict (see "Resume screening is evidence-based")
+- Asking a model for a numeric score, weight, tier, eligibility, or hire/no-hire verdict at the resume or screening stage (see "Resume screening is evidence-based" and "Screening answers are evidence-based too")
 - Letting a nice-to-have criterion offset a failed must-have, by weighting, averaging, or any other route
-- Awarding credit for a quote that could not be found in the resume text
+- Awarding credit for a quote that could not be found in the resume text, or in the candidate's own half of a screening transcript
 
 ## PRD-Critical Product Rules
 

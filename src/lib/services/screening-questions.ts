@@ -1,7 +1,5 @@
 import OpenAI from "openai";
 import type { ResumeCriterion } from "@/lib/resume-scoring";
-import type { VoiceTranscriptTurn } from "@/lib/data/screening-questions";
-import { isGrounded, locateEvidence } from "@/lib/scoring/evidence";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -103,11 +101,11 @@ export interface AnswerScoringResult {
 }
 
 export const SCREENING_SCORING_MODEL = "gpt-4o-mini";
-// v2: unanswered/unaddressed questions must score exactly 0 (no "general
-// interest" partial credit), and the voice scorer must ground every non-zero
-// score in a verbatim candidate quote that code then verifies.
+// v2: unanswered questions must score exactly 0 (no "general interest" partial
+// credit). This is the LEGACY TEXT path only — the typed-answer form was
+// retired in #161. The live voice path asks for evidence levels instead of
+// numbers and lives in `services/screening-evidence.ts`.
 export const SCREENING_SCORING_PROMPT_VERSION = "v2_screening_scoring";
-export const SCREENING_VOICE_SCORING_PROMPT_VERSION = "v2_voice_screening_scoring";
 
 export interface AnswerScoringEvidence {
   result: AnswerScoringResult;
@@ -263,200 +261,5 @@ function normalizeScoringResult(content: string): AnswerScoringResult {
       score: Math.max(0, Math.min(100, Math.round(a.score))),
       rationale: String(a.rationale || ""),
     })),
-  };
-}
-
-/**
- * Deterministic zero-score evidence for a voice call in which the candidate
- * never spoke. We do NOT ask the model to score an absence: given a transcript
- * of only the interviewer's questions, gpt-4o-mini fabricates plausible answers
- * (it was observed inventing 50–60/100 rationales for a silent call). A call
- * with no candidate speech is, objectively, a zero — so we record that in code
- * without an OpenAI round-trip, fully reproducible and traceable.
- */
-function noCandidateSpeechEvidence(
-  questions: { id: string }[],
-): AnswerScoringEvidence {
-  return {
-    result: {
-      overall_score: 0,
-      overall_rationale:
-        "No spoken response was captured in this call — the candidate did not answer any questions.",
-      answers: questions.map((q) => ({
-        question_id: q.id,
-        score: 0,
-        rationale: "No spoken response was captured for this question.",
-      })),
-    },
-    rawOutput: JSON.stringify({ skipped: "no_candidate_speech" }),
-    model: SCREENING_SCORING_MODEL,
-    promptVersion: SCREENING_VOICE_SCORING_PROMPT_VERSION,
-  };
-}
-
-/**
- * AI-scores a candidate's voice-screening call (#84) against the screening
- * questions, reading the spoken transcript instead of typed answers.
- *
- * The candidate answers a question whenever it comes up in conversation — not
- * in neat per-question slots — so the model is asked to locate each question's
- * evidence across the whole transcript and cite a short spoken excerpt in its
- * rationale (PRD 3.4.3: scores must trace back to the transcript). Returns the
- * same `AnswerScoringEvidence` shape as `scoreAnswers`, so the action persists
- * scores and runs the unchanged decision rule identically for both modalities.
- */
-export async function scoreTranscript(params: {
-  jobDescription: string;
-  questions: { id: string; prompt: string; is_required: boolean }[];
-  transcript: VoiceTranscriptTurn[];
-}): Promise<AnswerScoringEvidence> {
-  const { jobDescription, questions, transcript } = params;
-
-  // Never feed the model a transcript with no candidate turns — it scores the
-  // absence by hallucinating answers. This is the authoritative backstop for
-  // every scoring path (recruiter re-score AND the auto-score on completion).
-  if (!transcript.some((t) => t.role === "candidate")) {
-    return noCandidateSpeechEvidence(questions);
-  }
-
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured");
-  }
-
-  const questionList = questions
-    .map((q) => `- [${q.id}]${q.is_required ? " (required)" : ""} ${q.prompt}`)
-    .join("\n");
-
-  const conversation = transcript
-    .map((t) => `${t.role === "agent" ? "Interviewer" : "Candidate"}: ${t.text}`)
-    .join("\n");
-
-  const response = await openai.chat.completions.create({
-    model: SCREENING_SCORING_MODEL,
-    temperature: 0.2,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: `You are an expert ATS evaluator scoring a spoken screening interview from its transcript. The interviewer asked a fixed set of questions (with unscripted follow-ups); the candidate answered conversationally. For each listed question, find the candidate's relevant spoken evidence anywhere in the transcript and score it 0-100 based on:
-- Relevance and specificity (did they actually address the question?)
-- Concrete evidence (examples, metrics, outcomes)
-- Depth of reasoning
-- Alignment with the role
-
-Scoring a non-answer (critical):
-- If the candidate never addressed a question — it was never asked, the call ended before reaching it, or they deflected ("I don't know", "I'm not sure", silence) — score it exactly 0.
-- Do NOT award any credit for general enthusiasm, stated interest, or merely mentioning a topic. Points require the candidate actually answering THAT question with relevant substance.
-- For each question set "evidence_quote" to the candidate's own words, copied VERBATIM from the transcript, that justify the score. Quote only the Candidate, never the Interviewer. If the candidate did not substantively address the question, set "evidence_quote" to an empty string and score it 0.
-
-Then compute an overall_score as the simple average of per-question scores (0-100, rounded).
-
-Return JSON in this exact format:
-{
-  "overall_score": number,
-  "overall_rationale": "2-3 sentence summary of the candidate's screening performance",
-  "answers": [
-    { "question_id": "string", "score": number, "rationale": "1-2 sentences citing the transcript", "evidence_quote": "verbatim candidate words, or empty string if unaddressed" }
-  ]
-}
-
-Rules:
-- answers array must have exactly one entry per listed question, in the same order
-- question_id must match the listed id verbatim`,
-      },
-      {
-        role: "user",
-        content: `## Job Description
-${jobDescription}
-
-## Screening Questions
-${questionList}
-
-## Interview Transcript
-${conversation}`,
-      },
-    ],
-  });
-
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenAI returned an empty response for transcript scoring");
-  }
-
-  return {
-    result: enforceTranscriptEvidence(normalizeScoringResult(content), content, transcript),
-    rawOutput: content,
-    model: SCREENING_SCORING_MODEL,
-    promptVersion: SCREENING_VOICE_SCORING_PROMPT_VERSION,
-  };
-}
-
-/**
- * Voice backstop (Control > AI > Data): a non-zero per-question score may only
- * stand if the model grounded it in a candidate quote that actually appears in
- * the transcript. The conversational format makes per-question scoring the AI's
- * job, but it has been observed inventing partial credit (e.g. "showed general
- * interest") for questions the candidate never reached. So any score whose
- * evidence_quote is empty or not found in the candidate's own speech is forced
- * to 0, and the overall is recomputed from the corrected scores.
- */
-function enforceTranscriptEvidence(
-  result: AnswerScoringResult,
-  rawContent: string,
-  transcript: VoiceTranscriptTurn[],
-): AnswerScoringResult {
-  let rawAnswers: { question_id?: unknown; evidence_quote?: unknown }[] = [];
-  try {
-    const parsed = JSON.parse(rawContent) as {
-      answers?: { question_id?: unknown; evidence_quote?: unknown }[];
-    };
-    rawAnswers = parsed.answers ?? [];
-  } catch {
-    rawAnswers = [];
-  }
-
-  const quoteByQuestion = new Map<string, string>();
-  for (const a of rawAnswers) {
-    if (a?.question_id != null) {
-      quoteByQuestion.set(
-        String(a.question_id),
-        typeof a.evidence_quote === "string" ? a.evidence_quote : "",
-      );
-    }
-  }
-
-  let changed = false;
-  const answers = result.answers.map((a) => {
-    if (a.score === 0) return a;
-
-    const quote = quoteByQuestion.get(a.question_id) ?? "";
-    if (!isGrounded(quote, transcript)) {
-      changed = true;
-      return {
-        ...a,
-        score: 0,
-        evidence_quote: undefined,
-        evidence_turn_index: null,
-        rationale:
-          "Scored 0: no candidate answer to this question was found in the transcript.",
-      };
-    }
-
-    // Grounded: keep the score, and keep the evidence this time. Locating is a
-    // narrower question than grounding (a quote spanning two turns is grounded
-    // but not linkable), so a null index never demotes a score.
-    return {
-      ...a,
-      evidence_quote: quote.trim(),
-      evidence_turn_index: locateEvidence(quote, transcript)?.turnIndex ?? null,
-    };
-  });
-
-  // Always rebuild: even when no score changed, the answers now carry evidence
-  // they did not before, and returning `result` would drop it on the floor.
-  return {
-    ...result,
-    answers,
-    overall_score: changed ? averageOverall(answers) : result.overall_score,
   };
 }
