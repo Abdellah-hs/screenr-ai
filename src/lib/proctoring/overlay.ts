@@ -155,3 +155,38 @@ export function placeBoxes(boxes: OverlayBox[], geometry: VideoGeometry): Placed
  * over the publish interval so ordinary jitter doesn't make them flicker.
  */
 export const OVERLAY_STALE_AFTER_MS = 3_000;
+
+/**
+ * What a box is *called* on the candidate's own screen.
+ *
+ * Display only, and one step removed from `OverlayBoxLabel` on purpose. The
+ * worker reports "person" — it does not, and must not, decide which person is
+ * the candidate. Naming one box "Face" and the rest "Second face" is a reading
+ * made in the browser for the candidate's benefit, so they can see what the
+ * camera has picked up and correct it. Nothing here reaches the report: that is
+ * assembled server-side from the worker's own readings.
+ */
+export type OverlayDisplayLabel = "face" | "second_face" | "phone";
+
+/**
+ * The largest person box is taken to be the candidate — they are the one at the
+ * keyboard, so they are the one closest to the camera. It is a heuristic, which
+ * is exactly why it is confined to a caption on a live preview and never
+ * anywhere a decision is made.
+ */
+export function displayLabels(boxes: OverlayBox[]): OverlayDisplayLabel[] {
+  let primary = -1;
+  let largest = -1;
+  boxes.forEach((box, i) => {
+    if (box.label !== "person") return;
+    const area = box.w * box.h;
+    if (area > largest) {
+      largest = area;
+      primary = i;
+    }
+  });
+
+  return boxes.map((box, i) =>
+    box.label === "phone" ? "phone" : i === primary ? "face" : "second_face",
+  );
+}
