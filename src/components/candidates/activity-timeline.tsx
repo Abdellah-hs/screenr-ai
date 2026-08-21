@@ -5,6 +5,7 @@ import {
   type TransitionActor,
 } from "@/lib/constants";
 import type { ActivityTimeline, TimelineEntry } from "@/lib/rules/transition-timeline";
+import { ActorMark, actorFromTransition } from "@/components/ui";
 
 /**
  * The candidate's full history, read straight off the append-only transitions
@@ -100,21 +101,21 @@ function TimelineRow({ entry, isLast }: { entry: TimelineEntry; isLast: boolean 
           cleanly at the final entry instead of trailing past it. */}
       {!isLast && (
         <span
-          className="absolute left-[7px] top-4 bottom-0 w-px bg-[#E5E7EB]"
+          className="absolute left-3 top-7 bottom-0 w-px bg-[#E5E7EB]"
           aria-hidden="true"
         />
       )}
 
-      <span
-        className={`relative z-10 mt-1 h-[15px] w-[15px] shrink-0 rounded-full border-2 bg-white ${
-          isOverride
-            ? "border-[#D97706]"
-            : entry.actor === "recruiter"
-              ? "border-[#111827]"
-              : "border-[#D1D5DB]"
-        }`}
-        aria-hidden="true"
-      />
+      {/* The actor mark, not a dot. A rule firing and a person deciding must
+          never look the same in a history — that distinction is the whole
+          claim this product makes about how it treats candidates. */}
+      <span className="relative z-10 shrink-0">
+        <ActorMark
+          actor={actorFromTransition(entry.actor)}
+          size="sm"
+          className={isOverride ? "ring-2 ring-[#FDE68A]" : undefined}
+        />
+      </span>
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">

@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { pipelineDisplayScore, TIER_LABELS } from "@/lib/constants";
+import { pipelineDisplayScore } from "@/lib/constants";
 import {
   candidateStageCounts,
   selectCandidates,
@@ -10,7 +10,8 @@ import {
 } from "@/lib/candidates/table-view";
 import { CandidateBulkActions } from "./candidate-bulk-actions";
 import { StageChanger } from "@/components/candidates/stage-changer";
-import { MENU_ITEM } from "@/components/ui";
+import { MENU_ITEM, ScoreAbsent, ScoreInline } from "@/components/ui";
+import { scoreAbsenceLabel } from "@/lib/candidates/score-absence";
 import type {
   Candidate,
   CandidateScore,
@@ -31,15 +32,6 @@ const stageColors: Record<CandidateStage, string> = {
   final_interview: "text-[#D97706] bg-[#FEF3C7] border-[#FDE68A]",
   hired: "text-[#059669] bg-[#ECFDF5] border-[#A7F3D0]",
   rejected: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
-};
-
-// Same four tones as the `tier*` Badge variants and the candidate detail page.
-// A verdict must not read one way in the list and another on the record.
-const tierColors: Record<string, string> = {
-  strong: "text-tier-strong bg-[#ECFDF5] border border-[#A7F3D0]",
-  moderate: "text-tier-potential bg-[#FEF3C7] border border-[#FDE68A]",
-  weak: "text-tier-weak bg-[#FEF2F2] border border-[#FECACA]",
-  no_match: "text-tier-no-match bg-[#FEE2E2] border border-[#FCA5A5]",
 };
 
 /**
@@ -569,24 +561,22 @@ export default function CandidateTable({
                         <td className="px-6 py-3">
                           {stageScore ? (
                             <div className="flex items-center gap-2">
-                              <span className="font-semibold text-ink tabular-nums">
-                                {stageScore.overall}
-                              </span>
-                              <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-[#F3F4F6] text-[#6B7280]">
+                              <ScoreInline
+                                score={stageScore.overall}
+                                tier={stageScore.tier}
+                              />
+                              <span className="inline-flex rounded-full bg-[#F3F4F6] px-2 py-0.5 text-[10px] font-medium text-[#6B7280]">
                                 {scoreStageTag[stageScore.stage]}
                               </span>
-                              {stageScore.tier && (
-                                <span
-                                  className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
-                                    tierColors[stageScore.tier]
-                                  }`}
-                                >
-                                  {TIER_LABELS[stageScore.tier]}
-                                </span>
-                              )}
                             </div>
                           ) : (
-                            <span className="text-sm text-[#9CA3AF]">Not scored</span>
+                            /* Never a dash and never a bare "not scored": the
+                               reason a row has no number is a fact about the
+                               application, and each reason needs a different
+                               person to do a different thing. */
+                            <ScoreAbsent>
+                              {scoreAbsenceLabel(candidate.status)}
+                            </ScoreAbsent>
                           )}
                         </td>
                       )}

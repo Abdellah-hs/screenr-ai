@@ -1,20 +1,9 @@
 import Link from "next/link";
-import {
-  pipelineDisplayScore,
-  TIER_LABELS,
-  type Candidate,
-  type ScreeningTier,
-} from "@/lib/constants";
+import { pipelineDisplayScore, type Candidate } from "@/lib/constants";
 import { daysInStage, lastActivityLabel } from "@/lib/campaigns/detail-view";
 import { StageChanger } from "@/components/candidates/stage-changer";
-import { MENU_ITEM } from "@/components/ui";
-
-const TIER_PILL: Record<ScreeningTier, string> = {
-  strong: "bg-[#ECFDF5] text-[#047857]",
-  moderate: "bg-[#FEF3C7] text-[#B45309]",
-  weak: "bg-[#FEF2F2] text-[#DC2626]",
-  no_match: "bg-[#FEE2E2] text-[#991B1B]",
-};
+import { MENU_ITEM, ScoreAbsent, ScoreInline } from "@/components/ui";
+import { scoreAbsenceLabel } from "@/lib/candidates/score-absence";
 
 const STAGE_SCORE_HEADING: Record<string, string> = {
   applied: "CV score",
@@ -121,28 +110,12 @@ export function CampaignStagePreview({
 
                   <td className="px-3 py-3">
                     {score ? (
-                      <span className="inline-flex items-stretch overflow-hidden rounded-md border border-[#E5E7EB] bg-white">
-                        {/* The 3px indigo rail is the attribution primitive at
-                            row scale — the number and its verdict are one
-                            object, and a model wrote both. */}
-                        <span className="w-[3px] bg-ai" aria-hidden="true" />
-                        <span className="inline-flex items-center gap-[7px] px-2.5 py-1">
-                          <span className="font-semibold tabular-nums">
-                            {score.overall}
-                          </span>
-                          {score.tier && (
-                            <span
-                              className={`rounded-full px-[7px] py-0.5 text-[11px] font-semibold ${
-                                TIER_PILL[score.tier]
-                              }`}
-                            >
-                              {TIER_LABELS[score.tier]}
-                            </span>
-                          )}
-                        </span>
-                      </span>
+                      <ScoreInline score={score.overall} tier={score.tier} />
                     ) : (
-                      <span className="text-[#9CA3AF]">Not scored</span>
+                      /* Never a dash: the reason there is no number here is a
+                         fact about the application, and each reason has a
+                         different next action. */
+                      <ScoreAbsent>{scoreAbsenceLabel(candidate.status)}</ScoreAbsent>
                     )}
                   </td>
 

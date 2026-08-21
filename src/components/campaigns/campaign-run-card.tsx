@@ -10,6 +10,7 @@ import {
 } from "@/lib/constants";
 import type { CampaignHistoryEntry } from "@/lib/data/transitions";
 import { relativeAge } from "@/lib/campaigns/detail-view";
+import { ActorMark, actorFromTransition } from "@/components/ui";
 import { initialsFromEmail } from "@/lib/utils";
 
 /** Every rail panel is the same box, so it is defined once. */
@@ -322,14 +323,8 @@ export function CampaignHistoryCard({
         <div className="flex flex-col gap-3">
           {entries.map((entry) => (
             <div key={entry.id} className="flex gap-[11px]">
-              <span
-                className={`mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${
-                  entry.actor === "recruiter"
-                    ? "bg-ink text-white"
-                    : "border border-[#E5E7EB] bg-[#F3F4F6] text-[#4B5563]"
-                }`}
-              >
-                {ACTOR_LABEL[entry.actor] === "AI" ? "AI" : entry.actor === "recruiter" ? "You" : "Sys"}
+              <span className="mt-px">
+                <ActorMark actor={actorFromTransition(entry.actor)} size="sm" />
               </span>
               <div className="min-w-0">
                 <p className="text-[13px] text-ink">

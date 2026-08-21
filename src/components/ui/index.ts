@@ -6,6 +6,15 @@ export { FIELD_BASE, FIELD_ERROR, FIELD_LABEL, FIELD_ERROR_TEXT } from "./field"
 export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, type CardProps } from "./card";
 export { Badge, type BadgeProps } from "./badge";
 export { AiRail, AiCaption, AiEyebrow } from "./ai-attribution";
+export {
+  ScoreInline,
+  ScoreAbsent,
+  ScoreCard,
+  ScoreSection,
+  criterionVerdict,
+  type CriterionVerdict,
+} from "./score-block";
+export { ActorMark, actorFromTransition, type Actor } from "./actor-mark";
 export { Modal, ModalHeader, ModalFooter, type ModalProps } from "./modal";
 export {
   AnchoredMenu,

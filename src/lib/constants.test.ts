@@ -311,15 +311,22 @@ describe("screening tier display config", () => {
     // the raw enum itself (`tier.charAt(0).toUpperCase() + ...`), so it kept
     // rendering "Moderate" while every other surface changed. A component that
     // derives its own label silently opts out of the next rename too.
+    //
+    // Reading TIER_LABELS and delegating to the score block that reads it are
+    // both fine — the invariant is that nobody builds a label from the enum.
     const sources = [
       "src/components/candidates/talent-pool-table.tsx",
       "src/components/campaigns/candidate-table.tsx",
+      "src/components/ui/score-block.tsx",
     ];
 
     for (const file of sources) {
       const src = readFileSync(join(process.cwd(), file), "utf8");
-      expect(src).toContain("TIER_LABELS");
-      expect(src).not.toMatch(/tier\.charAt\(0\)\.toUpperCase\(\)/);
+      expect(src, file).not.toMatch(/tier\.charAt\(0\)\.toUpperCase\(\)/);
+      expect(
+        src.includes("TIER_LABELS") || src.includes("ScoreInline"),
+        `${file} must read TIER_LABELS or delegate to a component that does`,
+      ).toBe(true);
     }
   });
 });
