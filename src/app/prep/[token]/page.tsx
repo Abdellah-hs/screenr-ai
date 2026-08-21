@@ -78,7 +78,7 @@ export default async function InterviewPrepPage({
   return (
     <Shell>
       <header className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wider text-[#0369A1]">
+        <p className="text-xs font-semibold uppercase tracking-wider text-[#2563EB]">
           Interview preparation
         </p>
         <h1 className="mt-1 text-2xl font-semibold text-[#111827] sm:text-3xl">
@@ -90,19 +90,49 @@ export default async function InterviewPrepPage({
         </p>
       </header>
 
-      <div className="mb-6 flex flex-col gap-3 rounded-xl border border-[#BAE6FD] bg-[#F0F9FF] p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-6 flex flex-col gap-3 rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-[#0C4A6E]">
+          <p className="text-sm font-medium text-[#1E40AF]">
             About {guide.durationMinutes} minutes · start whenever you are ready
           </p>
-          <p className="mt-0.5 text-xs text-[#0369A1]">
+          <p className="mt-0.5 text-xs text-[#2563EB]">
             Complete it by {formatDeadline(expiresAt)}.
           </p>
         </div>
-        <p className="text-xs text-[#0369A1] sm:text-right">
+        <p className="text-xs text-[#2563EB] sm:text-right">
           Use the link in your
           <br className="hidden sm:block" /> invitation email to begin.
         </p>
+      </div>
+
+      {/* Hoisted above every section, because it is the one fact this page
+          exists to deliver and it is buried at the top of a checklist the
+          reader has to scroll to — on the phone that brought them here. */}
+      <div className="mb-6 flex items-start gap-3 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-4">
+        <svg
+          className="mt-0.5 h-5 w-5 shrink-0 text-[#B45309]"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+          aria-hidden="true"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9.75 17h4.5m-9-3h13.5a1.5 1.5 0 001.5-1.5v-6a1.5 1.5 0 00-1.5-1.5H5.25a1.5 1.5 0 00-1.5 1.5v6A1.5 1.5 0 005.25 14z"
+          />
+        </svg>
+        <div>
+          <p className="text-sm font-semibold text-[#92400E]">
+            You will need a laptop or desktop
+          </p>
+          <p className="mt-1 text-sm leading-relaxed text-[#92400E]">
+            Reading this on your phone is fine — but the interview itself will not
+            run on a phone or tablet. It needs a camera, a keyboard and a quiet
+            room. Worth knowing now rather than at the deadline.
+          </p>
+        </div>
       </div>
 
       <div className="space-y-5">
@@ -137,7 +167,7 @@ function Section({ section }: { section: PrepSection }) {
         {section.items.map((item) => (
           <li key={item} className="flex gap-2.5">
             <span
-              className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#0369A1]"
+              className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#9CA3AF]"
               aria-hidden="true"
             />
             <span className="text-sm leading-relaxed text-[#374151]">{item}</span>

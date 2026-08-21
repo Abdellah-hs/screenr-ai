@@ -69,7 +69,7 @@ export function buildInterviewConfirmationEmail(
                 <p style="margin:0 0 16px; font-size:15px; line-height:1.6;">
                   Your interview for the <strong>${escapeHtml(campaignTitle)}</strong> role is confirmed for:
                 </p>
-                <p style="margin:0 0 24px; font-size:16px; line-height:1.6; font-weight:600; color:#0369A1;">
+                <p style="margin:0 0 24px; font-size:16px; line-height:1.6; font-weight:600; color:#111827;">
                   ${escapeHtml(when)}
                 </p>
                 ${meetUrl ? renderButton(meetUrl, "Join with Google Meet") : ""}

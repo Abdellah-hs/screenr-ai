@@ -20,7 +20,7 @@ export function transcriptTurnId(prefix: string, index: number): string {
 
 /** Tailwind for a turn that has been jumped to. Applied by both transcripts. */
 export const TURN_TARGET_HIGHLIGHT =
-  "[&:target]:border-[#0369A1] [&:target]:bg-[#E0F2FE] [&:target]:ring-2 [&:target]:ring-[#0369A1]/30 scroll-mt-24";
+  "[&:target]:border-[#4F46E5] [&:target]:bg-[#EEF2FF] [&:target]:ring-2 [&:target]:ring-[#4F46E5]/30 scroll-mt-24";
 
 export function EvidenceExcerpt({
   quote,
@@ -51,7 +51,7 @@ export function EvidenceExcerpt({
   }
 
   return (
-    <figure className="mt-1.5 rounded-md border-l-2 border-[#BAE6FD] bg-[#F9FAFB] py-1 pl-2.5 pr-2">
+    <figure className="mt-1.5 rounded-md border-l-2 border-[#C7D2FE] bg-[#F9FAFB] py-1 pl-2.5 pr-2">
       <blockquote className="text-[11px] leading-relaxed text-[#4B5563]">
         “{text}”
       </blockquote>
@@ -59,7 +59,7 @@ export function EvidenceExcerpt({
         <figcaption className="mt-0.5">
           <a
             href={`#${transcriptTurnId(anchorPrefix, turnIndex)}`}
-            className="inline-flex cursor-pointer items-center gap-0.5 text-[10px] font-medium text-[#0369A1] transition-colors hover:text-[#0C4A6E] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
+            className="inline-flex cursor-pointer items-center gap-0.5 text-[10px] font-medium text-[#2563EB] transition-colors hover:text-[#1D4ED8] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
           >
             Jump to this moment
             <svg

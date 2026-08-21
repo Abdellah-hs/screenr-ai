@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import { bookInterviewSlot, confirmRescheduledSlot } from "@/lib/actions/schedule";
 import type { GeneratedSlot } from "@/lib/scheduling/slots";
 
@@ -25,6 +25,19 @@ interface Props {
  * moved the time) the same grid re-confirms a new slot instead. Mobile-friendly
  * tap targets (PRD 3.9.3).
  */
+/** The zone never changes under us, so there is nothing to subscribe to. */
+function subscribeNever(): () => void {
+  return () => {};
+}
+
+function readBrowserZone(): string | null {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+}
+
+function readZoneOnServer(): string | null {
+  return null;
+}
+
 export default function InterviewScheduler({
   token,
   campaignTitle,
@@ -40,13 +53,38 @@ export default function InterviewScheduler({
 
   const isReschedule = mode === "reschedule";
 
+  /**
+   * The candidate's own timezone, once the browser can tell us.
+   *
+   * Resolved after mount rather than at render: on the server `Intl` reports
+   * the *server's* zone, so using it directly would render one set of times and
+   * hydrate into another. Null until known — and null forever when it matches
+   * the interviewer's, in which case there is nothing to convert and no control
+   * worth showing.
+   */
+  const [showTheirs, setShowTheirs] = useState(false);
+
+  const browserZone = useSyncExternalStore(
+    subscribeNever,
+    readBrowserZone,
+    // The server has no idea where the reader is, and guessing is what produces
+    // a hydration mismatch across every time on the page.
+    readZoneOnServer,
+  );
+  const viewerZone = browserZone && browserZone !== timezone ? browserZone : null;
+
+  // Their zone until we know the candidate's, then the candidate's — a slot
+  // list is useless in a timezone the reader has to convert out of in their
+  // head, and getting it wrong costs them the interview.
+  const activeZone = viewerZone && !showTheirs ? viewerZone : timezone;
+
   const dayFmt = useMemo(
-    () => new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "long", month: "short", day: "numeric" }),
-    [timezone],
+    () => new Intl.DateTimeFormat("en-US", { timeZone: activeZone, weekday: "long", month: "short", day: "numeric" }),
+    [activeZone],
   );
   const timeFmt = useMemo(
-    () => new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit" }),
-    [timezone],
+    () => new Intl.DateTimeFormat("en-US", { timeZone: activeZone, hour: "numeric", minute: "2-digit" }),
+    [activeZone],
   );
 
   const groups = useMemo(() => {
@@ -101,8 +139,26 @@ export default function InterviewScheduler({
           <strong className="font-medium text-[#111827]">{dayFmt.format(new Date(done))}</strong> at{" "}
           <strong className="font-medium text-[#111827]">{timeFmt.format(new Date(done))}</strong>.
         </p>
+        {/* Both clocks, once it is booked. The one number a candidate will
+            re-read is the time, and the zone it was shown in is exactly what
+            they will forget. */}
+        {viewerZone && (
+          <p className="mt-2 text-sm text-[#6B7280]">
+            {new Intl.DateTimeFormat("en-US", {
+              timeZone: timezone,
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            }).format(new Date(done))}{" "}
+            for the interviewer · {timezone}
+          </p>
+        )}
         <p className="mt-3 text-xs text-[#9CA3AF]">
-          A confirmation is on its way to your inbox ({timezone}).
+          Times shown in {activeZone}. A calendar invitation and a joining link are on
+          their way to your inbox. If the time needs to change, the hiring team will
+          email you to pick again — you never have to cancel anything yourself.
         </p>
       </div>
     );
@@ -140,12 +196,42 @@ export default function InterviewScheduler({
               : `Pick a slot for your ${campaignTitle} interview.`}
           </p>
         </div>
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#F3F4F6] px-2.5 py-1 text-xs font-medium text-[#374151]">
-          <svg className="h-3.5 w-3.5 text-[#6B7280]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 000 18 15 15 0 000-18z" />
-          </svg>
-          <span className="max-w-[9rem] truncate">{timezone}</span>
-        </span>
+        <div className="shrink-0 text-right">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F3F4F6] px-2.5 py-1 text-xs font-medium text-[#374151]">
+            <svg className="h-3.5 w-3.5 text-[#6B7280]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18zM3.6 9h16.8M3.6 15h16.8M12 3a15 15 0 000 18 15 15 0 000-18z" />
+            </svg>
+            <span className="max-w-[11rem] truncate">{activeZone}</span>
+          </span>
+          {viewerZone && (
+            <div
+              role="group"
+              aria-label="Show times in"
+              className="mt-1.5 inline-flex rounded-lg border border-[#E5E7EB] p-0.5"
+            >
+              <button
+                type="button"
+                onClick={() => setShowTheirs(false)}
+                aria-pressed={!showTheirs}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-150 cursor-pointer ${
+                  showTheirs ? "text-[#6B7280] hover:text-ink" : "bg-ink text-white"
+                }`}
+              >
+                My time
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowTheirs(true)}
+                aria-pressed={showTheirs}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-150 cursor-pointer ${
+                  showTheirs ? "bg-ink text-white" : "text-[#6B7280] hover:text-ink"
+                }`}
+              >
+                Theirs
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="space-y-6 px-5 py-5 sm:px-6">
@@ -219,6 +305,15 @@ export default function InterviewScheduler({
             </div>
           ))}
         </div>
+
+        {/* Two things a candidate cannot tell by looking: whether these times
+            are really free, and whether choosing one has already committed
+            them. Both matter more than the grid itself. */}
+        <p className="text-xs leading-relaxed text-[#6B7280]">
+          These are the interviewer&apos;s open hours with their existing meetings
+          already removed, so every time shown is genuinely free. Nothing is held
+          until you confirm.
+        </p>
       </div>
 
       {/* Selection summary + confirm — the deliberate final step. */}

@@ -75,3 +75,84 @@ export function realtimeTrace(scope: string, event: string, detail?: unknown): v
     console.info(`[${scope}] ${event}`);
   }
 }
+
+// ─── Why the interview would not start ───────────────────────────────────────
+
+/**
+ * What stopped the call, in the terms the candidate can act on.
+ *
+ * A raw `NotAllowedError: Permission denied` printed under a Try again button
+ * tells someone nothing about the padlock in their address bar. Every kind here
+ * answers three things: what happened, whether it counts against them (it never
+ * does), and the next step.
+ */
+export type InterviewFailureKind =
+  | "insecure"
+  | "permission"
+  | "no_camera"
+  | "interviewer"
+  | "unknown";
+
+export interface InterviewFailure {
+  kind: InterviewFailureKind;
+  title: string;
+  body: string;
+  /** Whether "Try again" can plausibly succeed without the candidate doing
+   *  something outside the page first. */
+  retry: boolean;
+}
+
+const FAILURE: Record<Exclude<InterviewFailureKind, "unknown">, Omit<InterviewFailure, "kind">> = {
+  insecure: {
+    title: "This page isn't on a secure connection",
+    body: "Browsers only allow the camera and microphone over a secure connection. Open the link again from the email we sent you — the address should start with https.",
+    retry: false,
+  },
+  permission: {
+    title: "We can't see or hear you yet",
+    body: "We couldn't turn on your camera and microphone. Open the padlock in the address bar, set both to Allow, then try again.",
+    retry: true,
+  },
+  no_camera: {
+    title: "We couldn't find a camera",
+    body: "This interview needs a working camera and microphone. Connect one, or close any other app that might be using it, then try again.",
+    retry: true,
+  },
+  interviewer: {
+    title: "Something went wrong at our end",
+    body: "The interviewer didn't join the call. This was not your connection and it won't count against you — your link stays valid.",
+    retry: true,
+  },
+};
+
+/**
+ * Classify a failure thrown while opening the room.
+ *
+ * Reads the DOM exception *name* rather than its message: the names are
+ * specified and stable across browsers, while the messages are neither and are
+ * localised. The message is only ever passed through as the last-resort detail.
+ */
+export function classifyStartFailure(
+  err: unknown,
+  kind?: InterviewFailureKind,
+): InterviewFailure {
+  if (kind && kind !== "unknown") return { kind, ...FAILURE[kind] };
+
+  const name = err instanceof Error ? err.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return { kind: "permission", ...FAILURE.permission };
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError" || name === "NotReadableError") {
+    return { kind: "no_camera", ...FAILURE.no_camera };
+  }
+
+  return {
+    kind: "unknown",
+    title: "We couldn't start the interview",
+    body:
+      err instanceof Error && err.message
+        ? `${err.message} Your link is still valid — please try again.`
+        : "Something interrupted the connection. Your link is still valid — please try again.",
+    retry: true,
+  };
+}

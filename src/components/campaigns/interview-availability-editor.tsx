@@ -1,13 +1,22 @@
 "use client";
 
+import { useRef } from "react";
+import { EDITOR_TITLE, FIELD_SM, LABEL_SM } from "./editor-parts";
+
+export interface AvailabilitySettings {
+  slotMinutes: number;
+  horizonDays: number;
+}
+
 interface Props {
   initialSlotMinutes?: number | null;
   initialTimezone?: string | null;
   initialHorizonDays?: number;
+  /** Controlled mode — required by the wizard, whose steps unmount. */
+  value?: AvailabilitySettings;
+  /** Reports both knobs together so a caller can describe the booking window. */
+  onChange?: (next: AvailabilitySettings) => void;
 }
-
-const inputClass =
-  "w-full text-sm placeholder:text-[#9CA3AF] bg-white border border-[#D1D5DB] focus:border-[#2563EB] outline-none rounded-md px-3 py-1.5 transition-colors";
 
 // Default for a campaign that hasn't set a slot length (create form / legacy rows).
 const DEFAULT_SLOT_MINUTES = 45;
@@ -28,18 +37,38 @@ export default function InterviewAvailabilityEditor({
   initialSlotMinutes = null,
   initialTimezone = null,
   initialHorizonDays = DEFAULT_HORIZON_DAYS,
+  value,
+  onChange,
 }: Props) {
-  return (
-    <div className="space-y-4">
-      <h3 className="text-sm font-medium text-[#111827]">Final Interview Availability</h3>
+  // Uncontrolled mode keeps the inputs uncontrolled — the form reads them
+  // directly — so the last value of each is kept here purely to report the
+  // pair together. Read only inside handlers, never during render.
+  const slotRef = useRef(initialSlotMinutes ?? DEFAULT_SLOT_MINUTES);
+  const horizonRef = useRef(initialHorizonDays);
 
-      <div className="flex items-start gap-3 rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+  const controlled = value !== undefined;
+
+  function reportSlot(slotMinutes: number) {
+    slotRef.current = slotMinutes;
+    onChange?.({ slotMinutes, horizonDays: value?.horizonDays ?? horizonRef.current });
+  }
+
+  function reportHorizon(horizonDays: number) {
+    horizonRef.current = horizonDays;
+    onChange?.({ slotMinutes: value?.slotMinutes ?? slotRef.current, horizonDays });
+  }
+
+  return (
+    <div>
+      <p className={`${EDITOR_TITLE} mb-3.5`}>Final interview availability</p>
+
+      <div className="mb-4 flex items-start gap-3 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3.5">
         <svg
-          className="mt-0.5 h-5 w-5 shrink-0 text-[#0369A1]"
+          className="mt-px h-[18px] w-[18px] shrink-0 text-primary"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          strokeWidth="2"
+          strokeWidth={1.8}
           strokeLinecap="round"
           strokeLinejoin="round"
           aria-hidden="true"
@@ -47,39 +76,53 @@ export default function InterviewAvailabilityEditor({
           <rect width="18" height="18" x="3" y="4" rx="2" />
           <path d="M16 2v4M8 2v4M3 10h18" />
         </svg>
-        <div className="text-sm text-[#0C4A6E]">
-          <p className="font-medium">Availability is automatic — nothing to set up.</p>
-          <p className="mt-1 text-[#075985]">
-            Candidates can book any <strong>weekday between 9am and 6pm</strong> that&apos;s
-            free on your Google Calendar, minus your existing meetings with a 15-minute
-            buffer on each side. Just keep your calendar up to date — the bookable times
-            follow it. Requires your Google connection with calendar access
-            (Settings → Integrations).
+        <div className="text-[13px] text-[#1E40AF]">
+          <p className="mb-1 font-semibold">
+            Availability is automatic — nothing to set up.
+          </p>
+          <p className="leading-[1.6]">
+            Candidates book any <strong className="font-semibold">weekday 9am–6pm</strong>{" "}
+            that&apos;s free on your Google Calendar, minus a 15-minute buffer either
+            side. Keep the calendar current and the bookable times follow it — it
+            needs your Google connection with calendar access (Settings →
+            Integrations).
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
-          <label className="block text-xs text-[#374151] mb-1">Slot length (minutes)</label>
+          <label htmlFor="interview_slot_minutes" className={LABEL_SM}>
+            Slot length (minutes)
+          </label>
           <input
+            id="interview_slot_minutes"
             type="number"
             name="interview_slot_minutes"
-            min="5"
-            max="240"
-            defaultValue={initialSlotMinutes ?? DEFAULT_SLOT_MINUTES}
-            className={inputClass}
+            min={5}
+            max={240}
+            {...(controlled
+              ? { value: value.slotMinutes }
+              : { defaultValue: initialSlotMinutes ?? DEFAULT_SLOT_MINUTES })}
+            onChange={(e) => reportSlot(Number(e.target.value) || DEFAULT_SLOT_MINUTES)}
+            className={`${FIELD_SM} min-h-11 text-sm tabular-nums`}
           />
         </div>
         <div>
-          <label className="block text-xs text-[#374151] mb-1">Booking horizon (days)</label>
+          <label htmlFor="interview_booking_horizon_days" className={LABEL_SM}>
+            Booking horizon (days)
+          </label>
           <input
+            id="interview_booking_horizon_days"
             type="number"
             name="interview_booking_horizon_days"
-            min="1"
-            max="90"
-            defaultValue={initialHorizonDays}
-            className={inputClass}
+            min={1}
+            max={90}
+            {...(controlled
+              ? { value: value.horizonDays }
+              : { defaultValue: initialHorizonDays })}
+            onChange={(e) => reportHorizon(Number(e.target.value) || DEFAULT_HORIZON_DAYS)}
+            className={`${FIELD_SM} min-h-11 text-sm tabular-nums`}
           />
         </div>
       </div>

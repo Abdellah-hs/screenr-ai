@@ -4,6 +4,22 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ─────────────────────────────────────────────────────────────────────────
+   The AI advises in indigo. A person decides in ink.
+
+   One rule holds this system together: machine output and human authority
+   never dress alike. Four families, and each has exactly one job:
+
+     ink      #111827  a person is about to change someone's state
+     ai       #4F46E5  an AI produced what follows — a 3px rail or a
+                       caption, NEVER a fill and NEVER a button
+     primary  #2563EB  blue. Go somewhere. It is never an action.
+     cta      #10B981  emerald. A positive TERMINAL outcome only —
+                       hired, approved, submitted. Not "advance".
+
+   Colour never carries meaning alone: every coloured token below ships
+   with a text label or an icon beside it.
+   ───────────────────────────────────────────────────────────────────────── */
 @theme {
   --color-primary: #2563EB;
   --color-secondary: #4F46E5;
@@ -15,6 +31,26 @@
   --color-border: #E5E7EB;
   --color-muted: #F3F4F6;
   --color-input: #FFFFFF;
+
+  /* Human action. The highest-contrast object on any screen. */
+  --color-ink: #111827;
+  --color-ink-hover: #1F2937;
+
+  /* AI attribution. `--color-secondary` was defined and barely used; giving
+     it a job makes "this is a machine opinion" legible without a sparkle icon.
+     Deep tone is for text on the pale wash. */
+  --color-ai: #4F46E5;
+  --color-ai-deep: #4338CA;
+  --color-ai-wash: #FAFAFF;
+  --color-ai-line: #C7D2FE;
+
+  /* Tier — one AI verdict on one stage. Never summed across stages.
+     `no-match` is new: the product needs four tiers and the code had three
+     reds, so deep red separates "No Match" from an ordinary "Weak". */
+  --color-tier-strong: #047857;
+  --color-tier-potential: #B45309;
+  --color-tier-weak: #DC2626;
+  --color-tier-no-match: #991B1B;
 
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
@@ -41,7 +77,17 @@
     --muted-foreground: #6B7280;
   }
 
-  /* Maintaining a darker mode option for potential user preference */
+  /* ⚠ NOT WIRED. Nothing reads these variables and nothing ever adds `.dark`
+     — the `@theme` block above uses literal hexes, so this is a record of the
+     intended palette, not a working theme. Making it real means routing
+     `@theme` through `var(--…)`, which is its own change.
+
+     The intent, when it is built: dark is RECRUITER-SIDE ONLY (a nervous
+     candidate on a phone should not get a surprise), every hue lightens one
+     step to clear 4.5:1 on graphite, and ink inverts to near-white so the
+     human-decision button stays the highest-contrast object on screen.
+     Emerald is NOT promoted into that role — each colour's meaning has to
+     survive the theme. */
   .dark {
     --background: #111827;
     --foreground: #F9FAFB;
@@ -49,12 +95,14 @@
     --card-foreground: #F9FAFB;
     --border: #374151;
     --input: #1F2937;
-    --primary: #3B82F6;
-    --primary-foreground: #ffffff;
-    --secondary: #6366F1;
-    --secondary-foreground: #ffffff;
+    --primary: #60A5FA;
+    --primary-foreground: #111827;
+    --secondary: #818CF8;
+    --secondary-foreground: #111827;
     --muted: #374151;
     --muted-foreground: #9CA3AF;
+    --ink: #F9FAFB;
+    --ink-foreground: #111827;
   }
 }
 
@@ -82,33 +130,46 @@
 }
 
 @layer components {
-  /* Primary Button */
+  /* Primary Button — ink, because this is a person changing someone's state.
+     Hover is a colour change at 120ms: the old 300ms lift is both playful and
+     jittery on a 200-row table, and it shifts layout under the pointer. */
   .btn-primary {
-    @apply bg-[#111827] text-white px-5 py-2.5 rounded-lg font-medium transition-all duration-200 cursor-pointer shadow-sm hover:bg-[#374151];
+    @apply bg-ink text-white px-5 py-2.5 rounded-lg font-semibold cursor-pointer transition-colors duration-150 hover:bg-ink-hover focus-visible:outline-[3px] focus-visible:outline-primary/45 focus-visible:outline-offset-2;
   }
-  
+
   /* Secondary Button */
   .btn-secondary {
-    @apply bg-white text-[#374151] border border-[#D1D5DB] px-5 py-2.5 rounded-lg font-medium transition-all duration-200 cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827];
+    @apply bg-white text-[#374151] border border-[#D1D5DB] px-5 py-2.5 rounded-lg font-semibold cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-[3px] focus-visible:outline-primary/45 focus-visible:outline-offset-2;
   }
-  
-  /* Cards */
+
+  /* Cards — a hairline border carries the edge; shadow is reserved for things
+     that genuinely float (dropdowns, modals, toasts). A 4px shadow under every
+     surface reads as noise on a page with nine panels. */
   .card {
-    @apply bg-card text-card-foreground p-6 rounded-xl shadow-[0_4px_6px_rgba(0,0,0,0.1)] transition-all duration-200;
+    @apply bg-card text-card-foreground p-6 rounded-xl border border-border shadow-sm;
   }
-  
-  /* Applying hover on card only when explicitly combined with .interactive-card to avoid weird hover jumps on static cards */
+
   .card.interactive {
-    @apply cursor-pointer;
+    @apply cursor-pointer transition-colors duration-150;
   }
 
   .card.interactive:hover {
-    @apply shadow-[0_10px_15px_rgba(0,0,0,0.1)] -translate-y-[2px];
+    @apply bg-[#F9FAFB] border-[#D1D5DB];
   }
-  
-  /* Inputs */
+
+  /* Inputs — solid white, never translucent. A tinted or blurred field over a
+     data table costs legibility exactly where it is most needed. */
   .input {
-    @apply w-full px-4 py-2.5 border border-[#D1D5DB] rounded-lg text-base text-[#111827] bg-white placeholder-[#9CA3AF] transition-colors focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none min-h-[44px];
+    @apply w-full px-4 py-2.5 border border-[#D1D5DB] rounded-lg text-base text-ink bg-white placeholder-[#9CA3AF] transition-colors duration-150 focus:border-primary focus:outline-[3px] focus:outline-primary/20 outline-none min-h-[44px];
+  }
+
+  /* ── AI attribution ────────────────────────────────────────────────────
+     The 3px rail is the whole idea made physical: a score and its "why" are
+     one object, and you cannot read the number without seeing whose opinion
+     it is. Indigo appears here as a rail or a caption — never as a fill,
+     never as a button. */
+  .ai-rail {
+    @apply border-l-[3px] border-ai bg-ai-wash;
   }
   
   /* Upward-opening popover entrance (e.g. the sidebar account menu) */

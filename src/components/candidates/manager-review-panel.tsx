@@ -163,7 +163,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
   return (
     <div className="bg-white border border-[#E5E7EB] rounded-xl p-5">
       <div className="flex items-start gap-3 mb-1">
-        <div className="w-8 h-8 rounded-full bg-[#F0F9FF] text-[#0369A1] flex items-center justify-center shrink-0">
+        <div className="w-8 h-8 rounded-full bg-[#F3F4F6] text-[#111827] flex items-center justify-center shrink-0">
           {/* Heroicons: clipboard-document-check */}
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -175,7 +175,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
           </svg>
         </div>
         <div className="flex-1">
-          <h3 className="text-sm font-semibold text-[#0C4A6E]">
+          <h3 className="text-sm font-semibold text-[#111827]">
             Your decision
           </h3>
           <p className="text-xs text-[#6B7280] mt-0.5">
@@ -190,7 +190,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
         <button
           type="button"
           onClick={() => open("advance")}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1"
         >
           {COPY.advance.action}
         </button>
@@ -222,7 +222,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
         {copy && (
           <>
             <ModalHeader>
-              <h2 className="text-lg font-semibold text-[#0C4A6E]">{copy.title}</h2>
+              <h2 className="text-lg font-semibold text-[#111827]">{copy.title}</h2>
               <p className="text-sm text-[#6B7280] mt-1">{copy.consequence}</p>
             </ModalHeader>
 
@@ -321,7 +321,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
               rows={4}
               placeholder={copy.placeholder}
               aria-describedby="manager-review-rationale-hint"
-              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] outline-none resize-y disabled:opacity-50"
+              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none resize-y disabled:opacity-50"
             />
 
             {/* Explains the disabled confirm button rather than leaving the
@@ -359,7 +359,7 @@ export function ManagerReviewPanel({ applicationId }: { applicationId: string })
                     ? "bg-[#DC2626] hover:bg-[#B91C1C]"
                     : decision === "hire"
                       ? "bg-[#059669] hover:bg-[#047857]"
-                      : "bg-[#0369A1] hover:bg-[#0C4A6E]"
+                      : "bg-[#111827] hover:bg-[#1F2937]"
                 }`}
               >
                 {isPending ? "Recording..." : copy.confirm}

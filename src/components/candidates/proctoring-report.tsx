@@ -109,7 +109,7 @@ export function ProctoringReportPanel({
 
           {report.incidents.length > 0 && (
             <details className="mt-2 group">
-              <summary className="text-xs font-medium text-[#0369A1] cursor-pointer hover:text-[#0C4A6E] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1 rounded">
+              <summary className="text-xs font-medium text-[#2563EB] cursor-pointer hover:text-[#1D4ED8] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1 rounded">
                 View timeline ({report.incidents.length})
               </summary>
               <ol className="mt-1.5 space-y-1">
@@ -310,7 +310,7 @@ function IncidentTimelineRow({
           href={snapshotUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-1.5 mb-2 block w-fit rounded-md border border-[#E5E7EB] p-0.5 hover:border-[#0369A1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-colors duration-200"
+          className="mt-1.5 mb-2 block w-fit rounded-md border border-[#E5E7EB] p-0.5 hover:border-[#2563EB] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-colors duration-200"
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- signed
               storage URL with a short TTL; next/image would need the host

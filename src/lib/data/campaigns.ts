@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import type { BoardApplication } from "@/lib/campaigns/board-view";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type {
@@ -993,4 +994,67 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
   });
 
   return cloned.id;
+}
+
+// ─── Campaigns board summaries ───────────────────────────────────────────────
+
+/**
+ * One roll-up per campaign for the campaigns list: pipeline shape, and the one
+ * thing the campaign needs from its owner.
+ *
+ * Two queries for the whole board rather than one per row — the list renders
+ * every campaign a recruiter owns, so anything per-campaign is a fan-out that
+ * grows with their history. `updated_at` comes back with the applications
+ * because SLA lateness is computed from it (see `summariseCampaign`); the SLA
+ * timers are already on the `Campaign` objects the page has. SELECT-only.
+ */
+export async function fetchCampaignBoardApplications(
+  userId: string,
+): Promise<BoardApplication[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("applications")
+    .select("campaign_id, status, updated_at, campaigns!inner(user_id, deleted_at)")
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return [];
+
+  return (
+    data as unknown as Array<{
+      campaign_id: string;
+      status: string;
+      updated_at: string | null;
+    }>
+  ).map((row) => ({
+    campaignId: row.campaign_id,
+    status: row.status,
+    // A row with no `updated_at` has never moved; treating it as "just now"
+    // keeps it out of the overdue count rather than inventing infinite age.
+    updatedAt: row.updated_at ?? new Date().toISOString(),
+  }));
+}
+
+/**
+ * How many screening questions each of the owner's campaigns has. A campaign
+ * with none cannot approve anybody into screening, which the board flags — so
+ * the count is only ever compared against zero. SELECT-only.
+ */
+export async function fetchScreeningQuestionCounts(
+  userId: string,
+): Promise<Record<string, number>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("screening_questions")
+    .select("campaign_id, campaigns!inner(user_id, deleted_at)")
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return {};
+
+  const counts: Record<string, number> = {};
+  for (const row of data as unknown as Array<{ campaign_id: string }>) {
+    counts[row.campaign_id] = (counts[row.campaign_id] ?? 0) + 1;
+  }
+  return counts;
 }

@@ -111,47 +111,69 @@ export default function ScreeningQuestionsEditor({
 
   return (
     <>
-      <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
-              Screening Questions
-            </h2>
-            <p className="text-xs text-[#6B7280] mt-1">
-              AI-generated follow-up questions sent to candidates who pass
-              resume screening.
-            </p>
+      <section className="rounded-xl border border-[#E5E7EB] bg-white p-[22px] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3.5">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+            Screening questions
+            <span className="font-medium normal-case tracking-normal text-[#9CA3AF]">
+              {" "}
+              · asked by the voice AI, in order
+            </span>
+          </h2>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={busy || !canGenerate}
+              title={
+                canGenerate
+                  ? "Replace all questions with fresh AI suggestions"
+                  : "Add a job description to enable AI generation"
+              }
+              className="inline-flex min-h-9 items-center gap-[7px] rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] transition-colors duration-150 cursor-pointer hover:bg-[#F9FAFB] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {generating ? "Drafting…" : "Draft from the role"}
+            </button>
+            <button
+              type="button"
+              onClick={openModal}
+              className="inline-flex min-h-9 items-center rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB]"
+            >
+              {hasQuestions ? "Edit questions" : "Add question"}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={openModal}
-            className="px-3 py-1.5 text-xs font-medium text-[#0369A1] bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#E0F2FE] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200"
-          >
-            {hasQuestions ? "Edit" : "Set up"}
-          </button>
         </div>
 
         {hasQuestions ? (
-          <ol className="space-y-2 list-decimal pl-5">
-            {questions.map((q) => (
-              <li key={q._key} className="text-sm text-[#111827]">
-                <span>{q.prompt}</span>
-              </li>
+          <div className="flex flex-col gap-2">
+            {questions.map((q, i) => (
+              <div
+                key={q._key}
+                className="flex items-center gap-3 rounded-lg border border-[#E5E7EB] bg-white px-3.5 py-3"
+              >
+                {/* The order is the order they are asked in, so the number is
+                    the question's identity, not decoration. */}
+                <span className="w-5 shrink-0 text-xs font-semibold text-[#9CA3AF] tabular-nums">
+                  {i + 1}
+                </span>
+                <p className="min-w-0 flex-1 text-[13px] text-ink">{q.prompt}</p>
+              </div>
             ))}
-          </ol>
+          </div>
         ) : (
-          <p className="text-sm text-[#6B7280]">
-            No questions configured yet. Click <strong>Set up</strong> to
-            generate them with AI or write your own.
+          <p className="text-[13px] leading-[1.55] text-[#6B7280]">
+            No questions yet. Nobody can be approved into screening until this
+            campaign has some — draft them from the role description, or write your
+            own.
           </p>
         )}
-      </div>
+      </section>
 
       <Modal open={open} onClose={closeModal} className="max-w-[720px]">
         <ModalHeader>
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-lg font-semibold text-[#0C4A6E]">
+              <h3 className="text-lg font-semibold text-[#111827]">
                 Screening Questions
               </h3>
               <p className="text-sm text-[#6B7280] mt-1">
@@ -168,7 +190,7 @@ export default function ScreeningQuestionsEditor({
                   ? "Replace all questions with fresh AI suggestions"
                   : "Add a job description to enable AI generation"
               }
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               {generating ? (
                 <>
@@ -232,10 +254,10 @@ export default function ScreeningQuestionsEditor({
           {questions.map((q, idx) => (
             <div
               key={q._key}
-              className="p-3 bg-[#F0F9FF] rounded-lg border border-[#E2E8F0]"
+              className="p-3 bg-[#F9FAFB] rounded-lg border border-[#E5E7EB]"
             >
               <div className="flex items-start gap-2">
-                <span className="flex-shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#0369A1] text-white text-xs font-semibold mt-1">
+                <span className="flex-shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-[#374151] text-white text-xs font-semibold mt-1">
                   {idx + 1}
                 </span>
                 <textarea
@@ -244,12 +266,12 @@ export default function ScreeningQuestionsEditor({
                   placeholder="Ask an open-ended question the resume can't answer…"
                   rows={2}
                   maxLength={1000}
-                  className="flex-1 px-3 py-2 bg-white border border-[#E2E8F0] rounded-lg text-sm text-[#0C4A6E] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] focus-visible:outline-none transition-all duration-200 resize-none"
+                  className="flex-1 px-3 py-2 bg-white border border-[#E5E7EB] rounded-lg text-sm text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] focus-visible:outline-none transition-colors duration-150 resize-none"
                 />
                 <button
                   type="button"
                   onClick={() => removeQuestion(q._key)}
-                  className="flex-shrink-0 p-1.5 text-[#6B7280] cursor-pointer rounded-lg hover:text-[#DC2626] hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-all duration-200"
+                  className="flex-shrink-0 p-1.5 text-[#6B7280] cursor-pointer rounded-lg hover:text-[#DC2626] hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors duration-150"
                   title="Remove question"
                 >
                   <svg
@@ -275,7 +297,7 @@ export default function ScreeningQuestionsEditor({
           type="button"
           onClick={addQuestion}
           disabled={questions.length >= 15}
-          className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#0369A1] cursor-pointer rounded-lg hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#4B5563] cursor-pointer rounded-lg hover:bg-[#F3F4F6] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <svg
             className="w-4 h-4"

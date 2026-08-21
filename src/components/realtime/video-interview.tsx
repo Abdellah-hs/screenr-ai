@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Room,
   RoomEvent,
@@ -16,18 +16,29 @@ import { createProctoringCollector } from "@/lib/proctoring/collector";
 import {
   OVERLAY_STALE_AFTER_MS,
   OVERLAY_TOPIC,
+  displayLabels,
   parseOverlayPacket,
   placeBoxes,
   type OverlayBox,
-  type OverlayBoxLabel,
+  type OverlayDisplayLabel,
   type VideoGeometry,
 } from "@/lib/proctoring/overlay";
 import {
   AGENT_JOIN_TIMEOUT_MS,
+  classifyStartFailure,
   diagnoseAgentSilence,
   realtimeTrace,
+  type InterviewFailure,
 } from "@/lib/realtime/interview-diagnostics";
 import { INTERVIEW_DURATION_MINUTES } from "@/lib/constants";
+import {
+  CandidateShell,
+  ShellIcon,
+  SHELL_PRIMARY,
+  SHELL_SECONDARY,
+  type ShellTone,
+} from "@/components/candidate/candidate-shell";
+import { cn } from "@/lib/utils";
 
 interface VideoInterviewProps {
   token: string;
@@ -55,14 +66,14 @@ const STATUS_LABEL: Record<Status, string> = {
   error: "Something went wrong",
 };
 
-const STATUS_DOT: Record<Status, string> = {
-  idle: "bg-[#94A3B8]",
-  connecting: "bg-amber-500 animate-pulse",
-  live: "bg-green-500",
-  review: "bg-[#0369A1]",
-  submitting: "bg-amber-500 animate-pulse",
-  done: "bg-green-500",
-  error: "bg-red-500",
+const STATUS_TONE: Record<Status, ShellTone> = {
+  idle: "idle",
+  connecting: "busy",
+  live: "live",
+  review: "info",
+  submitting: "busy",
+  done: "live",
+  error: "idle",
 };
 
 /** Hard cap on the live interview. When it hits 0 the call ends and the
@@ -97,17 +108,10 @@ function formatDeadline(iso: string): string {
   });
 }
 
-const BOX_STYLE: Record<OverlayBoxLabel, { box: string; chip: string; text: string }> = {
-  person: {
-    box: "border-[#22C55E]",
-    chip: "bg-[#22C55E]",
-    text: "Person",
-  },
-  phone: {
-    box: "border-[#F59E0B]",
-    chip: "bg-[#F59E0B]",
-    text: "Phone",
-  },
+const BOX_STYLE: Record<OverlayDisplayLabel, { box: string; chip: string; text: string }> = {
+  face: { box: "border-[#22C55E]", chip: "bg-[#22C55E]", text: "Face detected" },
+  second_face: { box: "border-[#F59E0B]", chip: "bg-[#F59E0B]", text: "Second face" },
+  phone: { box: "border-[#F59E0B]", chip: "bg-[#F59E0B]", text: "Phone" },
 };
 
 /**
@@ -179,13 +183,15 @@ function DetectionOverlay({
 
   if (!geometry || boxes.length === 0) return null;
 
+  const labels = displayLabels(boxes);
+
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
       {placeBoxes(boxes, geometry).map((box, i) => {
-        const style = BOX_STYLE[box.label];
+        const style = BOX_STYLE[labels[i]];
         return (
           <div
-            key={`${box.label}-${i}`}
+            key={`${labels[i]}-${i}`}
             className={`absolute rounded-md border-2 ${style.box} transition-all duration-300 ease-out`}
             style={{
               left: `${box.left}px`,
@@ -197,7 +203,7 @@ function DetectionOverlay({
             <span
               className={`absolute -top-[1px] left-[-2px] -translate-y-full rounded-t px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white ${style.chip}`}
             >
-              {style.text} {Math.round(box.score * 100)}%
+              {style.text}
             </span>
           </div>
         );
@@ -216,9 +222,6 @@ function computeIsDesktop(): boolean {
   return !coarse && !narrow;
 }
 
-const PRIMARY_BTN =
-  "px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
-
 /**
  * Candidate-facing AI video interview on LiveKit. Mirrors the voice-screening
  * flow: the server action opens a room (résumé-grounded agent instructions live
@@ -231,6 +234,25 @@ const PRIMARY_BTN =
  * What the client adds over the voice flow: a camera self-view, a desktop-only
  * gate, and a longer call cap.
  */
+/** One promise, ticked. Used only in the pre-call list. */
+function Assurance({ children }: { children: ReactNode }) {
+  return (
+    <li className="flex gap-[11px] text-sm leading-[1.5] text-[#374151]">
+      <svg
+        className="mt-0.5 h-4 w-4 shrink-0 text-[#059669]"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+        aria-hidden="true"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+      </svg>
+      <span>{children}</span>
+    </li>
+  );
+}
+
 export default function VideoInterview({
   token,
   campaignTitle,
@@ -238,6 +260,10 @@ export default function VideoInterview({
 }: VideoInterviewProps) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<InterviewFailure | null>(null);
+  // Surfaced to the candidate, not only to the report: someone whose camera cut
+  // out needs to know the call is still running and their answers still count.
+  const [cameraOff, setCameraOff] = useState(false);
   const [responseCount, setResponseCount] = useState(0);
   const [secondsLeft, setSecondsLeft] = useState(CALL_SECONDS);
   const [timedOut, setTimedOut] = useState(false);
@@ -409,13 +435,13 @@ export default function VideoInterview({
     // Over plain-http (e.g. a LAN IP), navigator.mediaDevices is undefined and
     // LiveKit throws a cryptic "reading 'getUserMedia'" — surface the real cause.
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setError(
-        "Your browser can't access the camera and microphone on this page. It needs a secure connection — open this link over https, or on this computer use http://localhost:3000.",
-      );
+      setFailure(classifyStartFailure(null, "insecure"));
       setStatus("error");
       return;
     }
     setError(null);
+    setFailure(null);
+    setCameraOff(false);
     setStatus("connecting");
     setResponseCount(0);
     setSecondsLeft(CALL_SECONDS);
@@ -474,18 +500,21 @@ export default function VideoInterview({
       room.on(RoomEvent.TrackMuted, (pub: TrackPublication, participant: Participant) => {
         if (isLocalCamera(pub, participant)) {
           proctoringRef.current.begin("camera_off", Date.now());
+          setCameraOff(true);
         }
       });
 
       room.on(RoomEvent.TrackUnmuted, (pub: TrackPublication, participant: Participant) => {
         if (isLocalCamera(pub, participant)) {
           proctoringRef.current.end("camera_off", Date.now());
+          setCameraOff(false);
         }
       });
 
       room.on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
         if (proctoringActiveRef.current && pub.kind === Track.Kind.Video) {
           proctoringRef.current.begin("camera_off", Date.now());
+          setCameraOff(true);
         }
       });
 
@@ -579,7 +608,8 @@ export default function VideoInterview({
             `[video-interview] interviewer silent after ${AGENT_JOIN_TIMEOUT_MS}ms (reason=${reason}). ${devHint}`,
           );
           teardown();
-          setError(message);
+          realtimeTrace("video-interview", "candidate message", message);
+          setFailure(classifyStartFailure(null, "interviewer"));
           setStatus("error");
         }, AGENT_JOIN_TIMEOUT_MS);
       }
@@ -590,7 +620,7 @@ export default function VideoInterview({
       startTimer();
     } catch (e) {
       teardown();
-      setError(e instanceof Error ? e.message : "Failed to start the interview.");
+      setFailure(classifyStartFailure(e));
       setStatus("error");
     }
   }
@@ -615,6 +645,8 @@ export default function VideoInterview({
     wasLiveRef.current = false;
     proctoringRef.current.drain(Date.now());
     setError(null);
+    setFailure(null);
+    setCameraOff(false);
     setStatus("idle");
   }
 
@@ -650,221 +682,444 @@ export default function VideoInterview({
   const submitting = status === "submitting";
   const hasResponses = responseCount > 0;
   const lowTime = secondsLeft <= 60;
+  const onStage = live || connecting;
+
+  const shell = {
+    label: STATUS_LABEL[status],
+    tone: STATUS_TONE[status],
+    clock: live ? formatClock(secondsLeft) : undefined,
+    clockUrgent: lowTime,
+  };
 
   // Desktop-only gate — shown whenever the device isn't a desktop, before any
   // room is opened. Never blocks a call already in progress on a resize down.
   if (!isDesktop && status === "idle") {
     return (
-      <div className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-6 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
-          <svg className="h-6 w-6 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17h4.5m-6.75 3h9a1.5 1.5 0 001.5-1.5v-15A1.5 1.5 0 0015.75 2h-9A1.5 1.5 0 005.25 3.5v15A1.5 1.5 0 006.75 20z" />
-          </svg>
-        </div>
-        <h2 className="mb-2 text-lg font-semibold text-[#111827]">Please switch to a computer</h2>
-        <p className="text-sm text-[#92400E]">
-          This video interview for <strong>{campaignTitle}</strong> needs a desktop or laptop with
-          a camera. Open this same link on a computer in a quiet, well-lit room to begin.
-        </p>
-      </div>
+      <CandidateShell title="Video interview" role={campaignTitle}>
+        <ShellIcon tone="warn">
+          <Icon d="M9.75 17h4.5m-6.75 3h9a1.5 1.5 0 0 0 1.5-1.5v-15A1.5 1.5 0 0 0 15.75 2h-9A1.5 1.5 0 0 0 5.25 3.5v15A1.5 1.5 0 0 0 6.75 20Z" />
+        </ShellIcon>
+        <Heading>Please switch to a computer</Heading>
+        <Body>
+          This interview needs a camera and a steady setup. Open this same link on
+          a computer in a quiet, well-lit room to begin
+          {expiresAt ? (
+            <>
+              {" "}
+              — your link stays valid until{" "}
+              <strong className="font-semibold text-[#374151]">
+                {formatDeadline(expiresAt)}
+              </strong>
+            </>
+          ) : null}
+          .
+        </Body>
+      </CandidateShell>
     );
   }
 
   if (status === "done") {
     return (
-      <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
-          <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
+      <CandidateShell title="Video interview" role={campaignTitle}>
+        <div className="text-center">
+          <ShellIcon tone="good">
+            <Icon d="m4.5 12.75 6 6 9-13.5" strokeWidth={2.2} />
+          </ShellIcon>
+          <h2 className="mb-2.5 font-heading text-[26px] font-semibold tracking-[-0.015em] text-ink">
+            Thanks — that&apos;s everything
+          </h2>
+          <p className="mx-auto mb-6 max-w-[52ch] text-[15px] leading-[1.65] text-[#4B5563]">
+            Your interview for{" "}
+            <strong className="font-semibold text-ink">{campaignTitle}</strong> has
+            been submitted. The hiring team will review it and be in touch by email.
+          </p>
+          <div className="mx-auto max-w-[52ch] rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] px-[18px] py-4 text-left">
+            <p className="mb-1.5 text-[13px] font-semibold text-ink">
+              What happens next
+            </p>
+            <p className="text-[13px] leading-[1.6] text-[#6B7280]">
+              A person on the hiring team reads your transcript alongside your
+              application and your earlier screening. You&apos;ll hear from them
+              either way — usually within a week.
+            </p>
+          </div>
         </div>
-        <h2 className="mb-2 text-lg font-semibold text-[#111827]">Thanks — that&apos;s everything</h2>
-        <p className="text-sm text-[#6B7280]">
-          Your interview for <strong>{campaignTitle}</strong> has been recorded. The hiring team
-          will review it and be in touch by email.
-        </p>
-      </div>
+      </CandidateShell>
+    );
+  }
+
+  // A missed deadline is not a rejection, and a candidate staring at a dead link
+  // will assume it was one unless told otherwise.
+  //
+  // Only before they start. A deadline that passes mid-call must not swallow a
+  // finished interview: someone who was talking when the clock rolled over
+  // still gets their review step and their Submit button.
+  if (expired && (status === "idle" || status === "error")) {
+    return (
+      <CandidateShell title="Video interview" role={campaignTitle}>
+        <ShellIcon tone="bad">
+          <Icon d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+        </ShellIcon>
+        <Heading>This interview link has expired</Heading>
+        <Body>
+          Interview links stay open for seven days. Nothing you did is lost, and
+          this does not count against you. Reply to the email we sent you and a
+          person will send a fresh link.
+        </Body>
+      </CandidateShell>
+    );
+  }
+
+  if (status === "error") {
+    // Never a dead end: a status of "error" with nothing classified still owes
+    // the candidate a sentence and a way to try again.
+    const shown = failure ?? classifyStartFailure(error ? new Error(error) : null);
+    const soft = shown.kind === "permission" || shown.kind === "no_camera";
+    return (
+      <CandidateShell title="Video interview" role={campaignTitle} status={shell}>
+        <ShellIcon tone={soft ? "warn" : "bad"}>
+          <Icon d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+        </ShellIcon>
+        <Heading>{shown.title}</Heading>
+        <Body>{shown.body}</Body>
+        {shown.retry && (
+          <button type="button" onClick={start} className={SHELL_PRIMARY}>
+            Try again
+          </button>
+        )}
+      </CandidateShell>
     );
   }
 
   return (
-    <div className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`inline-block h-2.5 w-2.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
-          <span className="text-sm font-medium text-[#0C4A6E]" role="status" aria-live="polite">
-            {STATUS_LABEL[status]}
-          </span>
-        </div>
-        {live && (
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold tabular-nums ${
-              lowTime ? "bg-red-50 text-red-600" : "bg-[#F0F9FF] text-[#0369A1]"
-            }`}
-            role="timer"
-            aria-label={`${secondsLeft} seconds remaining`}
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {formatClock(secondsLeft)}
-          </span>
-        )}
-      </div>
-
-      {status === "idle" && !expired && (
+    <CandidateShell title="Video interview" role={campaignTitle} status={shell}>
+      {status === "idle" && (
         <>
-          <p className="text-sm text-[#6B7280]">
-            This is an AI-led video interview for <strong>{campaignTitle}</strong> — about{" "}
-            <strong>{INTERVIEW_DURATION_MINUTES} minutes</strong>. When you start, allow camera and microphone access, and
-            the interviewer will greet you and ask questions based on your background. Speak
-            naturally — you&apos;ll be able to review before submitting.
+          <ShellIcon tone="neutral">
+            <Icon d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </ShellIcon>
+
+          <p className="mx-auto mb-5 max-w-[56ch] text-[17px] leading-[1.65] text-[#374151] text-pretty">
+            An interview led by our AI interviewer — about{" "}
+            <strong className="font-semibold text-ink">
+              {INTERVIEW_DURATION_MINUTES} minutes
+            </strong>
+            . When you start, allow camera and microphone access, and the
+            interviewer will greet you and ask questions based on your background.
+            Speak naturally — you&apos;ll be able to review before submitting.
           </p>
 
-          <div className="flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="note">
-            <svg className="mt-0.5 h-4 w-4 shrink-0 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-            <p className="text-xs leading-relaxed text-[#92400E]">
-              <strong>Find a quiet, well-lit room before you start.</strong> Sit facing a light
-              source with your face clearly visible, close other tabs and apps, and use headphones
-              with a mic if you have them. Please stay on this tab and keep your camera on for the
-              whole interview — leaving the tab or turning off your camera is noted for the hiring
-              team.
+          {/* Said before the call, not after. "No video is recorded" is the one
+              a candidate most needs to hear while a camera light is about to
+              come on, and it is a real property of this product. */}
+          <ul className="mx-auto mb-5 flex max-w-[56ch] flex-col gap-[11px]">
+            <Assurance>
+              No video is recorded — the camera is used live and only a written
+              transcript is kept.
+            </Assurance>
+            <Assurance>
+              You can restart before submitting. Nothing is sent until you press
+              submit.
+            </Assurance>
+            <Assurance>A person reads everything before any decision is made.</Assurance>
+          </ul>
+
+          {/* Monitoring is disclosed before consent, not discovered after it. */}
+          <div
+            role="note"
+            className="mx-auto mb-6 max-w-[56ch] rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-[17px] py-[15px]"
+          >
+            <p className="mb-2 flex items-center gap-[9px] text-sm font-semibold text-[#92400E]">
+              <Icon
+                className="h-4 w-4"
+                d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
+              />
+              Before you start
+            </p>
+            <p className="text-[13px] leading-[1.65] text-[#92400E]">
+              Sit in a quiet, well-lit room with your face clearly visible, close
+              other tabs and apps, and use headphones with a mic if you have them.
+              Please stay on this tab and keep your camera on for the whole
+              interview —{" "}
+              <strong className="font-semibold">
+                leaving the tab or turning off your camera is noted for the hiring
+                team.
+              </strong>
             </p>
           </div>
+
+          <button type="button" onClick={start} className={SHELL_PRIMARY}>
+            <Icon
+              className="h-[18px] w-[18px]"
+              d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.985V5.653Z"
+            />
+            Start interview
+          </button>
+          <Deadline expiresAt={expiresAt} />
         </>
       )}
 
-      {expired && status !== "submitting" && (
-        <p className="text-sm text-red-600" role="alert">
-          This link has expired. Please contact the hiring team for a new one.
-        </p>
+      {/* One stage element across connecting and live: remounting the <video>
+          would drop the camera track already attached to it. */}
+      {onStage && (
+        <>
+          <div className="relative mb-3.5 aspect-video overflow-hidden rounded-[14px] bg-[#0F172A]">
+            <video
+              ref={selfViewRef}
+              autoPlay
+              playsInline
+              muted
+              className={`h-full w-full object-cover ${
+                SELF_VIEW_MIRRORED ? "[transform:scaleX(-1)]" : ""
+              }`}
+            />
+            <DetectionOverlay videoRef={selfViewRef} boxes={overlayBoxes} />
+
+            <span className="absolute left-3.5 top-3.5 inline-flex items-center gap-[7px] rounded-full bg-black/50 px-[11px] py-[5px] text-xs font-medium text-white">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  connecting
+                    ? "bg-[#FBBF24] motion-safe:animate-pulse"
+                    : cameraOff
+                      ? "bg-[#FBBF24]"
+                      : "bg-[#EF4444] motion-safe:animate-pulse"
+                }`}
+                aria-hidden="true"
+              />
+              {connecting
+                ? "Starting camera"
+                : cameraOff
+                  ? "Camera off"
+                  : "Live · your camera"}
+            </span>
+
+            {live && (
+              <span className="absolute right-3.5 top-3.5 rounded-full bg-black/50 px-2.5 py-1 text-[11px] font-semibold text-white/85">
+                Not recorded
+              </span>
+            )}
+          </div>
+
+          {connecting ? (
+            <>
+              <p className="mb-1.5 text-center text-[17px] font-semibold text-ink">
+                Connecting you now
+              </p>
+              <p className="mx-auto max-w-[52ch] text-center text-sm leading-[1.6] text-[#6B7280]">
+                If your browser asks for the camera and microphone, choose{" "}
+                <strong className="font-semibold text-[#374151]">Allow</strong>. The
+                interviewer will say hello first.
+              </p>
+            </>
+          ) : (
+            <p className="mb-[18px] text-center text-xs leading-[1.55] text-[#9CA3AF]">
+              The box is what the camera sees right now. It&apos;s shown to you
+              live, and never used to score you.
+            </p>
+          )}
+        </>
       )}
 
-      {expiresAt && !expired && (status === "idle" || review) && (
-        <p className="text-xs text-[#6B7280]">
-          Please complete by <strong>{formatDeadline(expiresAt)}</strong>.
-        </p>
-      )}
-
-      {/* Video stage — dark panel with the candidate's self-view. */}
-      {(live || connecting) && (
-        <div className="relative overflow-hidden rounded-xl bg-[#0F172A] aspect-video">
-          <video
-            ref={selfViewRef}
-            autoPlay
-            playsInline
-            muted
-            className={`h-full w-full object-cover ${
-              SELF_VIEW_MIRRORED ? "[transform:scaleX(-1)]" : ""
-            }`}
-          />
-          <DetectionOverlay videoRef={selfViewRef} boxes={overlayBoxes} />
-          <span className="absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/50 px-2.5 py-1 text-xs font-medium text-white">
-            <span className={`inline-block h-2 w-2 rounded-full ${live ? "bg-red-500" : "bg-amber-400 animate-pulse"}`} aria-hidden />
-            You
-          </span>
+      {/* The one failure the code always knew about and never told the person it
+          was happening to. */}
+      {live && cameraOff && (
+        <div
+          role="status"
+          className="mb-4 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-[15px] py-[13px]"
+        >
+          <p className="text-[13px] leading-[1.55] text-[#92400E]">
+            <strong className="font-semibold">Your camera is off.</strong> The call
+            keeps running and your answers still count. Turn it back on when you
+            can — the gap is noted for the hiring team, with how long it lasted,
+            for a person to read.
+          </p>
         </div>
       )}
 
-      {/* Autoplay unlock prompt. */}
-      {(live || connecting) && audioBlocked && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="alert">
-          <p className="text-xs leading-relaxed text-[#92400E]">
-            <strong>Sound is blocked by your browser.</strong> Tap to hear the interviewer.
+      {/* Autoplay unlock prompt. The interview keeps running while this shows —
+          the captions carry the question, so nothing is missed if you tap late. */}
+      {onStage && audioBlocked && (
+        <div
+          role="alert"
+          className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-[15px] py-[13px]"
+        >
+          <p className="text-[13px] leading-[1.55] text-[#92400E]">
+            <strong className="font-semibold">
+              Sound is blocked by your browser.
+            </strong>{" "}
+            Tap to hear the interviewer.
           </p>
           <button
             type="button"
             onClick={enableSound}
-            className="shrink-0 rounded-lg bg-[#B45309] px-3 py-1.5 text-xs font-medium text-white cursor-pointer hover:bg-[#92400E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B45309] focus-visible:ring-offset-2 transition-colors duration-200"
+            className="min-h-10 shrink-0 cursor-pointer rounded-lg bg-[#B45309] px-3 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-[#92400E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B45309] focus-visible:ring-offset-2"
           >
             Enable sound
           </button>
         </div>
       )}
 
-      {/* Live captions of the interviewer's questions. */}
-      {(live || connecting) && (
-        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#0369A1]">
-            Interviewer
-          </p>
-          <p className="min-h-[1.5rem] text-sm leading-relaxed text-[#0C4A6E]" aria-live="polite">
-            {caption || (
-              <span className="text-[#6B7280]">
-                Listening… the interviewer&apos;s questions will appear here as they speak.
-              </span>
-            )}
-          </p>
-        </div>
-      )}
+      {live && (
+        <>
+          <div className="mb-4 overflow-hidden rounded-[14px] border border-[#E5E7EB]">
+            <p className="border-b border-[#F3F4F6] bg-[#F9FAFB] px-[15px] py-[9px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+              Interviewer
+            </p>
+            <p
+              aria-live="polite"
+              className="min-h-[88px] px-[22px] py-5 text-lg leading-[1.6] text-ink"
+            >
+              {caption || (
+                <span className="text-[#9CA3AF]">
+                  Listening… the interviewer&apos;s questions appear here as they
+                  speak.
+                </span>
+              )}
+            </p>
+          </div>
 
-      {live && hasResponses && (
-        <p className="text-xs text-[#6B7280]">{responseCount} responses captured so far.</p>
+          <p className="mb-5 text-center text-[13px] text-[#6B7280]">
+            {hasResponses
+              ? `${responseCount} ${responseCount === 1 ? "response" : "responses"} captured so far.`
+              : "Nothing captured yet — the interviewer will start the questions."}
+          </p>
+
+          <button
+            type="button"
+            onClick={finish}
+            className={cn(SHELL_SECONDARY, "min-h-[54px] text-base")}
+          >
+            I&apos;m finished
+          </button>
+          <p className="mt-3 text-center text-[13px] leading-[1.55] text-[#9CA3AF]">
+            Take your time. The interview ends by itself at{" "}
+            {formatClock(CALL_SECONDS)} and you&apos;ll still be able to submit.
+          </p>
+        </>
       )}
 
       {review && (
-        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
+        <>
+          <ShellIcon tone="info">
+            <Icon d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </ShellIcon>
+
           {timedOut && (
-            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">
-              Your {INTERVIEW_DURATION_MINUTES} minutes are up.
-            </p>
+            <Heading>Your {INTERVIEW_DURATION_MINUTES} minutes are up</Heading>
           )}
+
           {hasResponses ? (
-            <p className="text-sm text-[#0C4A6E]">
-              We captured <strong>{responseCount}</strong> spoken{" "}
-              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re ready, or
-              restart if you&apos;d like to redo the interview.
-            </p>
+            <>
+              {!timedOut && <Heading>That&apos;s the interview done</Heading>}
+              <p className="mx-auto mb-[22px] max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
+                We captured{" "}
+                <strong className="font-semibold text-ink">
+                  {responseCount} {responseCount === 1 ? "response" : "responses"}
+                </strong>
+                . Submit when you&apos;re ready, or restart if you&apos;d like to
+                redo the interview — nothing has been sent yet.
+              </p>
+            </>
           ) : (
-            <p className="text-sm text-[#0C4A6E]">
-              We didn&apos;t catch any spoken answers. Please restart before submitting.
-            </p>
+            <>
+              {!timedOut && <Heading>We didn&apos;t catch any answers</Heading>}
+              <p className="mx-auto mb-[22px] max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
+                That usually means the microphone wasn&apos;t picking you up.
+                Please restart before submitting — an empty interview would leave
+                the team nothing to read.
+              </p>
+            </>
           )}
+
+          <div className="flex flex-col items-center gap-2.5">
+            {/* An empty interview is never submittable: a blank transcript
+                reaching the team helps nobody, least of all the candidate. */}
+            {hasResponses && (
+              <button type="button" onClick={submit} className={SHELL_PRIMARY}>
+                Submit interview
+              </button>
+            )}
+            <button type="button" onClick={restart} className={SHELL_SECONDARY}>
+              Restart
+            </button>
+          </div>
+          <Deadline expiresAt={expiresAt} />
+        </>
+      )}
+
+      {submitting && (
+        <div className="py-[26px] text-center">
+          <span
+            className="mb-[18px] inline-block h-[34px] w-[34px] rounded-full border-[3px] border-[#E5E7EB] border-t-ink motion-safe:animate-spin"
+            aria-hidden="true"
+          />
+          <p className="mb-1.5 text-[17px] font-semibold text-ink">
+            Saving your interview…
+          </p>
+          <p className="text-sm text-[#6B7280]">Don&apos;t close this page.</p>
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {!live && !review && !submitting && (
-          <button type="button" onClick={start} disabled={connecting || expired} className={PRIMARY_BTN}>
-            {connecting ? "Connecting…" : status === "error" ? "Try again" : "Start interview"}
-          </button>
-        )}
-        {live && (
-          <button type="button" onClick={finish} className={PRIMARY_BTN}>
-            I&apos;m finished
-          </button>
-        )}
-        {review && hasResponses && (
-          <button type="button" onClick={submit} className={PRIMARY_BTN}>
-            Submit interview
-          </button>
-        )}
-        {review && (
-          <button
-            type="button"
-            onClick={restart}
-            className="px-4 py-2 text-sm font-medium text-[#0C4A6E] bg-white border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200"
-          >
-            Restart
-          </button>
-        )}
-        {submitting && (
-          <button type="button" disabled className={PRIMARY_BTN}>
-            Saving…
-          </button>
-        )}
-      </div>
-
       {error && (
-        <p className="text-sm text-red-600" role="alert">
+        <p className="mt-4 text-center text-[13px] text-[#B91C1C]" role="alert">
           {error}
         </p>
       )}
 
       {/* Interviewer audio sink. */}
       <audio ref={audioRef} autoPlay />
-    </div>
+    </CandidateShell>
+  );
+}
+
+/** Centred 19px heading — every terminal state opens with one. */
+function Heading({ children }: { children: ReactNode }) {
+  return (
+    <p className="mb-2 text-center text-[19px] font-semibold text-ink">{children}</p>
+  );
+}
+
+function Body({ children }: { children: ReactNode }) {
+  return (
+    <p className="mx-auto mb-6 max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
+      {children}
+    </p>
+  );
+}
+
+function Deadline({ expiresAt }: { expiresAt?: string }) {
+  if (!expiresAt) return null;
+  return (
+    <p className="mt-3.5 text-center text-[13px] text-[#6B7280]">
+      Please complete by{" "}
+      <strong className="font-semibold text-[#374151]">
+        {formatDeadline(expiresAt)}
+      </strong>
+      .
+    </p>
+  );
+}
+
+/** Heroicons outline, inline. One wrapper so stroke width and caps never drift. */
+function Icon({
+  d,
+  className = "h-8 w-8",
+  strokeWidth = 1.6,
+}: {
+  d: string;
+  className?: string;
+  strokeWidth?: number;
+}) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d={d} />
+    </svg>
   );
 }

@@ -1,5 +1,6 @@
-import { forwardRef, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useId, type TextareaHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
+import { FIELD_BASE, FIELD_ERROR, FIELD_LABEL, FIELD_ERROR_TEXT } from "./field";
 
 export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string;
@@ -8,32 +9,29 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
 
 const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
   ({ className, label, error, id, ...props }, ref) => {
-    const textareaId = id || label?.toLowerCase().replace(/\s+/g, "-");
+    const generatedId = useId();
+    const textareaId = id || generatedId;
+    const errorId = `${textareaId}-error`;
 
     return (
       <div className="space-y-1.5">
         {label && (
-          <label
-            htmlFor={textareaId}
-            className="block text-sm font-medium text-foreground"
-          >
+          <label htmlFor={textareaId} className={FIELD_LABEL}>
             {label}
           </label>
         )}
         <textarea
           ref={ref}
           id={textareaId}
-          className={cn(
-            "w-full px-4 py-3 border border-border rounded-lg text-foreground bg-white/70 backdrop-blur-md",
-            "placeholder-[#94A3B8] transition-all duration-300 resize-y",
-            "focus:border-primary focus:outline-none focus:shadow-[0_0_0_3px_rgba(30,64,175,0.15)] focus:bg-white",
-            error && "border-red-400 focus:border-red-500 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]",
-            className
-          )}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
+          className={cn(FIELD_BASE, "resize-y", error && FIELD_ERROR, className)}
           {...props}
         />
         {error && (
-          <p className="text-sm text-red-600">{error}</p>
+          <p id={errorId} className={FIELD_ERROR_TEXT}>
+            {error}
+          </p>
         )}
       </div>
     );

@@ -65,7 +65,7 @@ export default async function CandidatesPage({
         <h1 className="text-2xl font-semibold text-[#111827]">Candidates</h1>
         <Link
           href={`/campaigns/${id}`}
-          className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-all duration-200"
+          className="px-4 py-2 text-sm font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors duration-150"
         >
           Back to Campaign
         </Link>

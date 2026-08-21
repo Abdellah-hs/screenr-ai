@@ -85,7 +85,7 @@ export function buildScreeningQuestionsEmail(params: ScreeningEmailParams) {
                 </p>
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 0 24px;">
                   <tr>
-                    <td align="center" bgcolor="#0369A1" style="border-radius: 8px;">
+                    <td align="center" bgcolor="#111827" style="border-radius: 8px;">
                       <a href="${safeUrl}" style="display:inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; border-radius: 8px;">
                         Answer the questions
                       </a>
