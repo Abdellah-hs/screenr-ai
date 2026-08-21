@@ -9,7 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
-type Coords = { top: number; left?: number; right?: number };
+type Coords = { top: number; left?: number; right?: number; width?: number };
 
 /**
  * One definition of a menu row, so a menu can't be small in one place and
@@ -52,6 +52,7 @@ export function AnchoredMenu({
   onClose,
   anchorRef,
   align = "left",
+  matchTriggerWidth = false,
   className,
   children,
 }: {
@@ -59,6 +60,10 @@ export function AnchoredMenu({
   onClose: () => void;
   anchorRef: RefObject<HTMLElement | null>;
   align?: "left" | "right";
+  /** Pin the panel to the trigger's width — for a full-width button, where a
+   *  narrower menu hanging off one edge reads as misaligned rather than as a
+   *  menu. */
+  matchTriggerWidth?: boolean;
   className?: string;
   children: ReactNode;
 }) {
@@ -74,6 +79,7 @@ export function AnchoredMenu({
       const next: Coords = { top: r.bottom + 4 };
       if (align === "right") next.right = window.innerWidth - r.right;
       else next.left = r.left;
+      if (matchTriggerWidth) next.width = r.width;
       setCoords(next);
     };
     place();
@@ -93,7 +99,7 @@ export function AnchoredMenu({
       window.removeEventListener("resize", handleScroll);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [open, anchorRef, align, onClose]);
+  }, [open, anchorRef, align, matchTriggerWidth, onClose]);
 
   // `open` only flips true via client interaction, so SSR always returns null
   // here; the document guard is belt-and-suspenders for the portal target.
@@ -109,6 +115,7 @@ export function AnchoredMenu({
           top: coords.top,
           left: coords.left,
           right: coords.right,
+          width: coords.width,
         }}
         className={cn(
           "z-50 min-w-[232px] bg-white border border-[#E5E7EB] rounded-lg p-1 shadow-lg",

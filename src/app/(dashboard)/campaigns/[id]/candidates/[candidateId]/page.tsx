@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCampaignById, getResumeCriteriaCount } from "@/lib/actions/campaigns";
-import { getCandidateById } from "@/lib/actions/candidates";
+import { getCampaignById } from "@/lib/actions/campaigns";
+import { getCandidateById, getCandidatesByCampaignId } from "@/lib/actions/candidates";
 import { getCandidateScreeningState } from "@/lib/actions/screening-questions";
 import { getInterviewBooking } from "@/lib/actions/schedule";
 import { getInterviewSession } from "@/lib/actions/interview";
@@ -12,258 +12,67 @@ import { HitlReviewPanel } from "@/components/candidates/hitl-review-panel";
 import { ManagerReviewPanel } from "@/components/candidates/manager-review-panel";
 import { TalentPoolButton } from "@/components/candidates/talent-pool-button";
 import { ActivityTimelinePanel } from "@/components/candidates/activity-timeline";
+import { CandidateHeader } from "@/components/candidates/candidate-header";
+import {
+  ParsedCvCard,
+  InterviewNotTakenCard,
+  NoResumeRubricCard,
+} from "@/components/candidates/cv-evidence";
 import ScreeningThread from "@/components/candidates/screening-thread";
 import InterviewTranscript from "@/components/candidates/interview-transcript";
 import { RescoreResumeButton } from "@/components/candidates/rescore-resume-button";
-import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badge";
 import {
   DecisionCard,
   StageScoresCard,
+  RAIL_ACTION_PRIMARY,
 } from "@/components/candidates/decision-rail";
-import { AiRail, AiCaption, AiEyebrow } from "@/components/ui";
-import { formatApplicationState, TIER_LABELS } from "@/lib/constants";
+import { ScoreSection } from "@/components/ui";
+import {
+  mandatoryDimensionNames,
+  withInterviewScore,
+  type ScoreStage,
+} from "@/lib/candidates/detail-header";
+import { toCandidateStage } from "@/lib/constants";
 import { uuidSchema } from "@/lib/validations";
-import type { CandidateScore, ApplicationState } from "@/lib/constants";
+import type { CandidateScore } from "@/lib/constants";
 import type { InterviewBooking } from "@/lib/data/scheduling";
-import type { ParsedResumeData } from "@/lib/services/openai";
+import type { ApplicationState } from "@/lib/constants";
 
-// Same four tones as the `tier*` Badge variants. Kept as a local map because
-// the tier keys here are the score's own, not the badge's — but the hexes must
-// not drift, or the same verdict reads two different ways on two screens.
-const tierColors: Record<string, string> = {
-  strong: "text-tier-strong bg-[#ECFDF5] border border-[#A7F3D0]",
-  moderate: "text-tier-potential bg-[#FEF3C7] border border-[#FDE68A]",
-  weak: "text-tier-weak bg-[#FEF2F2] border border-[#FECACA]",
-  no_match: "text-tier-no-match bg-[#FEE2E2] border border-[#FCA5A5]",
+/** Where each stage's evidence lives, so the rail can jump to it. */
+const EVIDENCE_ANCHOR: Record<ScoreStage, string> = {
+  resume: "cv-score",
+  screening: "screening-score",
+  interview: "interview-evidence",
 };
 
-const scoreStageLabels: Record<string, string> = {
-  resume: "Resume Review",
-  screening: "Screening Call",
-  interview: "Interview",
-};
+const SECTION_COPY: Record<ScoreStage, { eyebrow: string; title: string; fallibility: string }> =
+  {
+    resume: {
+      eyebrow: "CV · AI assessment",
+      title: "CV score",
+      fallibility: "An AI read the document and wrote this. It can be wrong, and it moved nobody.",
+    },
+    screening: {
+      eyebrow: "Voice screening · AI assessment",
+      title: "Screening score",
+      fallibility:
+        "An AI scored the transcript of a spoken call. It can be wrong, and it moved nobody.",
+    },
+    interview: {
+      eyebrow: "AI interview · AI assessment",
+      title: "Interview score",
+      fallibility:
+        "An AI scored the transcript. It can be wrong, it never gates, and it moved nobody.",
+    },
+  };
 
-function ProfileLink({ href, label }: { href: string; label: string }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-1.5 rounded-lg border border-[#D1D5DB] bg-white px-3 py-1.5 text-xs font-medium text-[#374151] transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink"
-    >
-      {label}
-      <svg
-        className="h-3 w-3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-        />
-      </svg>
-    </a>
-  );
-}
-
-function ScoreCard({
-  score,
-  applicationId,
-  campaignActive,
-}: {
-  score: CandidateScore;
-  applicationId: string;
-  campaignActive: boolean;
-}) {
-  // Same visibility rule as the mismatch badge: both versions known and
-  // different. The re-score button is the badge's call to action, so they
-  // appear and disappear together (resume only — screening/interview scores
-  // are produced from the candidate's response, not re-runnable on demand).
-  const rubricIsStale =
-    score.rubric_version != null &&
-    score.current_rubric_version != null &&
-    score.rubric_version !== score.current_rubric_version;
-
-  const scoredAt = new Date(score.scored_at).toLocaleDateString("en-US", {
+function provenanceOf(score: CandidateScore): string {
+  const version = score.rubric_version === null ? "rubric —" : `rubric v${score.rubric_version}`;
+  const at = new Date(score.scored_at).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   });
-
-  // The rail wraps the WHOLE block, not just the summary paragraph. The number,
-  // the tier, the factor bars and the rationale are one object: you should not
-  // be able to read a 61 without seeing that a model wrote it.
-  return (
-    <AiRail>
-      <div className="p-5">
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-sm font-semibold text-[#111827]">
-              {scoreStageLabels[score.stage] ?? score.stage}
-            </h3>
-            <RubricMismatchBadge
-              scoredAt={score.rubric_version}
-              currentVersion={score.current_rubric_version}
-            />
-            {score.stage === "resume" && rubricIsStale && (
-              <RescoreResumeButton
-                applicationId={applicationId}
-                campaignActive={campaignActive}
-              />
-            )}
-          </div>
-          <div className="flex items-baseline gap-2 shrink-0">
-            {/* `/100` is not decoration: a bare "61" invites comparison with
-                the other stages, and there is no composite score to compare. */}
-            <span className="text-2xl font-bold text-[#111827] tabular-nums">
-              {score.overall}
-              <span className="text-sm font-medium text-[#9CA3AF]">/100</span>
-            </span>
-            {score.tier && (
-              <span
-                className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${tierColors[score.tier]}`}
-              >
-                {TIER_LABELS[score.tier]}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="mb-4">
-          <AiEyebrow className="mb-1.5">
-            {/* Heroicons: cpu-chip. Deliberately NOT a sparkle — this is a
-                machine reading a document, not magic happening. */}
-            <svg
-              className="w-3.5 h-3.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z"
-              />
-            </svg>
-            Assessment
-          </AiEyebrow>
-          <p className="text-sm text-[#4B5563] leading-relaxed">
-            {score.ai_summary}
-          </p>
-        </div>
-
-        <div className="space-y-2.5">
-          {score.factors.map((factor) => (
-            <div key={factor.name}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-[#6B7280]">{factor.name}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-[#9CA3AF] tabular-nums">
-                    {Math.round(factor.weight * 100)}%
-                  </span>
-                  <span className="text-xs font-semibold text-[#111827] tabular-nums">
-                    {factor.score}
-                  </span>
-                </div>
-              </div>
-              <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full ${
-                    factor.score >= 80
-                      ? "bg-tier-strong"
-                      : factor.score >= 60
-                        ? "bg-tier-potential"
-                        : "bg-tier-weak"
-                  }`}
-                  style={{ width: `${factor.score}%` }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <AiCaption
-        className="px-5 py-3"
-        rubricVersion={score.rubric_version}
-        at={scoredAt}
-        fallibility
-      />
-    </AiRail>
-  );
-}
-
-function ChipGroup({ label, items }: { label: string; items: string[] }) {
-  // Dedupe case-insensitively (the AI sometimes repeats a skill/tool), keeping
-  // the first-seen spelling. Empty groups render nothing.
-  const seen = new Set<string>();
-  const unique = items.filter((item) => {
-    const key = item.trim().toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  if (unique.length === 0) return null;
-
-  return (
-    <div>
-      <p className="text-xs text-[#6B7280] mb-2">{label}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {unique.map((item, i) => (
-          <span
-            key={`${item}-${i}`}
-            className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-[#F3F4F6] text-[#374151]"
-          >
-            {item}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ExperienceEntry({ exp }: { exp: ParsedResumeData["experience"][number] }) {
-  const heading = [exp.title, exp.company].filter(Boolean).join(" · ");
-  return (
-    <div className="border-l-2 border-[#E5E7EB] pl-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="text-sm font-semibold text-[#111827] min-w-0 break-words">{heading || "Role"}</p>
-        {exp.duration && (
-          <span className="text-xs text-[#9CA3AF] shrink-0 whitespace-nowrap">
-            {exp.duration}
-          </span>
-        )}
-      </div>
-      {exp.description && (
-        <p className="text-sm text-[#4B5563] mt-1 leading-relaxed">{exp.description}</p>
-      )}
-    </div>
-  );
-}
-
-function EducationEntry({ edu }: { edu: ParsedResumeData["education"][number] }) {
-  const years = [edu.year_start, edu.year_end].filter(Boolean).join(" – ");
-  return (
-    <div className="border-l-2 border-[#E5E7EB] pl-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="text-sm font-semibold text-[#111827] min-w-0 break-words">
-          {edu.institution || "Institution"}
-        </p>
-        {years && (
-          <span className="text-xs text-[#9CA3AF] shrink-0 whitespace-nowrap">{years}</span>
-        )}
-      </div>
-      {edu.degree && <p className="text-sm text-[#4B5563] mt-0.5">{edu.degree}</p>}
-    </div>
-  );
+  return `${version} · ${at}`;
 }
 
 /**
@@ -290,7 +99,7 @@ function InterviewBookingBanner({
 
   const isFinal = status === "final_interview_scheduling";
 
-  // Booked — the candidate picked a slot. Green, with the confirmed time.
+  // Booked — the candidate picked a slot. Emerald, with the confirmed time.
   if (booking && booking.status === "booked") {
     const when = new Intl.DateTimeFormat("en-US", {
       timeZone: booking.timezone,
@@ -302,86 +111,111 @@ function InterviewBookingBanner({
     }).format(new Date(booking.scheduled_at));
 
     return (
-      <div
-        role="status"
-        className="flex items-start gap-3 rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] p-4"
-      >
-        <svg className="w-5 h-5 text-[#059669] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008z" />
-        </svg>
-        <div>
-          <p className="text-sm font-semibold text-[#065F46]">
-            {isFinal ? "Final interview booked" : "Interview booked"}
-          </p>
-          <p className="text-sm text-[#047857] mt-0.5">
-            {when} ({booking.timezone})
-          </p>
-        </div>
-      </div>
+      <Banner
+        tone="border-[#A7F3D0] bg-[#ECFDF5]"
+        titleClass="text-[#065F46]"
+        bodyClass="text-[#047857]"
+        icon="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5"
+        iconClass="text-[#059669]"
+        title={isFinal ? "Final interview booked" : "Interview booked"}
+        body={`${when} (${booking.timezone})`}
+      />
     );
   }
 
   // A time change is in flight: the recruiter moved the calendar event, so the
-  // candidate was sent back to re-pick. Orange — waiting on the candidate again.
+  // candidate was sent back to re-pick. Waiting on the candidate again.
   if (booking && booking.status === "pending_reschedule") {
     return (
-      <div
-        role="status"
-        className="flex items-start gap-3 rounded-xl border border-[#FED7AA] bg-[#FFF7ED] p-4"
-      >
-        <svg className="w-5 h-5 text-[#EA580C] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-        </svg>
-        <div>
-          <p className="text-sm font-semibold text-[#9A3412]">Awaiting candidate re-confirmation</p>
-          <p className="text-sm text-[#C2410C] mt-0.5">
-            You moved the interview on your calendar. The candidate was emailed to pick a new time.
-          </p>
-        </div>
-      </div>
+      <Banner
+        tone="border-[#FED7AA] bg-[#FFF7ED]"
+        titleClass="text-[#9A3412]"
+        bodyClass="text-[#C2410C]"
+        icon="M16.023 9.348h4.992M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+        iconClass="text-[#EA580C]"
+        title="Awaiting candidate re-confirmation"
+        body="You moved the interview on your calendar. The candidate was emailed to pick a new time."
+      />
     );
   }
 
   // Invited but not yet booked. Amber — action sits with the candidate.
   if (isFinal || status === "interview_scheduling") {
     return (
-      <div
-        role="status"
-        className="flex items-start gap-3 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-4"
-      >
-        <svg className="w-5 h-5 text-[#D97706] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <div>
-          <p className="text-sm font-semibold text-[#92400E]">Awaiting candidate booking</p>
-          <p className="text-sm text-[#B45309] mt-0.5">
-            The scheduling invite was sent. The candidate hasn&apos;t picked an interview slot yet.
-          </p>
-        </div>
-      </div>
+      <Banner
+        tone="border-[#FDE68A] bg-[#FFFBEB]"
+        titleClass="text-[#92400E]"
+        bodyClass="text-[#B45309]"
+        icon="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+        iconClass="text-[#D97706]"
+        title="Awaiting candidate booking"
+        body="The scheduling invite was sent. The candidate hasn't picked an interview slot yet."
+      />
     );
   }
 
-  // interview_scheduled without a booking row — e.g. set by a manual override.
+  // `interview_scheduled` with no booking row — e.g. set by a manual override.
   // Be honest rather than imply a slot exists.
   return (
-    <div
-      role="status"
-      className="flex items-start gap-3 rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] p-4"
-    >
-      <svg className="w-5 h-5 text-[#6B7280] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+    <Banner
+      tone="border-[#E5E7EB] bg-[#F9FAFB]"
+      titleClass="text-[#374151]"
+      bodyClass="text-[#6B7280]"
+      icon="M11.25 11.25l.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"
+      iconClass="text-[#6B7280]"
+      title="Marked as scheduled"
+      body="No system booking is on file for this candidate."
+    />
+  );
+}
+
+function Banner({
+  tone,
+  titleClass,
+  bodyClass,
+  iconClass,
+  icon,
+  title,
+  body,
+}: {
+  tone: string;
+  titleClass: string;
+  bodyClass: string;
+  iconClass: string;
+  icon: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div role="status" className={`flex items-start gap-3 rounded-xl border p-4 ${tone}`}>
+      <svg
+        className={`mt-0.5 h-5 w-5 shrink-0 ${iconClass}`}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
       </svg>
       <div>
-        <p className="text-sm font-semibold text-[#374151]">Marked as scheduled</p>
-        <p className="text-sm text-[#6B7280] mt-0.5">
-          No system booking is on file for this candidate.
-        </p>
+        <p className={`text-sm font-semibold ${titleClass}`}>{title}</p>
+        <p className={`mt-0.5 text-[13px] ${bodyClass}`}>{body}</p>
       </div>
     </div>
   );
 }
 
+/**
+ * One candidate's evidence file.
+ *
+ * Layout B from the design handoff, and the reason it was chosen is structural
+ * rather than aesthetic: the evidence is long, and the three stage scores plus
+ * the decision are pinned in a 352px rail so all three numbers stay comparable
+ * from any scroll depth. That is what the no-composite-score rule actually
+ * asks for — a manager reads *across* the stages, and a decision you have to
+ * scroll back up to make is one you make from memory.
+ */
 export default async function CandidateDetailPage({
   params,
 }: {
@@ -394,35 +228,42 @@ export default async function CandidateDetailPage({
     notFound();
   }
 
-  const [campaign, candidate, screeningState, resumeCriteriaCount, booking, interviewSession, poolState, timeline] =
-    await Promise.all([
-      getCampaignById(id),
-      getCandidateById(candidateId),
-      getCandidateScreeningState(candidateId).catch(() => ({
-        status: null,
-        questions: [],
-        response: null,
-      })),
-      getResumeCriteriaCount(id).catch(() => 0),
-      getInterviewBooking(candidateId).catch(() => null),
-      getInterviewSession(candidateId).catch(() => null),
-      // Best-effort: the pool is a side note on this page, and a failure here
-      // must not take the candidate record down with it.
-      getCandidatePoolState(candidateId).catch(() => ({
-        pooled: false,
-        entryId: null,
-        tags: [] as string[],
-        notes: "",
-      })),
-      // Same posture: the history is the compliance record, but failing to read
-      // it must not hide the candidate it belongs to.
-      getCandidateTimeline(candidateId).catch(() => ({
-        entries: [],
-        hoursInCurrentState: null,
-      })),
-    ]);
-
-  const hasResumeCriteria = resumeCriteriaCount > 0;
+  const [
+    campaign,
+    candidate,
+    screeningState,
+    booking,
+    interviewSession,
+    poolState,
+    timeline,
+    peers,
+  ] = await Promise.all([
+    getCampaignById(id),
+    getCandidateById(candidateId),
+    getCandidateScreeningState(candidateId).catch(() => ({
+      status: null,
+      questions: [],
+      response: null,
+    })),
+    getInterviewBooking(candidateId).catch(() => null),
+    getInterviewSession(candidateId).catch(() => null),
+    // Best-effort: the pool is a side note on this page, and a failure here
+    // must not take the candidate record down with it.
+    getCandidatePoolState(candidateId).catch(() => ({
+      pooled: false,
+      entryId: null,
+      tags: [] as string[],
+      notes: "",
+    })),
+    // Same posture: the history is the compliance record, but failing to read
+    // it must not hide the candidate it belongs to.
+    getCandidateTimeline(candidateId).catch(() => ({
+      entries: [],
+      hoursInCurrentState: null,
+    })),
+    // Only for the prev/next stepper — losing it costs the stepper, nothing else.
+    getCandidatesByCampaignId(id).catch(() => []),
+  ]);
 
   if (!campaign || !candidate) {
     notFound();
@@ -431,218 +272,146 @@ export default async function CandidateDetailPage({
   // Candidate processing (score / send screening / approve) is frozen unless the
   // campaign is Active — gate the per-candidate actions, mirroring the server.
   const isActive = campaign.status === "active";
-
   const parsed = candidate.parsed_data;
 
+  // The interview score lives on the session, not on the application, so the
+  // rail has to be handed both or it under-reports a scored interview.
+  const railScores = withInterviewScore(candidate.scores, interviewSession?.scores ?? null);
+  const bucket = toCandidateStage(candidate.status);
+  const hasSlaTimer = campaign.sla_timers.some((t) => t.stage === bucket);
+  // The detail read does not compute an SLA breach; the list read does, and it
+  // is already fetched for the stepper.
+  const slaBreach = peers.find((p) => p.id === candidateId)?.sla ?? null;
+
+  // An empty resume rubric means no CV on this campaign is ever scored — a
+  // different fact from "this one has not been scored yet".
+  const scoresResumes =
+    (campaign.rubrics.find((r) => r.stage === "resume")?.dimensions.length ?? 0) > 0;
+
+  const profiles = [
+    candidate.linkedin_url && { label: "LinkedIn", href: candidate.linkedin_url },
+    parsed?.github_url && { label: "GitHub", href: parsed.github_url },
+    candidate.portfolio_url && { label: "Portfolio", href: candidate.portfolio_url },
+  ].filter((p): p is { label: string; href: string } => Boolean(p));
+
+  const resumeScore = candidate.scores.find((s) => s.stage === "resume");
+  const screeningScore = candidate.scores.find((s) => s.stage === "screening");
+  const rubricIsStale =
+    resumeScore?.rubric_version != null &&
+    resumeScore.current_rubric_version != null &&
+    resumeScore.rubric_version !== resumeScore.current_rubric_version;
+
+  const interviewTaken =
+    interviewSession !== null &&
+    !(interviewSession.status === "invited" && (interviewSession.transcript ?? []).length === 0);
+
+  const headline =
+    parsed?.headline ??
+    (candidate.current_title
+      ? `${candidate.current_title}${candidate.current_company ? ` at ${candidate.current_company}` : ""}`
+      : null);
+
   return (
-    <div className="mx-auto max-w-7xl">
-      {/* Breadcrumb */}
-      <div className="flex items-baseline gap-2 text-sm text-[#6B7280] mb-4">
-        <Link
-          href="/campaigns"
-          className="hover:text-[#2563EB] transition-colors duration-150"
-        >
-          Campaigns
-        </Link>
-        <span>/</span>
-        <Link
-          href={`/campaigns/${id}`}
-          className="hover:text-[#2563EB] transition-colors duration-150"
-        >
-          {campaign.title}
-        </Link>
-        <span>/</span>
-        <Link
-          href={`/campaigns/${id}/candidates`}
-          className="hover:text-[#2563EB] transition-colors duration-150"
-        >
-          Candidates
-        </Link>
-        <span>/</span>
-        <span className="text-[#111827]">{candidate.name}</span>
-      </div>
+    <>
+      <CandidateHeader
+        campaignId={id}
+        campaignTitle={campaign.title}
+        candidate={candidate}
+        headline={headline}
+        location={parsed?.location ?? null}
+        hoursInStage={timeline.hoursInCurrentState}
+        sla={slaBreach}
+        hasSlaTimer={hasSlaTimer}
+        peers={peers}
+      />
 
-      {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-[#F3F4F6] flex items-center justify-center text-lg font-semibold text-[#111827]">
-              {candidate.name
-                .split(" ")
-                .map((n: string) => n[0])
-                .join("")}
-            </div>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-semibold text-ink">
-                  {candidate.name}
-                </h1>
-                <span className="inline-flex rounded-md border border-[#E5E7EB] bg-[#F3F4F6] px-2.5 py-0.5 text-xs font-medium text-[#4B5563]">
-                  {formatApplicationState(candidate.status)}
-                </span>
-              </div>
-              {(parsed?.headline || candidate.current_title) && (
-                <p className="mt-0.5 text-sm text-[#6B7280]">
-                  {parsed?.headline ??
-                    `${candidate.current_title}${candidate.current_company ? ` at ${candidate.current_company}` : ""}`}
-                </p>
-              )}
-              {/* One line instead of a five-row card: an email and a phone
-                  number do not each need an icon and a row. */}
-              <p className="mt-1 text-sm text-[#6B7280]">
-                <a
-                  href={`mailto:${candidate.email}`}
-                  className="transition-colors duration-150 hover:text-primary"
-                >
-                  {candidate.email}
-                </a>
-                {candidate.phone && (
-                  <>
-                    {" · "}
-                    <a
-                      href={`tel:${candidate.phone}`}
-                      className="transition-colors duration-150 hover:text-primary"
-                    >
-                      {candidate.phone}
-                    </a>
-                  </>
-                )}
-                {parsed?.location && ` · ${parsed.location}`}
-                {` · applied ${new Date(candidate.applied_at).toLocaleDateString(
-                  "en-US",
-                  { month: "short", day: "numeric", year: "numeric" },
-                )}`}
-              </p>
-            </div>
-          </div>
-        </div>
-        <Link
-          href={`/campaigns/${id}/candidates`}
-          className="btn-secondary shrink-0 text-sm"
-        >
-          Back to list
-        </Link>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Evidence column — everything that was read, in the order it
-            arrived. It scrolls; the decision does not. */}
-        <div className="lg:col-span-2 space-y-4 min-w-0">
-          {/* Contact facts live in the header line above — five rows of icons
-              for an email and a phone number is a panel of chrome. What is left
-              here is what a recruiter actually opens. */}
-          {(candidate.linkedin_url ||
-            parsed?.github_url ||
-            candidate.portfolio_url) && (
-            <div className="rounded-xl border border-[#E5E7EB] bg-white p-5">
-              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-ink">
-                Links
-              </h2>
-              <div className="flex flex-wrap gap-2">
-                {candidate.linkedin_url && (
-                  <ProfileLink href={candidate.linkedin_url} label="LinkedIn" />
-                )}
-                {parsed?.github_url && (
-                  <ProfileLink href={parsed?.github_url} label="GitHub" />
-                )}
-                {candidate.portfolio_url && (
-                  <ProfileLink href={candidate.portfolio_url} label="Portfolio" />
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Summary / About */}
-          {parsed?.summary && (
-            <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-3">
-                About
-              </h2>
-              <p className="text-sm text-[#4B5563] leading-relaxed whitespace-pre-line">
-                {parsed.summary}
-              </p>
-            </div>
-          )}
-
-          {/* Resume */}
-          <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
-                Resume
-              </h2>
-              {candidate.resume_url && (
-                <a
-                  href={candidate.resume_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-                    />
-                  </svg>
-                  View PDF
-                </a>
-              )}
-            </div>
-            <div className="space-y-4">
-              <ChipGroup label="Skills" items={parsed?.skills ?? candidate.resume.skills} />
-              <ChipGroup label="Languages" items={parsed?.languages ?? []} />
-              <ChipGroup label="Certifications" items={parsed?.certifications ?? []} />
-              <ChipGroup label="Interests" items={parsed?.interests ?? []} />
-            </div>
-          </div>
-
+      <div className="mx-auto flex w-full max-w-[1440px] items-start gap-7 pb-20">
+        {/* Evidence. Everything that was read, in the order it arrived. */}
+        <main className="flex min-w-0 flex-1 flex-col gap-[22px]">
           {!isActive && (
-            <div className="flex items-start gap-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-4 py-3 text-sm text-[#92400E]">
-              <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            <div className="flex items-start gap-2.5 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-4 py-3 text-[13px] text-[#92400E]">
+              <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
               </svg>
               <span>
-                This campaign is <span className="font-medium capitalize">{campaign.status}</span>.
+                This campaign is <span className="font-semibold capitalize">{campaign.status}</span>.
                 Scoring, screening sends and approvals are paused — set it to{" "}
-                <span className="font-medium">Active</span> to act on this candidate. Rejecting is still available.
+                <span className="font-semibold">Active</span> to act on this candidate.
+                Rejecting is still available.
               </span>
             </div>
           )}
 
           <InterviewBookingBanner status={candidate.status} booking={booking} />
 
-          {parsed && parsed.experience.length > 0 && (
-            <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
-                Experience
-              </h2>
-              <div className="space-y-4">
-                {parsed.experience.map((exp, i) => (
-                  <ExperienceEntry key={i} exp={exp} />
-                ))}
-              </div>
+          {resumeScore && (
+            <div id={EVIDENCE_ANCHOR.resume} className="scroll-mt-6">
+              <ScoreSection
+                eyebrow={SECTION_COPY.resume.eyebrow}
+                title={SECTION_COPY.resume.title}
+                score={resumeScore.overall}
+                tier={resumeScore.tier}
+                rationale={resumeScore.ai_summary}
+                factors={resumeScore.factors}
+                mandatoryNames={mandatoryDimensionNames(campaign.rubrics, "resume")}
+                fallibility={SECTION_COPY.resume.fallibility}
+                provenance={provenanceOf(resumeScore)}
+                links={[
+                  { label: "Parsed CV", href: "#parsed-cv" },
+                  ...(candidate.resume_url
+                    ? [{ label: "Original document", href: candidate.resume_url }]
+                    : []),
+                ]}
+              />
+              {/* The rubric moved after this score was written. Say so where the
+                  score is, and offer the only thing that fixes it. */}
+              {rubricIsStale && (
+                <div className="mt-2 flex flex-wrap items-center gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-4 py-2.5">
+                  <p className="flex-1 text-xs leading-[1.55] text-[#92400E]">
+                    Scored against rubric v{resumeScore.rubric_version}; the campaign
+                    now runs v{resumeScore.current_rubric_version}. This number
+                    answers a question you have since changed.
+                  </p>
+                  <RescoreResumeButton
+                    applicationId={candidateId}
+                    campaignActive={isActive}
+                  />
+                </div>
+              )}
             </div>
           )}
 
-          {parsed && parsed.education.length > 0 && (
-            <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-              <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider mb-4">
-                Education
-              </h2>
-              <div className="space-y-4">
-                {parsed.education.map((edu, i) => (
-                  <EducationEntry key={i} edu={edu} />
-                ))}
-              </div>
+          {!resumeScore && !scoresResumes && (
+            <NoResumeRubricCard editHref={`/campaigns/${id}/edit`} />
+          )}
+
+          <div id="parsed-cv" className="scroll-mt-6">
+            <ParsedCvCard
+              parsed={parsed}
+              fallbackSkills={candidate.resume.skills}
+              resumeUrl={candidate.resume_url || null}
+              profiles={profiles}
+            />
+          </div>
+
+          {screeningScore && (
+            <div id={EVIDENCE_ANCHOR.screening} className="scroll-mt-6">
+              <ScoreSection
+                eyebrow={SECTION_COPY.screening.eyebrow}
+                title={SECTION_COPY.screening.title}
+                score={screeningScore.overall}
+                tier={screeningScore.tier}
+                rationale={screeningScore.ai_summary}
+                factors={screeningScore.factors}
+                mandatoryNames={mandatoryDimensionNames(campaign.rubrics, "screening")}
+                fallibility={SECTION_COPY.screening.fallibility}
+                provenance={provenanceOf(screeningScore)}
+              />
             </div>
           )}
 
+          {/* The per-question answers, the transcript and the send/score
+              controls. The score above is the summary; this is the evidence. */}
           <ScreeningThread
             applicationId={candidateId}
             applicationStatus={screeningState.status}
@@ -651,70 +420,13 @@ export default async function CandidateDetailPage({
             campaignActive={isActive}
           />
 
-          <InterviewTranscript session={interviewSession} />
-
-          <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
-            Evaluation Scores
-          </h2>
-          {candidate.scores.length === 0 ? (
-            <div className="bg-white rounded-xl border border-[#E5E7EB] p-8 text-center">
-              <div className="w-12 h-12 bg-[#F3F4F6] text-[#9CA3AF] rounded-full flex items-center justify-center mx-auto mb-3">
-                <svg
-                  className="w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-              </div>
-              {hasResumeCriteria ? (
-                <p className="text-sm text-[#6B7280]">
-                  No scores yet. This candidate hasn&apos;t been evaluated.
-                </p>
-              ) : (
-                <>
-                  <p className="text-sm text-[#6B7280]">
-                    No criteria configured for this campaign — add screening
-                    criteria to enable scoring.
-                  </p>
-                  <Link
-                    href={`/campaigns/${id}/edit`}
-                    className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-xs font-medium text-[#374151] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer hover:bg-[#F9FAFB] hover:text-[#111827] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 4v16m8-8H4"
-                      />
-                    </svg>
-                    Add screening criteria
-                  </Link>
-                </>
-              )}
-            </div>
-          ) : (
-            candidate.scores.map((score: CandidateScore, i: number) => (
-              <ScoreCard
-                key={i}
-                score={score}
-                applicationId={candidateId}
-                campaignActive={isActive}
-              />
-            ))
-          )}
+          <div id={EVIDENCE_ANCHOR.interview} className="scroll-mt-6">
+            {interviewTaken ? (
+              <InterviewTranscript session={interviewSession} />
+            ) : (
+              <InterviewNotTakenCard status={candidate.status} />
+            )}
+          </div>
 
           {/* Last in the column on purpose: the panel asks the manager to judge
               the evidence, so it sits below all of it rather than above. */}
@@ -723,13 +435,16 @@ export default async function CandidateDetailPage({
               <ManagerReviewPanel applicationId={candidateId} />
             </div>
           )}
-        </div>
+        </main>
 
         {/* The decision rail. Pinned, because the evidence is long and the
-            actions must be reachable from any depth of it — a decision you
-            have to scroll back up to make is one you make from memory. */}
-        <aside className="space-y-4 min-w-0 lg:sticky lg:top-6 lg:self-start">
-          <StageScoresCard scores={candidate.scores} />
+            actions must be reachable from any depth of it. */}
+        <aside className="sticky top-6 flex w-[352px] flex-none flex-col gap-4">
+          <StageScoresCard
+            scores={railScores}
+            status={candidate.status}
+            hrefFor={(row) => `#${EVIDENCE_ANCHOR[row.key]}`}
+          />
 
           <DecisionCard status={candidate.status}>
             {/* The stage-specific gate, when there is one. Each already owns
@@ -748,31 +463,40 @@ export default async function CandidateDetailPage({
                 code and a written reason do not fit a third of a page — so it
                 lives under the evidence and the rail points at it. */}
             {candidate.status === "manager_review" && (
-              <a
-                href="#manager-review"
-                className="btn-primary block text-center text-sm"
-              >
+              <a href="#manager-review" className={RAIL_ACTION_PRIMARY}>
                 Make the decision
               </a>
             )}
 
-            <div className="flex flex-wrap items-center gap-2">
-              <StageChanger
-                applicationId={candidateId}
-                currentState={candidate.status}
-              />
-              <TalentPoolButton
-                applicationId={candidateId}
-                candidateName={candidate.name}
-                initialState={poolState}
-              />
-            </div>
+            <StageChanger
+              applicationId={candidateId}
+              currentState={candidate.status}
+              trigger="action"
+            />
+            <TalentPoolButton
+              applicationId={candidateId}
+              candidateName={candidate.name}
+              initialState={poolState}
+              full
+            />
           </DecisionCard>
 
           {/* The history is context for the judgement, so it sits with it. */}
-          <ActivityTimelinePanel timeline={timeline} />
+          <ActivityTimelinePanel
+            timeline={timeline}
+            auditHref={`/admin/audit?campaignId=${id}`}
+          />
+
+          <p className="px-1 text-center text-xs text-[#9CA3AF]">
+            <Link
+              href={`/campaigns/${id}/candidates`}
+              className="hover:text-ink hover:underline"
+            >
+              Back to all candidates
+            </Link>
+          </p>
         </aside>
       </div>
-    </div>
+    </>
   );
 }

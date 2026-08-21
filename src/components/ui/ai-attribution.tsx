@@ -62,8 +62,11 @@ export function AiCaption({
   rubricVersion?: number | string | null;
   /** Human-readable timestamp. */
   at?: string | null;
-  /** Show the longer "it can be wrong, and it moved nobody" line. */
-  fallibility?: boolean;
+  /**
+   * `true` for the standard sentence, or a string when the stage has something
+   * more specific to admit — the interview score, for one, never gates.
+   */
+  fallibility?: boolean | string;
   /** Evidence links — transcript, parsed CV, audit entry. */
   children?: ReactNode;
   className?: string;
@@ -85,7 +88,11 @@ export function AiCaption({
     >
       <span className="max-w-[46ch] text-xs leading-relaxed text-[#6B7280]">
         {fallibility && (
-          <>An AI wrote this. It can be wrong, and it has moved nobody. </>
+          <>
+            {typeof fallibility === "string"
+              ? fallibility
+              : "An AI wrote this. It can be wrong, and it has moved nobody."}{" "}
+          </>
         )}
         {provenance && (
           <strong className="font-semibold text-ai-deep">{provenance}</strong>

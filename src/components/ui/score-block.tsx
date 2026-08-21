@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { TIER_LABELS, type ScoreFactor, type ScreeningTier } from "@/lib/constants";
+import { AiCaption, AiEyebrow, AiRail } from "./ai-attribution";
 import { cn } from "@/lib/utils";
 
 /**
@@ -115,13 +116,10 @@ export function ScoreCard({
   evidenceLabel?: string;
 }) {
   return (
-    <div className="flex overflow-hidden rounded-xl border border-[#E5E7EB]">
-      <div className="w-[3px] shrink-0 bg-ai" aria-hidden="true" />
-      <div className="flex-1 bg-white px-5 py-[18px]">
+    <AiRail>
+      <div className="px-5 py-[18px]">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ai-deep">
-            {label} · AI assessment
-          </span>
+          <AiEyebrow>{label} · AI assessment</AiEyebrow>
           {tier && (
             <span
               className={cn(
@@ -159,7 +157,7 @@ export function ScoreCard({
           )}
         </div>
       </div>
-    </div>
+    </AiRail>
   );
 }
 
@@ -222,13 +220,12 @@ export function ScoreSection({
   const mandatory = new Set(mandatoryNames);
 
   return (
-    <div className="flex overflow-hidden rounded-xl border border-[#E5E7EB]">
-      <div className="w-[3px] shrink-0 bg-ai" aria-hidden="true" />
-      <div className="min-w-0 flex-1 bg-white">
+    <AiRail>
+      <div className="min-w-0">
         <div className="border-b border-[#F3F4F6] px-6 py-5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <span className="inline-flex items-center gap-[7px] text-[11px] font-semibold uppercase tracking-[0.06em] text-ai-deep">
+              <AiEyebrow>
                 {/* Heroicons cpu-chip, deliberately not a sparkle: this is a
                     machine reading a document, not magic happening. */}
                 <svg
@@ -246,7 +243,7 @@ export function ScoreSection({
                   />
                 </svg>
                 {eyebrow}
-              </span>
+              </AiEyebrow>
               <h3 className="mt-2 font-heading text-lg font-semibold tracking-[-0.01em] text-ink">
                 {title}
               </h3>
@@ -319,26 +316,18 @@ export function ScoreSection({
             says a model wrote this, that it can be wrong, and that it moved
             nobody — sitting on the indigo wash so it reads as part of the
             score rather than a disclaimer bolted to the bottom. */}
-        <div className="flex flex-wrap items-center justify-between gap-4 bg-ai-wash px-6 py-4">
-          <span className="max-w-[46ch] text-xs leading-[1.5] text-[#6B7280]">
-            {fallibility}{" "}
-            <strong className="font-semibold text-ai-deep">{provenance}</strong>
-          </span>
-          {links && links.length > 0 && (
-            <div className="flex gap-3.5 text-[13px] font-semibold">
-              {links.map((link) => (
-                <Link
-                  key={link.href + link.label}
-                  href={link.href}
-                  className="text-primary hover:underline"
-                >
-                  {link.label}
-                </Link>
-              ))}
-            </div>
-          )}
-        </div>
+        <AiCaption fallibility={fallibility} at={provenance} className="py-4">
+          {links?.length ? links.map((link) => (
+            <Link
+              key={link.href + link.label}
+              href={link.href}
+              className="text-primary hover:underline"
+            >
+              {link.label}
+            </Link>
+          )) : undefined}
+        </AiCaption>
       </div>
-    </div>
+    </AiRail>
   );
 }

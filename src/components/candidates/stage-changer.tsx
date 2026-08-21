@@ -49,8 +49,10 @@ export function StageChanger({
    * `chip` — the state itself, clickable, for a detail page.
    * `menu` — a "…" row-actions button, for a table row where the state already
    *   has its own column and a second copy of it would be noise.
+   * `action` — a full-width button in the decision rail, where the state is
+   *   already named above it and what is wanted is somewhere to press.
    */
-  trigger?: "chip" | "menu";
+  trigger?: "chip" | "menu" | "action";
   /** Rows rendered above the "Move to" group — a row menu is rarely only
    *  about the state machine. */
   leadingItems?: ReactNode;
@@ -124,6 +126,40 @@ export function StageChanger({
             <circle cx="12" cy="19" r="1" />
           </svg>
         </button>
+      ) : trigger === "action" ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => !isTerminal && setOpen((o) => !o)}
+          disabled={isTerminal}
+          aria-haspopup={isTerminal ? undefined : "menu"}
+          aria-expanded={isTerminal ? undefined : open}
+          title={
+            isTerminal
+              ? "This is a terminal state — no further transitions"
+              : "Move this application to another stage"
+          }
+          className={cn(
+            "flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border px-4 text-[13px] font-semibold transition-colors duration-150",
+            isTerminal
+              ? "cursor-default border-[#E5E7EB] bg-[#F9FAFB] text-[#9CA3AF]"
+              : "cursor-pointer border-[#D1D5DB] bg-white text-[#374151] hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+          )}
+        >
+          {isTerminal ? "No moves left from here" : "Move to another stage"}
+          {!isTerminal && (
+            <svg
+              className={cn("h-3.5 w-3.5 transition-transform duration-200", open && "rotate-180")}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+            </svg>
+          )}
+        </button>
       ) : (
       <button
         ref={triggerRef}
@@ -163,6 +199,7 @@ export function StageChanger({
         onClose={() => setOpen(false)}
         anchorRef={triggerRef}
         align={trigger === "menu" ? "right" : "left"}
+        matchTriggerWidth={trigger === "action"}
       >
         {leadingItems && <div onClick={() => setOpen(false)}>{leadingItems}</div>}
 

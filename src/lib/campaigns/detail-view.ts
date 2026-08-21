@@ -58,12 +58,21 @@ const EVENT_LABEL: Partial<Record<ApplicationState, string>> = {
   processing_failed: "CV could not be read",
 };
 
+/**
+ * What happened, as an event. Exported because the candidate's history reads
+ * the same way — "Screening scored" rather than the state name it landed in —
+ * and one map is the only way the two stay saying the same thing.
+ */
+export function eventLabel(status: ApplicationState): string {
+  return EVENT_LABEL[status] ?? formatApplicationState(status);
+}
+
 export function lastActivityLabel(
   status: ApplicationState,
   updatedAt: string,
   now: Date = new Date(),
 ): string {
-  const event = EVENT_LABEL[status] ?? formatApplicationState(status);
+  const event = eventLabel(status);
   const age = relativeAge(updatedAt, now);
   return age ? `${event} · ${age}` : event;
 }
