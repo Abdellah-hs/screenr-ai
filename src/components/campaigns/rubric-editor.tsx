@@ -63,6 +63,7 @@ export default function RubricEditor({
 
   const activeRubric = rubrics.find((r) => r.stage === activeTab);
   const dimensions = activeRubric?.dimensions ?? [];
+  const isResumeStage = activeTab === "resume";
 
   function updateRubricDimensions(stage: PipelineStage, newDimensions: RubricDimension[]) {
     setRubrics((prev) =>
@@ -89,6 +90,27 @@ export default function RubricEditor({
     updateRubricDimensions(
       activeTab,
       dimensions.map((d) => (d.id === dimId ? { ...d, [field]: value } : d))
+    );
+  }
+
+  /**
+   * Set a dimension's priority. On the resume stage `importance` is not a
+   * recruiter input, so it is derived here from the same choice — keeping the
+   * saved payload valid for every stage without exposing a control whose value
+   * resume scoring ignores.
+   */
+  function setPriority(dimId: string, isMandatory: boolean) {
+    updateRubricDimensions(
+      activeTab,
+      dimensions.map((d) =>
+        d.id === dimId
+          ? {
+              ...d,
+              is_mandatory: isMandatory,
+              importance: isResumeStage ? (isMandatory ? "high" : "medium") : d.importance,
+            }
+          : d,
+      ),
     );
   }
 
@@ -201,11 +223,13 @@ export default function RubricEditor({
             />
 
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-[#6B7280] whitespace-nowrap">Type</span>
+              <span className="text-xs text-[#6B7280] whitespace-nowrap">
+                {isResumeStage ? "Priority" : "Type"}
+              </span>
               <SegmentedControl
-                ariaLabel={`Type for ${dim.name || "dimension"}`}
+                ariaLabel={`${isResumeStage ? "Priority" : "Type"} for ${dim.name || "dimension"}`}
                 value={dim.is_mandatory ? "must" : "nice"}
-                onChange={(v) => updateDimension(dim.id, "is_mandatory", v === "must")}
+                onChange={(v) => setPriority(dim.id, v === "must")}
                 options={[
                   { value: "must", label: "Must have" },
                   { value: "nice", label: "Nice to have" },
@@ -213,19 +237,26 @@ export default function RubricEditor({
               />
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-[#6B7280] whitespace-nowrap">Importance</span>
-              <SegmentedControl
-                ariaLabel={`Importance for ${dim.name || "dimension"}`}
-                value={dim.importance}
-                onChange={(v) => updateDimension(dim.id, "importance", v)}
-                options={[
-                  { value: "high", label: "High" },
-                  { value: "medium", label: "Med" },
-                  { value: "low", label: "Low" },
-                ]}
-              />
-            </div>
+            {/* Resume screening asks for priority and nothing else. Importance
+                would be a second dial with no effect there — must-haves are
+                gates, and nice-to-haves are averaged — so showing one would
+                imply an influence it does not have. The weighted stages keep
+                it. */}
+            {!isResumeStage && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-[#6B7280] whitespace-nowrap">Importance</span>
+                <SegmentedControl
+                  ariaLabel={`Importance for ${dim.name || "dimension"}`}
+                  value={dim.importance}
+                  onChange={(v) => updateDimension(dim.id, "importance", v)}
+                  options={[
+                    { value: "high", label: "High" },
+                    { value: "medium", label: "Med" },
+                    { value: "low", label: "Low" },
+                  ]}
+                />
+              </div>
+            )}
 
             <button
               type="button"
@@ -244,7 +275,18 @@ export default function RubricEditor({
 
       {dimensions.length > 0 && (
         <p className="text-xs text-[#6B7280]">
-          Weighting is set automatically from each dimension&apos;s importance. &ldquo;Must have&rdquo; dimensions knock a candidate out if they fail them.
+          {isResumeStage ? (
+            <>
+              Every <strong>Must have</strong> criterion has to pass on its own — a strong{" "}
+              <strong>Nice to have</strong> can never make up for a missed one. Nice-to-haves
+              only rank the candidates who already passed every must-have.
+            </>
+          ) : (
+            <>
+              Weighting is set automatically from each dimension&apos;s importance. &ldquo;Must
+              have&rdquo; dimensions knock a candidate out if they fail them.
+            </>
+          )}
         </p>
       )}
 

@@ -14,6 +14,10 @@ import type {
   PipelineStageCount,
 } from "@/lib/constants";
 import { deriveDimensionFields } from "@/lib/rubric-weights";
+import {
+  deriveResumeDimensionFields,
+  priorityFromMandatoryFlag,
+} from "@/lib/resume-scoring";
 import { slugifyTitle } from "@/lib/utils";
 import type { Database } from "@/types/database.types";
 
@@ -37,6 +41,24 @@ type RubricInput = {
   stage: "resume" | "screening_q" | "interview";
   dimensions?: RubricDimensionInput[];
 };
+
+/**
+ * Derive the numeric columns for one rubric's dimensions.
+ *
+ * The resume stage is deliberately different: its recruiter model is priority
+ * (must-have / nice-to-have) and nothing else, so its fail line is the resume
+ * gate (60) rather than the generic MANDATORY_FAIL_LINE (30) the weighted
+ * stages use. Screening-question and interview rubrics still score on weighted
+ * importance and are untouched by the evidence refactor.
+ */
+function deriveDimensionRows(stage: RubricInput["stage"], dims: RubricDimensionInput[]) {
+  if (stage === "resume") {
+    return deriveResumeDimensionFields(
+      dims.map((d) => ({ ...d, priority: priorityFromMandatoryFlag(d.is_mandatory) })),
+    );
+  }
+  return deriveDimensionFields(dims);
+}
 type ReviewerInput = {
   user_id?: string;
   role: "lead" | "reviewer" | "observer";
@@ -520,8 +542,11 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
 
   // Resume scoring is driven by the active `resume` evaluation rubric — the
   // single source of truth for "how to score a CV" (issue #65). Each rubric
-  // dimension maps to a scoring criterion; `min_score` is that dimension's
-  // per-criterion knockout fail line (consumed by the rule layer).
+  // dimension maps to one criterion, and the ONLY thing carried forward is its
+  // priority: `weight` and `min_score` are deliberately not read, because a
+  // must-have gate that consulted a weight would be a gate that could be
+  // out-weighed. `sort_order` matters and is not cosmetic — evidence comes back
+  // index-aligned to this list.
   const { data: resumeRubric } = await supabase
     .from("evaluation_rubrics")
     .select("id")
@@ -533,7 +558,7 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
   const { data: dimensions } = resumeRubric
     ? await supabase
         .from("rubric_dimensions")
-        .select("id, name, weight, is_mandatory, min_score, sort_order")
+        .select("id, name, is_mandatory, sort_order")
         .eq("rubric_id", resumeRubric.id)
         .is("deleted_at", null)
         .order("sort_order", { ascending: true })
@@ -547,9 +572,7 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
     screening_criteria: (dimensions || []).map((d) => ({
       id: d.id,
       label: d.name,
-      weight: d.weight,
-      is_mandatory: d.is_mandatory,
-      min_score: d.min_score,
+      priority: priorityFromMandatoryFlag(d.is_mandatory),
     })),
   };
 }
@@ -675,7 +698,7 @@ async function upsertRubricsVersioned(
 
     if (inserted) {
       await supabase.from("rubric_dimensions").insert(
-        deriveDimensionFields(dims).map((d) => ({
+        deriveDimensionRows(rubric.stage, dims).map((d) => ({
           rubric_id: inserted.id,
           name: d.name,
           importance: d.importance,
@@ -739,7 +762,7 @@ export async function insertCampaignTx(
 
     if (insertedRubric && rubric.dimensions && rubric.dimensions.length > 0) {
       await supabase.from("rubric_dimensions").insert(
-        deriveDimensionFields(rubric.dimensions).map((d) => ({
+        deriveDimensionRows(rubric.stage, rubric.dimensions).map((d) => ({
           rubric_id: insertedRubric.id,
           name: d.name,
           importance: d.importance,

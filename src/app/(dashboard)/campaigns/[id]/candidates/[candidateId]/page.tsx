@@ -19,6 +19,7 @@ import { RubricMismatchBadge } from "@/components/campaigns/rubric-mismatch-badg
 import { TIER_LABELS } from "@/lib/constants";
 import { uuidSchema } from "@/lib/validations";
 import type { CandidateScore, ApplicationState } from "@/lib/constants";
+import ResumeEvaluation from "@/components/candidates/resume-evaluation";
 import type { InterviewBooking } from "@/lib/data/scheduling";
 import type { ParsedResumeData } from "@/lib/services/openai";
 
@@ -27,6 +28,8 @@ const tierColors: Record<string, string> = {
   moderate: "text-[#D97706] bg-[#FEF3C7]",
   weak: "text-[#DC2626] bg-[#FEF2F2]",
   no_match: "text-[#B91C1C] bg-[#FEE2E2]",
+  eligible: "text-[#059669] bg-[#ECFDF5]",
+  ineligible: "text-[#DC2626] bg-[#FEF2F2]",
 };
 
 const scoreStageLabels: Record<string, string> = {
@@ -72,9 +75,14 @@ function ScoreCard({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-2xl font-bold text-[#0C4A6E]">
-            {score.overall}
-          </span>
+          {score.overall != null ? (
+            <span className="text-2xl font-bold text-[#0C4A6E]">{score.overall}</span>
+          ) : (
+            // Deliberately not a zero or a dash-with-a-number: an ineligible
+            // candidate was never ranked, and any digit here would be read as
+            // how close they came.
+            <span className="text-xs font-medium text-[#9CA3AF]">Not ranked</span>
+          )}
           {score.tier && (
             <span
               className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${tierColors[score.tier]}`}
@@ -109,34 +117,41 @@ function ScoreCard({
         </p>
       </div>
 
-      <div className="space-y-2.5">
-        {score.factors.map((factor) => (
-          <div key={factor.name}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-[#6B7280]">{factor.name}</span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-[#9CA3AF]">
-                  {Math.round(factor.weight * 100)}%
-                </span>
-                <span className="text-xs font-semibold text-[#0C4A6E]">
-                  {factor.score}
-                </span>
+      {score.evaluation ? (
+        <ResumeEvaluation evaluation={score.evaluation} />
+      ) : (
+        // Scores from the weighted scorer that predates evidence screening.
+        // Rendered as-is rather than migrated: re-deriving old percentages into
+        // gates we never actually applied would invent a decision history.
+        <div className="space-y-2.5">
+          {score.factors.map((factor) => (
+            <div key={factor.name}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-[#6B7280]">{factor.name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[#9CA3AF]">
+                    {Math.round(factor.weight * 100)}%
+                  </span>
+                  <span className="text-xs font-semibold text-[#0C4A6E]">
+                    {factor.score}
+                  </span>
+                </div>
+              </div>
+              <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-200 ${factor.score >= 80
+                      ? "bg-[#22C55E]"
+                      : factor.score >= 60
+                        ? "bg-[#D97706]"
+                        : "bg-[#DC2626]"
+                    }`}
+                  style={{ width: `${factor.score}%` }}
+                />
               </div>
             </div>
-            <div className="w-full h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-200 ${factor.score >= 80
-                    ? "bg-[#22C55E]"
-                    : factor.score >= 60
-                      ? "bg-[#D97706]"
-                      : "bg-[#DC2626]"
-                  }`}
-                style={{ width: `${factor.score}%` }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <p className="text-xs text-[#9CA3AF] mt-3">
         Scored{" "}

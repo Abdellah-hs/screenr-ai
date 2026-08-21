@@ -44,7 +44,6 @@ vi.mock("@/lib/data/candidates", () => ({
   updateApplicationStage: vi.fn(),
   advanceApplicationStatus: vi.fn(),
   getResumeSignedUrl: vi.fn(),
-  saveResumeScore: vi.fn(),
   fetchApplicationCampaignId: vi.fn(),
 }));
 
@@ -80,8 +79,8 @@ vi.mock("./campaign-guards", () => ({
   assertCampaignActiveById: mockAssertCampaignActiveById,
 }));
 
-vi.mock("@/lib/services/openai", () => ({
-  scoreResumeAgainstCriteria: vi.fn(),
+vi.mock("@/lib/resume-ingest/score-resume", () => ({
+  evaluateApplicationResume: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -97,18 +96,13 @@ import {
   scoreUnscoredCampaignCandidates,
   updateCandidateStage,
 } from "./candidates";
-import { scoreResumeAgainstCriteria } from "@/lib/services/openai";
+import { evaluateApplicationResume } from "@/lib/resume-ingest/score-resume";
 import {
   updateApplicationStage,
   fetchApplicationCampaignId,
   fetchCandidatesByCampaignId,
   advanceApplicationStatus,
-  saveResumeScore,
 } from "@/lib/data/candidates";
-import {
-  fetchCampaignScoringConfig,
-  fetchActiveRubricVersion,
-} from "@/lib/data/campaigns";
 import type { TalentPoolRow } from "@/lib/data/talent-pool";
 
 beforeEach(() => {
@@ -160,6 +154,7 @@ describe("getTalentPool", () => {
       screening_tier: "strong",
       score_rationale: "Strong React background",
       score_factors: [],
+      resume_evaluation: null,
       scored_at: "2026-07-10T00:00:00.000Z",
       rubric_version: 1,
       created_at: "2026-07-10T00:00:00.000Z",
@@ -620,12 +615,43 @@ describe("updateCandidateStage", () => {
   });
 });
 
+/**
+ * What the (mocked) evaluation pipeline hands back. The action layer only ever
+ * forwards this to the rule layer, so the evidence detail is deliberately thin
+ * here — the deterministic scoring has its own tests.
+ */
+function scoredOutcome(
+  configOver: Record<string, unknown> = {},
+  resultOver: Record<string, unknown> = {},
+) {
+  return {
+    result: {
+      eligible: true,
+      ranking_score: 85,
+      tier: "eligible",
+      criteria: [],
+      failed_must_haves: [],
+      validation_warnings: [],
+      ...resultOver,
+    },
+    config: {
+      id: VALID_CAMPAIGN_ID,
+      description: "Senior engineer role",
+      automation_mode: "fully_auto",
+      screening_threshold: 70,
+      screening_criteria: [{ id: "c1", label: "React", priority: "nice_to_have" }],
+      ...configOver,
+    },
+  } as never;
+}
+
 // Auto-scoring on criteria save — replaces the retired manual "Score Resume"
 // button. Sets up the scoring chain's mocks (config + rubric + score).
 describe("scoreUnscoredCampaignCandidates", () => {
   function appRow(over: Record<string, unknown> = {}) {
     return {
       id: "app-1",
+      scored_at: null,
       resume_score: null,
       parsed_data: { first_name: "Alice" },
       candidates: { id: "cand-1" },
@@ -635,31 +661,15 @@ describe("scoreUnscoredCampaignCandidates", () => {
 
   beforeEach(() => {
     mockFetchCampaignStatus.mockResolvedValue("active");
-    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
-      description: "Senior engineer role",
-      automation_mode: "fully_auto",
-      screening_threshold: 70,
-      screening_criteria: [
-        { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
-      ],
-    } as never);
-    vi.mocked(fetchActiveRubricVersion).mockResolvedValue(1);
-    vi.mocked(saveResumeScore).mockResolvedValue(undefined as never);
-    vi.mocked(scoreResumeAgainstCriteria).mockResolvedValue({
-      result: { overall_score: 85, tier: "strong", rationale: "ok", factors: [] },
-      model: "gpt-test",
-      promptVersion: "v1",
-      rawOutput: "{}",
-    } as never);
+    vi.mocked(evaluateApplicationResume).mockResolvedValue(scoredOutcome());
   });
 
   it("does nothing when the campaign has no criteria", async () => {
-    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
+    vi.mocked(evaluateApplicationResume).mockResolvedValue(null as never);
     vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
 
     await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
     expect(vi.mocked(advanceApplicationStatus)).not.toHaveBeenCalled();
   });
 
@@ -669,19 +679,23 @@ describe("scoreUnscoredCampaignCandidates", () => {
 
     await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
   });
 
   it("scores only unscored candidates that have parsed resume data", async () => {
     vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([
       appRow({ id: "app-unscored" }),
-      appRow({ id: "app-scored", resume_score: 90 }), // already scored — skip
+      // Already evaluated. The marker is `scored_at`, not `resume_score`: an
+      // ineligible candidate is fully scored and still carries a null
+      // resume_score, and must not be re-scored on every campaign save.
+      appRow({ id: "app-scored", scored_at: "2026-08-01T00:00:00.000Z", resume_score: 90 }),
+      appRow({ id: "app-ineligible", scored_at: "2026-08-01T00:00:00.000Z" }),
       appRow({ id: "app-noparse", parsed_data: null }), // nothing to score — skip
     ] as never);
 
     await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(advanceApplicationStatus)).toHaveBeenCalledWith(
       "app-unscored",
       expect.any(String),
@@ -695,11 +709,11 @@ describe("scoreUnscoredCampaignCandidates", () => {
       appRow({ id: "app-1" }),
       appRow({ id: "app-2", candidates: { id: "cand-2" } }),
     ] as never);
-    vi.mocked(scoreResumeAgainstCriteria).mockRejectedValueOnce(new Error("openai down"));
+    vi.mocked(evaluateApplicationResume).mockRejectedValueOnce(new Error("openai down"));
 
     await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -715,22 +729,9 @@ describe("rescoreCandidateResume", () => {
       parsed_data: { first_name: "Alice" },
       candidates: { id: "cand-1" },
     });
-    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue({
-      description: "Senior engineer role",
-      automation_mode: "human_in_loop",
-      screening_threshold: 70,
-      screening_criteria: [
-        { id: "c1", label: "React", weight: 1, is_mandatory: false, min_score: 0 },
-      ],
-    } as never);
-    vi.mocked(fetchActiveRubricVersion).mockResolvedValue(2);
-    vi.mocked(saveResumeScore).mockResolvedValue(undefined as never);
-    vi.mocked(scoreResumeAgainstCriteria).mockResolvedValue({
-      result: { overall_score: 85, tier: "strong", rationale: "ok", factors: [] },
-      model: "gpt-test",
-      promptVersion: "v1",
-      rawOutput: "{}",
-    } as never);
+    vi.mocked(evaluateApplicationResume).mockResolvedValue(
+      scoredOutcome({ automation_mode: "human_in_loop" }),
+    );
   });
 
   it("rejects unauthenticated callers before doing any work", async () => {
@@ -739,13 +740,13 @@ describe("rescoreCandidateResume", () => {
     await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow("Unauthorized");
 
     expect(mockFetchCandidateById).not.toHaveBeenCalled();
-    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid applicationId via Zod (uuid format)", async () => {
     await expect(rescoreCandidateResume("not-a-uuid")).rejects.toThrow();
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
   });
 
   it("throws when the application cannot be found (ownership / does-not-exist)", async () => {
@@ -767,8 +768,7 @@ describe("rescoreCandidateResume", () => {
 
     await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(/closed/);
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
-    expect(vi.mocked(saveResumeScore)).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
   });
 
   it("freezes when the campaign isn't Active", async () => {
@@ -776,7 +776,7 @@ describe("rescoreCandidateResume", () => {
 
     await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(/paused/);
 
-    expect(vi.mocked(scoreResumeAgainstCriteria)).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
   });
 
   it("throws when the application has no parsed resume data", async () => {
@@ -794,7 +794,7 @@ describe("rescoreCandidateResume", () => {
   });
 
   it("throws when the campaign has no resume criteria configured", async () => {
-    vi.mocked(fetchCampaignScoringConfig).mockResolvedValue(null);
+    vi.mocked(evaluateApplicationResume).mockResolvedValue(null as never);
 
     await expect(rescoreCandidateResume(VALID_APP_ID)).rejects.toThrow(
       /no resume criteria/,
@@ -804,14 +804,14 @@ describe("rescoreCandidateResume", () => {
   it("persists a fresh score for the application", async () => {
     const result = await rescoreCandidateResume(VALID_APP_ID);
 
-    expect(vi.mocked(saveResumeScore)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(saveResumeScore)).toHaveBeenCalledWith(
+    expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledWith(
       expect.objectContaining({
         applicationId: VALID_APP_ID,
         campaignId: VALID_CAMPAIGN_ID,
         candidateId: "cand-1",
-        score: 85,
-        rubricVersion: 2,
+        ownerUserId: "user-1",
+        source: "rescore",
       }),
     );
     expect(result).toEqual({ rescored: true });

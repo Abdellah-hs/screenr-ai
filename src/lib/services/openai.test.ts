@@ -16,9 +16,10 @@ import {
   generateRubricDimensions,
   generateJobDescription,
   generateSocialPosts,
-  scoreResumeAgainstCriteria,
-  RESUME_SCORING_SEED,
+  extractResumeEvidence,
+  RESUME_EVIDENCE_SEED,
 } from "./openai";
+import type { ResumeCriterion } from "@/lib/resume-scoring";
 
 function parsedResponse(parsed: unknown, refusal: string | null = null) {
   return {
@@ -316,151 +317,158 @@ describe("generateRubricDimensions", () => {
   });
 });
 
-describe("scoreResumeAgainstCriteria", () => {
-  const sampleCriteria = [
-    { id: "sc-1", label: "React", weight: 0.6, is_mandatory: true, min_score: 30 },
-    { id: "sc-2", label: "Tests", weight: 0.4, is_mandatory: false, min_score: 0 },
+describe("extractResumeEvidence", () => {
+  const criteria: ResumeCriterion[] = [
+    { id: "sc-1", label: "React", priority: "must_have" },
+    { id: "sc-2", label: "Tests", priority: "nice_to_have" },
   ];
 
-  function scorePayload(overrides: Record<string, unknown> = {}) {
+  const RESUME_TEXT = "Built a React dashboard. Wrote unit tests for every service.";
+
+  function evidencePayload(overrides: Record<string, unknown> = {}) {
     return {
-      overall_score: 80,
-      tier: "strong",
-      rationale: "Strong React background.",
-      factors: [
-        { name: "React", weight: 0.6, score: 90 },
-        { name: "Tests", weight: 0.4, score: 65 },
+      criteria: [
+        {
+          criterion_label: "React",
+          evidence_level: "strong",
+          evidence_items: [
+            {
+              quote: "Built a React dashboard.",
+              source_section: "experience",
+              explanation: "Concrete project use.",
+            },
+          ],
+          extracted_relevant_months: 24,
+          notes: null,
+        },
+        {
+          criterion_label: "Tests",
+          evidence_level: "partial",
+          evidence_items: [
+            {
+              quote: "Wrote unit tests for every service.",
+              source_section: "experience",
+              explanation: "Testing is described.",
+            },
+          ],
+          extracted_relevant_months: null,
+          notes: null,
+        },
       ],
+      extraction_summary: "React is well evidenced; testing is partial.",
       ...overrides,
     };
   }
 
-  it("computes overall_score as the weighted mean of factor scores, ignoring the model's own arithmetic", async () => {
-    // factors 90/65 with criteria weights 0.6/0.4 → 0.6*90 + 0.4*65 = 80,
-    // regardless of the (deliberately wrong) overall_score the model returned.
-    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ overall_score: 142 })));
+  it("returns the model's evidence together with the identifiers an audit row needs", async () => {
+    mockParse.mockResolvedValueOnce({
+      choices: [{ message: { parsed: evidencePayload(), refusal: null } }],
+      system_fingerprint: "fp_abc123",
+    });
 
-    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
+    const extraction = await extractResumeEvidence({
+      resumeText: RESUME_TEXT,
+      criteria,
+      jobDescription: "JD",
+    });
 
-    expect(result.result.overall_score).toBe(80);
+    expect(extraction.evidence.criteria.map((c) => c.evidence_level)).toEqual([
+      "strong",
+      "partial",
+    ]);
+    expect(extraction.model).toBe("gpt-4o-mini");
+    expect(extraction.promptVersion).toBe("v3_resume_evidence");
+    expect(extraction.systemFingerprint).toBe("fp_abc123");
+    expect(JSON.parse(extraction.rawOutput)).toEqual(evidencePayload());
   });
 
-  it("rounds the weighted mean to the nearest integer", async () => {
-    // 0.6*70 + 0.4*72 = 42 + 28.8 = 70.8 → 71
-    mockParse.mockResolvedValueOnce(
-      parsedResponse(
-        scorePayload({
-          factors: [
-            { name: "React", score: 70 },
-            { name: "Tests", score: 72 },
-          ],
-        }),
-      ),
-    );
+  it("pins temperature 0 and a fixed seed so repeated runs are reproducible", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(evidencePayload()));
 
-    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-
-    expect(result.result.overall_score).toBe(71);
-  });
-
-  it("scores at temperature 0 with a fixed seed so the same resume is reproducible", async () => {
-    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload()));
-
-    await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
+    await extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" });
 
     const call = mockParse.mock.calls[0][0];
     expect(call.temperature).toBe(0);
-    expect(call.seed).toBe(RESUME_SCORING_SEED);
+    expect(call.seed).toBe(RESUME_EVIDENCE_SEED);
   });
 
-  it("clamps and rounds factor scores", async () => {
+  it("sends the criteria as bare labels in order, without their priority", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(evidencePayload()));
+
+    await extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" });
+
+    const userContent: string = mockParse.mock.calls[0][0].messages[1].content;
+    expect(userContent).toContain("1. React");
+    expect(userContent).toContain("2. Tests");
+    // Withheld deliberately: knowing which criteria are knockouts gives the
+    // model a reason to shade its reading toward a verdict it should not make.
+    expect(userContent).not.toContain("must_have");
+    expect(userContent).not.toContain("nice_to_have");
+  });
+
+  it("sends the resume document verbatim, so quotes can be verified against it", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(evidencePayload()));
+
+    await extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" });
+
+    expect(mockParse.mock.calls[0][0].messages[1].content).toContain(RESUME_TEXT);
+  });
+
+  it("forbids the model from returning a score, tier or recommendation", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(evidencePayload()));
+
+    await extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" });
+
+    const systemPrompt: string = mockParse.mock.calls[0][0].messages[0].content;
+    expect(systemPrompt).toContain("Never return a numeric score");
+    expect(systemPrompt).toContain("hire/no-hire recommendation");
+  });
+
+  it("rejects a payload whose relevant-months value is not a whole number", async () => {
     mockParse.mockResolvedValueOnce(
-      parsedResponse(
-        scorePayload({
-          factors: [
-            { name: "React", weight: 0.6, score: 200 },
-            { name: "Tests", weight: 0.4, score: -10 },
-            { name: "Edge", weight: 0, score: 47.4 },
-          ],
-        }),
-      ),
+      parsedResponse({
+        ...evidencePayload(),
+        criteria: [
+          { ...evidencePayload().criteria[0], extracted_relevant_months: 12.5 },
+          evidencePayload().criteria[1],
+        ],
+      }),
     );
-
-    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.result.factors.map((f) => f.score)).toEqual([100, 0, 47]);
-  });
-
-  it("derives the tier from the computed score, ignoring any tier the model emits", async () => {
-    // factors 90/65 → computed overall 80 → "strong", even though the model
-    // claimed "weak". Tier is an objective function of the score, not a guess.
-    mockParse.mockResolvedValueOnce(
-      parsedResponse(scorePayload({ tier: "weak", overall_score: 12 })),
-    );
-
-    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-
-    expect(result.result.tier).toBe("strong");
-  });
-
-  it("falls back to a default rationale when the AI returns an empty string", async () => {
-    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload({ rationale: "" })));
-
-    const result = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-    expect(result.result.rationale).toBe("No rationale provided.");
-  });
-
-  it("returns audit evidence (rawOutput, model, promptVersion) alongside the normalized result", async () => {
-    const payload = scorePayload();
-    mockParse.mockResolvedValueOnce(parsedResponse(payload));
-
-    const evidence = await scoreResumeAgainstCriteria({}, sampleCriteria, "JD");
-
-    expect(evidence.rawOutput).toBe(JSON.stringify(payload));
-    expect(evidence.model).toBe("gpt-4o-mini");
-    expect(evidence.promptVersion).toBe("v2_resume_scoring");
-    expect(evidence.result.overall_score).toBe(80);
-  });
-
-  it("forwards the job description, criteria, and parsed resume into the prompt", async () => {
-    mockParse.mockResolvedValueOnce(parsedResponse(scorePayload()));
-
-    await scoreResumeAgainstCriteria(
-      { skills: ["React", "TS"] },
-      sampleCriteria,
-      "Frontend role at Acme",
-    );
-
-    const call = mockParse.mock.calls[0][0];
-    const userMessage = call.messages.find((m: { role: string }) => m.role === "user");
-    expect(userMessage.content).toContain("Frontend role at Acme");
-    expect(userMessage.content).toContain("React");
-    expect(userMessage.content).toContain("Tests");
-    expect(userMessage.content).toContain("\"skills\"");
-  });
-
-  it("throws when OPENAI_API_KEY is not configured", async () => {
-    delete process.env.OPENAI_API_KEY;
 
     await expect(
-      scoreResumeAgainstCriteria({}, sampleCriteria, "JD"),
-    ).rejects.toThrow("OPENAI_API_KEY is not configured");
+      extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" }),
+    ).rejects.toThrow();
+  });
+
+  it("throws when there are no criteria to ask about", async () => {
+    await expect(
+      extractResumeEvidence({ resumeText: RESUME_TEXT, criteria: [], jobDescription: "JD" }),
+    ).rejects.toThrow("at least one criterion");
     expect(mockParse).not.toHaveBeenCalled();
   });
 
-  it("throws when the AI refuses the request", async () => {
-    mockParse.mockResolvedValueOnce(parsedResponse(null, "I can't help with that"));
+  it("throws when the AI refuses", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(null, "I cannot do that"));
 
     await expect(
-      scoreResumeAgainstCriteria({}, sampleCriteria, "JD"),
-    ).rejects.toThrow("OpenAI refused resume scoring");
+      extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" }),
+    ).rejects.toThrow("OpenAI refused resume evidence extraction");
   });
 
   it("throws when the AI returns no parsed payload", async () => {
     mockParse.mockResolvedValueOnce(parsedResponse(null, null));
 
     await expect(
-      scoreResumeAgainstCriteria({}, sampleCriteria, "JD"),
-    ).rejects.toThrow("OpenAI returned no parsed resume score");
+      extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" }),
+    ).rejects.toThrow("OpenAI returned no parsed resume evidence");
+  });
+
+  it("throws when the API key is missing", async () => {
+    delete process.env.OPENAI_API_KEY;
+
+    await expect(
+      extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" }),
+    ).rejects.toThrow("OPENAI_API_KEY is not configured");
   });
 });
 

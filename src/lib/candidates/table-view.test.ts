@@ -183,6 +183,7 @@ describe("selectCandidates — sorting", () => {
         // `tier` is optional and never null on the domain type — omitted.
         ai_summary: "",
         factors: [],
+        evaluation: null,
         scored_at: "2026-08-10T09:00:00.000Z",
         rubric_version: null,
         current_rubric_version: null,

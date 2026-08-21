@@ -31,10 +31,12 @@ const stageLabels: Record<CandidateStage, string> = {
 };
 
 const tierColors: Record<ScreeningTier, string> = {
-  strong: "text-[#059669] bg-[#ECFDF5]",
-  moderate: "text-[#D97706] bg-[#FEF3C7]",
-  weak: "text-[#DC2626] bg-[#FEF2F2]",
-  no_match: "text-[#B91C1C] bg-[#FEE2E2]",
+  strong: "bg-[#DCFCE7] text-[#166534]",
+  moderate: "bg-[#FEF3C7] text-[#92400E]",
+  weak: "bg-[#FEE2E2] text-[#991B1B]",
+  no_match: "bg-[#FEE2E2] text-[#991B1B]",
+  eligible: "bg-[#DCFCE7] text-[#166534]",
+  ineligible: "bg-[#FEE2E2] text-[#991B1B]",
 };
 
 const scoreStageTag: Record<"resume" | "screening" | "interview", string> = {
@@ -241,7 +243,7 @@ function ApplicationRow({ app }: { app: TalentPoolApplication }) {
           >
             {stageLabels[app.stage]}
           </span>
-          {app.score && (
+          {app.score?.overall != null && (
             <span className="inline-flex items-center gap-1 rounded-md bg-[#F3F4F6] px-1.5 py-0.5 text-[11px] font-medium text-[#374151]">
               {Math.round(app.score.overall)}
               <span className="text-[#9CA3AF]">· {scoreStageTag[app.score.stage]}</span>

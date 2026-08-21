@@ -29,6 +29,7 @@ export type TalentPoolRow = Pick<
   | "screening_tier"
   | "score_rationale"
   | "score_factors"
+  | "resume_evaluation"
   | "scored_at"
   | "rubric_version"
   | "created_at"
@@ -76,6 +77,7 @@ export async function fetchTalentPoolRows(userId: string): Promise<TalentPoolRow
       screening_tier,
       score_rationale,
       score_factors,
+      resume_evaluation,
       scored_at,
       rubric_version,
       created_at,

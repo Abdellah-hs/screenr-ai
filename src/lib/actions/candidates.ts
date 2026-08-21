@@ -20,10 +20,7 @@ import { sendScreeningQuestionsToCandidate } from "./screening-questions";
 import { assertCampaignActiveById } from "./campaign-guards";
 
 // Services
-import {
-  scoreResumeAgainstCriteria,
-  type ParsedResumeData,
-} from "@/lib/services/openai";
+import type { ParsedResumeData } from "@/lib/services/openai";
 
 // Data Access
 import {
@@ -32,16 +29,19 @@ import {
   updateApplicationStage,
   advanceApplicationStatus,
   getResumeSignedUrl,
-  saveResumeScore,
   fetchApplicationCampaignId,
   fetchPreArchiveState,
 } from "@/lib/data/candidates";
 import {
-  fetchCampaignScoringConfig,
   fetchSlaTimersByCampaignId,
   fetchActiveRubricVersion,
   fetchCampaignStatus,
 } from "@/lib/data/campaigns";
+import {
+  evaluateApplicationResume,
+  type ResumeEvaluationOutcome,
+} from "@/lib/resume-ingest/score-resume";
+import { readResumeEvaluation } from "@/lib/resume-scoring";
 import { fetchScreeningQuestionsByCampaignId } from "@/lib/data/screening-questions";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
 import { applicationSlaStatus } from "@/lib/rules/sla";
@@ -50,8 +50,6 @@ import { applicationSlaStatus } from "@/lib/rules/sla";
 import {
   evaluateResumeScoringOutcome,
   assertResumeRescoreAllowed,
-  type CampaignScoringConfig,
-  type ResumeScoreResult,
 } from "@/lib/rules/resume-scoring";
 import { toCandidateStage, pipelineDisplayScore } from "@/lib/constants";
 import type {
@@ -96,20 +94,24 @@ type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
  * once that response has been scored).
  */
 function buildScoresArray(
-  row: Pick<ApplicationRow, "resume_score" | "screening_tier" | "score_rationale" | "score_factors" | "scored_at" | "created_at" | "rubric_version">,
+  row: Pick<ApplicationRow, "resume_score" | "screening_tier" | "score_rationale" | "score_factors" | "resume_evaluation" | "scored_at" | "created_at" | "rubric_version">,
   currentResumeRubricVersion: number | null,
   screeningResponse: ScreeningResponseScoreRow | null,
   currentScreeningRubricVersion: number | null,
 ): CandidateScore[] {
   const scores: CandidateScore[] = [];
 
-  if (row.resume_score != null) {
+  // `scored_at` is the marker, not `resume_score`: an ineligible candidate has
+  // no ranking score by design, and gating on the number would hide their
+  // evaluation entirely — the one candidate whose result most needs showing.
+  if (row.scored_at != null || row.resume_score != null) {
     scores.push({
       stage: "resume",
-      overall: Number(row.resume_score),
+      overall: row.resume_score != null ? Number(row.resume_score) : null,
       tier: (row.screening_tier as ScreeningTier | null) || undefined,
       ai_summary: row.score_rationale || "Scored by AI",
       factors: (row.score_factors as ScoreFactor[] | null) || [],
+      evaluation: readResumeEvaluation(row.resume_evaluation),
       scored_at: row.scored_at || row.created_at,
       rubric_version: row.rubric_version,
       current_rubric_version: currentResumeRubricVersion,
@@ -122,6 +124,7 @@ function buildScoresArray(
       overall: Number(screeningResponse.overall_score),
       ai_summary: screeningResponse.overall_rationale || "Scored by AI",
       factors: [],
+      evaluation: null,
       scored_at: screeningResponse.scored_at || row.created_at,
       rubric_version: screeningResponse.rubric_version,
       current_rubric_version: currentScreeningRubricVersion,
@@ -433,9 +436,12 @@ export async function unarchiveApplication(
 // Machine Rules.
 
 /**
- * AI layer — produces and persists resume-score evidence. Never transitions.
- * Returns the score + scoring config so the rule layer can decide; returns
- * null if the campaign has no screening criteria configured.
+ * Evidence layer — extracts, verifies and deterministically scores one
+ * application's resume, then persists it. Never transitions.
+ *
+ * A thin wrapper over the shared pipeline so this action and the ingest
+ * pipeline evaluate a CV identically; the rule layer decides what happens next
+ * from the result it returns. Null means the campaign has no resume criteria.
  */
 async function scoreApplicationResume(
   applicationId: string,
@@ -443,41 +449,16 @@ async function scoreApplicationResume(
   candidateId: string,
   userId: string,
   parsedResume: ParsedResumeData | Record<string, unknown>,
-): Promise<{ result: ResumeScoreResult; config: CampaignScoringConfig } | null> {
-  const config = await fetchCampaignScoringConfig(campaignId, userId);
-  if (!config || config.screening_criteria.length === 0) return null;
-
-  const [evidence, rubricVersion] = await Promise.all([
-    scoreResumeAgainstCriteria(
-      parsedResume,
-      config.screening_criteria,
-      config.description,
-    ),
-    fetchActiveRubricVersion(campaignId, "resume"),
-  ]);
-
-  await saveResumeScore({
+  source: string,
+): Promise<ResumeEvaluationOutcome | null> {
+  return evaluateApplicationResume({
     applicationId,
     campaignId,
     candidateId,
-    score: evidence.result.overall_score,
-    tier: evidence.result.tier as Database["public"]["Enums"]["screening_tier_enum"],
-    rationale: evidence.result.rationale,
-    factors: evidence.result.factors,
-    rubricVersion,
-    audit: {
-      model: evidence.model,
-      promptVersion: evidence.promptVersion,
-      rawOutput: evidence.rawOutput,
-      inputSnapshot: {
-        criteria_count: config.screening_criteria.length,
-        criteria_labels: config.screening_criteria.map((c) => c.label),
-        job_description_length: config.description.length,
-      },
-    },
+    ownerUserId: userId,
+    parsedResume: parsedResume as Record<string, unknown>,
+    source,
   });
-
-  return { result: evidence.result, config };
 }
 
 /**
@@ -496,22 +477,28 @@ export async function scoreUnscoredCampaignCandidates(
   campaignId: string,
   userId: string,
 ): Promise<void> {
-  const config = await fetchCampaignScoringConfig(campaignId, userId);
-  if (!config || config.screening_criteria.length === 0) return; // nothing to score against
-
   const status = await fetchCampaignStatus(campaignId, userId);
   if (!status || !isCampaignProcessingActive(status)) return; // freeze rule
 
   const applications = await fetchCandidatesByCampaignId(campaignId, userId);
 
   for (const app of applications) {
-    if (app.resume_score != null) continue; // already scored — don't overwrite
+    // `scored_at`, not `resume_score`: an ineligible candidate has no ranking
+    // score, so a null score no longer means "never evaluated".
+    if (app.scored_at != null) continue; // already scored — don't overwrite
     const parsedResume = app.parsed_data as ParsedResumeData | null;
     const candidateId = app.candidates?.id;
     if (!parsedResume || !candidateId) continue; // nothing to score against / orphan row
 
     try {
-      const scored = await scoreApplicationResume(app.id, campaignId, candidateId, userId, parsedResume);
+      const scored = await scoreApplicationResume(
+        app.id,
+        campaignId,
+        candidateId,
+        userId,
+        parsedResume,
+        "campaign_scoring_sweep",
+      );
       if (scored) {
         const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
         await advanceApplicationStatus(
@@ -575,6 +562,7 @@ export async function rescoreCandidateResume(
     candidateId,
     userId,
     parsedResume,
+    "rescore",
   );
   if (!scored) {
     throw new Error(

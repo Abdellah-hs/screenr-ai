@@ -52,7 +52,8 @@ A strict layered pattern is enforced for all data flow. Respect the boundaries �
 2. **Rules Layer** (`src/lib/rules/`) — **pure** decision functions. Reads already-validated evidence (e.g. an AI score, a response status, a list of required questions vs answers) and returns a decision — usually a `TransitionDescriptor` `{ toState, rationale }` or a guard that throws on bad state. The action executes the transition; the rule only decides. **MUST NOT** import from `@/lib/supabase/*`, `@/lib/actions/*`, or call `revalidatePath` / `redirect`. See `src/lib/rules/README.md` for the full contract. This is the layer that implements "Control > AI > Data" — AI produces evidence, rules decide.
 3. **Data Layer** (`src/lib/data/`) — pure Supabase query/mutation functions (e.g. `insertCampaignTx`, `fetchCandidatesByCampaignId`, `transitionApplication`). No auth checks, no validation — that is the action's job. Functions ending in `Tx` perform multi-table writes that should be treated as a logical transaction. **All `applications.status` writes go through `transitionApplication()` in `src/lib/data/transitions.ts`** — never `.update({ status: ... })` directly.
 4. **Services** (`src/lib/services/`) — third-party integrations: `openai.ts` (resume extraction, screening criteria/rubric generation, scoring), `gmail.ts` (inbox sync for resume ingestion), `pdf.ts` (PDF text extraction via `pdf-parse`), `email.ts`, `screening-questions.ts`, `email-templates/`.
-5. **Orchestration / Pipelines** (`src/lib/resume-ingest/`, `src/lib/screening/`, `src/lib/scheduling/`) — multi-step **use-cases** that compose the lower layers (services → data → rules → `transition()`) into one reusable flow. They exist because a flow like resume ingest may be driven from **more than one entry point** (today the public apply action; a session-less caller like a cron sweep could reuse it tomorrow), so it can't live inside any single action. A pipeline runs on an **injected `db` client** (`SupabaseDb`) so it works with or without a recruiter session (service-role for cron). **MUST NOT** perform auth, Zod validation, or rate-limiting — those stay in the action that calls it (a cron route does its own `CRON_SECRET` guard). It **MUST** still route every `applications.status` change through `transition()` and keep AI advisory (score → rule decides → transition). Think of it as an "action body" lifted out so several callers can share it. The canonical example is `ingestResumeDocument` (extract → classify → upload → upsert → score → rule → advance).
+5. **Pure domain packages** (`src/lib/resume-scoring/`, `src/lib/proctoring/`, `src/lib/talent-pool/`) — versioned, dependency-free logic that is too big for a rule but must never touch I/O. `resume-scoring` owns the whole evidence→score path: the priority model, the LLM evidence schema, quote verification, the deterministic scoring/eligibility/ranking functions, and the cache key. No OpenAI calls, no Supabase, no clock.
+6. **Orchestration / Pipelines** (`src/lib/resume-ingest/`, `src/lib/screening/`, `src/lib/scheduling/`) — multi-step **use-cases** that compose the lower layers (services → data → rules → `transition()`) into one reusable flow. They exist because a flow like resume ingest may be driven from **more than one entry point** (today the public apply action; a session-less caller like a cron sweep could reuse it tomorrow), so it can't live inside any single action. A pipeline runs on an **injected `db` client** (`SupabaseDb`) so it works with or without a recruiter session (service-role for cron). **MUST NOT** perform auth, Zod validation, or rate-limiting — those stay in the action that calls it (a cron route does its own `CRON_SECRET` guard). It **MUST** still route every `applications.status` change through `transition()` and keep AI advisory (score → rule decides → transition). Think of it as an "action body" lifted out so several callers can share it. The canonical example is `ingestResumeDocument` (extract → classify → upload → upsert → score → rule → advance). Resume evaluation itself is a second one: `evaluateApplicationResume` (`src/lib/resume-ingest/score-resume.ts`) is shared by the ingest pipeline and the recruiter re-score action so a CV cannot be graded two different ways depending on how it arrived.
 
 Auto-generated Supabase types live in `src/types/database.types.ts`. The `src/app/api/` directory exists but is currently empty — there are **no API routes**; everything goes through Server Actions.
 
@@ -167,13 +168,72 @@ For every AI call, persist: `raw_output`, `normalized_fields`, `model_version`, 
 All advancement decisions are rule-driven. Example:
 
 ```
-IF resume_score >= threshold AND automation_mode = fully_auto:
-  transition(app, 'screening_approved', actor='system', rationale='score>=threshold')
+IF NOT eligible (any must-have criterion failed):
+  transition(app, 'rejected', actor='system', rationale='failed must-have: X', disposition='LOW_SCORE')
 ELSE IF automation_mode = hitl:
   transition(app, 'screening_review_pending', actor='system', rationale='awaiting review')
+ELSE IF ranking_score >= threshold:
+  transition(app, 'screening_approved', actor='system', rationale='ranking>=threshold')
 ELSE:
-  transition(app, 'screening_rejected', actor='system', rationale='score<threshold', disposition='LOW_SCORE')
+  transition(app, 'rejected', actor='system', rationale='ranking<threshold', disposition='LOW_SCORE')
 ```
+
+#### Resume screening is evidence-based, not model-scored (decision 2026-08-19)
+
+**The model never returns a number for a resume.** It reads the CV and reports,
+per criterion, an `evidence_level` (`not_present` | `unclear` | `weak` |
+`partial` | `strong` | `very_strong`) plus verbatim quotes. Every number is
+derived in `src/lib/resume-scoring/` by a fixed table:
+
+```
+not_present → 0    partial → 55
+unclear     → 0    strong  → 80
+weak        → 25   very_strong → 100
+```
+
+This replaced a prompt that asked for per-criterion 0-100 scores. Two reasons:
+
+1. **Reproducibility.** "Is this a 68 or a 74?" has no stable answer, so the same
+   CV could score differently on consecutive runs. A reading repeats; an
+   arbitration does not.
+2. **Must-haves are gates, not weights.** A weighted total lets a surplus on one
+   criterion pay for a shortfall on another. Applied to a non-negotiable
+   requirement that turns "must" into "mostly", silently.
+
+**The rules, in order, and none of them may be relaxed:**
+
+- The recruiter's only per-criterion decision is `priority`: `must_have` or
+  `nice_to_have`. No weights, no per-criterion fail lines, no importance on the
+  resume stage. (Screening-question and interview rubrics still use the
+  importance-weighted model — this decision covers resume screening only.)
+- **Every** must-have is checked independently against `MUST_HAVE_MINIMUM_SCORE`
+  (60). All must pass. Failures are reported in full, not first-only.
+- A candidate is `eligible` only when every must-have passes. Ineligible is a
+  **hard reject in every automation mode**, HITL included — a gate is not a
+  review call.
+- The ranking score is the arithmetic mean of the **nice-to-haves only**, and is
+  computed **only for an eligible candidate**. An ineligible candidate has
+  `ranking_score = null` — never a low number, which would read as "how close
+  they came" and invite an argument with the gate. Eligible with no
+  nice-to-haves scores 100.
+- **A nice-to-have can never repair a failed must-have.** This is the invariant
+  the whole module exists to hold; the tests assert it directly.
+- Tier is `eligible` | `ineligible`. Do not label a resume `strong` / `moderate`
+  / `weak` — those values remain in the enum for stored history and for the
+  graded stages.
+- Quotes are verified against the exact document the model was shown
+  (`buildNormalizedResumeDocument` — the same string is prompt input,
+  verification corpus, and cache-key input). An unverifiable quote is discarded;
+  a criterion left with no verified quote is downgraded to `unclear` (score 0).
+  **Never award credit on an unverified quote.** Structural failures (wrong
+  count, wrong order) reject the run; evidential failures downgrade and warn.
+- `applications.resume_score` now holds the **ranking score** and is null for an
+  ineligible candidate. **`scored_at` is the "has this been evaluated" marker**,
+  not `resume_score`.
+- Extraction is cached in `resume_evidence_cache`, keyed on resume text +
+  criteria/priorities in order + rubric version + prompt version + model +
+  scoring-rules version. Only the *evidence* is cached; the deterministic score
+  is always recomputed, so a cached result can never predate its rules.
 
 #### Interview scoring is not a gate (decision 2026-08-18)
 
@@ -223,6 +283,9 @@ Search (PRD 3.11.2) is a pure function, `filterTalentPool` in `src/lib/talent-po
 - Overwriting historical AI outputs or rubrics (append/version instead)
 - Non-versioned AI prompts or rubrics
 - Silent failures — every error path ends in an explicit failure state
+- Asking a model for a numeric resume score, weight, tier, eligibility, or hire/no-hire verdict (see "Resume screening is evidence-based")
+- Letting a nice-to-have criterion offset a failed must-have, by weighting, averaging, or any other route
+- Awarding credit for a quote that could not be found in the resume text
 
 ## PRD-Critical Product Rules
 

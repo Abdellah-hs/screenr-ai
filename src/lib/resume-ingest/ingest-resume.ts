@@ -1,26 +1,15 @@
 import type { SupabaseDb } from "@/lib/supabase/types";
-import type { Database } from "@/types/database.types";
 import {
   uploadResumeToStorage,
   upsertCandidate,
   createApplicationIfNotExists,
   logAiAudit,
-  saveResumeScore,
 } from "@/lib/data/candidates";
-import {
-  fetchCampaignScoringConfig,
-  fetchActiveRubricVersion,
-} from "@/lib/data/campaigns";
 import { extractMarkdownWithMarker } from "@/lib/services/marker";
-import {
-  extractResumeData,
-  scoreResumeAgainstCriteria,
-  type ParsedResumeData,
-} from "@/lib/services/openai";
+import { extractResumeData, type ParsedResumeData } from "@/lib/services/openai";
 import { evaluateResumeScoringOutcome } from "@/lib/rules/resume-scoring";
+import { evaluateApplicationResume } from "@/lib/resume-ingest/score-resume";
 import { transitionApplicationAsSystem } from "@/lib/data/transitions";
-
-type ScreeningTierEnum = Database["public"]["Enums"]["screening_tier_enum"];
 
 /**
  * Why a CV was not ingested. Surfaced (not swallowed) so a candidate-facing
@@ -133,7 +122,16 @@ export async function ingestResumeDocument(args: IngestResumeArgs): Promise<Inge
 
   // Best-effort: scoring must never undo a successful ingest.
   try {
-    await scoreAndAdvance({ db, applicationId, campaignId, candidateId, ownerUserId, parsed: structured, source });
+    await scoreAndAdvance({
+      db,
+      applicationId,
+      campaignId,
+      candidateId,
+      ownerUserId,
+      parsed: structured,
+      rawResumeText: markdown,
+      source,
+    });
   } catch (err) {
     console.error(`ingestResumeDocument: scoring failed for ${applicationId} (non-blocking):`, err);
   }
@@ -148,45 +146,27 @@ async function scoreAndAdvance(args: {
   candidateId: string;
   ownerUserId: string;
   parsed: ParsedResumeData;
+  rawResumeText: string;
   source: string;
 }): Promise<void> {
-  const { db, applicationId, campaignId, candidateId, ownerUserId, parsed, source } = args;
+  const scored = await evaluateApplicationResume({
+    db: args.db,
+    applicationId: args.applicationId,
+    campaignId: args.campaignId,
+    candidateId: args.candidateId,
+    ownerUserId: args.ownerUserId,
+    parsedResume: args.parsed as unknown as Record<string, unknown>,
+    rawResumeText: args.rawResumeText,
+    source: args.source,
+  });
 
-  const config = await fetchCampaignScoringConfig(campaignId, ownerUserId, db);
-  // No active criteria → nothing to score against; the application stays `new`.
-  if (!config || config.screening_criteria.length === 0) return;
+  // No active resume criteria — nothing to score against; the application
+  // stays `new` and a recruiter can score it once criteria exist.
+  if (!scored) return;
 
-  const [evidence, rubricVersion] = await Promise.all([
-    scoreResumeAgainstCriteria(parsed, config.screening_criteria, config.description),
-    fetchActiveRubricVersion(campaignId, "resume", db),
-  ]);
-
-  await saveResumeScore(
-    {
-      applicationId,
-      campaignId,
-      candidateId,
-      score: evidence.result.overall_score,
-      tier: evidence.result.tier as ScreeningTierEnum,
-      rationale: evidence.result.rationale,
-      factors: evidence.result.factors,
-      rubricVersion,
-      audit: {
-        model: evidence.model,
-        promptVersion: evidence.promptVersion,
-        rawOutput: evidence.rawOutput,
-        inputSnapshot: {
-          criteria_count: config.screening_criteria.length,
-          source,
-        },
-      },
-    },
-    db,
-  );
-
-  const decision = evaluateResumeScoringOutcome(evidence.result, config);
+  const decision = evaluateResumeScoringOutcome(scored.result, scored.config);
   await transitionApplicationAsSystem(
-    applicationId,
+    args.applicationId,
     decision.toState,
     decision.rationale,
     decision.disposition,

@@ -36,6 +36,8 @@ const tierColors: Record<string, string> = {
   moderate: "text-[#D97706] bg-[#FEF3C7]",
   weak: "text-[#DC2626] bg-[#FEF2F2]",
   no_match: "text-[#B91C1C] bg-[#FEE2E2]",
+  eligible: "text-[#059669] bg-[#ECFDF5]",
+  ineligible: "text-[#DC2626] bg-[#FEF2F2]",
 };
 
 const stageLabels: Record<CandidateStage, string> = {
@@ -472,9 +474,11 @@ export default function CandidateTable({
                         <td className="px-6 py-4">
                           {stageScore ? (
                             <div className="flex items-center gap-2">
-                              <span className="font-semibold text-[#111827]">
-                                {stageScore.overall}
-                              </span>
+                              {stageScore.overall != null && (
+                                <span className="font-semibold text-[#111827]">
+                                  {stageScore.overall}
+                                </span>
+                              )}
                               <span className="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full bg-[#F3F4F6] text-[#6B7280]">
                                 {scoreStageTag[stageScore.stage]}
                               </span>

@@ -242,6 +242,7 @@ describe("pipelineDisplayScore", () => {
       overall,
       ai_summary: "",
       factors: [],
+      evaluation: null,
       scored_at: "2026-06-16T00:00:00.000Z",
       rubric_version: null,
       current_rubric_version: null,
