@@ -193,13 +193,16 @@ export function stageScoreRows(
       };
     }
 
+    // Sentence case, and never case-folded: `scoreAbsenceLabel` is free to
+    // return something with an acronym in it, and no lower-casing rule can
+    // tell "CV" from an ordinary word.
     const detail =
       rank > reachedRank
-        ? "not reached yet"
+        ? "Not reached yet"
         : rank === reachedRank
-          ? scoreAbsenceLabel(status).toLowerCase()
+          ? scoreAbsenceLabel(status)
           : // Passed through without producing one — a stage with no rubric.
-            "no score recorded";
+            "No score recorded";
 
     return {
       key,

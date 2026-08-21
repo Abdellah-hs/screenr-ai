@@ -111,11 +111,16 @@ function TimelineRow({ entry, isLast }: { entry: TimelineEntry; isLast: boolean 
       </div>
 
       <div className={`min-w-0 flex-1 ${isLast ? "" : "pb-3.5"}`}>
+        {/* Separated rather than case-folded. Lower-casing the event to make it
+            read as a sentence turned "CV scored, waiting for approval" into
+            "cv scored…", and there is no case surgery that knows an acronym
+            from an ordinary word. */}
         <p className="mb-0.5 text-xs leading-[1.5] text-ink">
           <strong className="font-semibold">
             {TRANSITION_ACTOR_LABELS[entry.actor]}
-          </strong>{" "}
-          {eventLabel(entry.toState).toLowerCase()}
+          </strong>
+          <span className="mx-1 text-[#D1D5DB]">·</span>
+          {eventLabel(entry.toState)}
           {isOverride && (
             <span className="ml-1.5 rounded bg-[#FFFBEB] px-1.5 py-px text-[10px] font-semibold text-[#B45309]">
               Override
@@ -127,7 +132,11 @@ function TimelineRow({ entry, isLast }: { entry: TimelineEntry; isLast: boolean 
           {formatWhen(entry.at)}
           {entry.actor === "ai" && " · advisory"}
           {entry.hoursInPreviousState !== null && entry.fromState && (
-            <> · after {formatDuration(entry.hoursInPreviousState)} in {formatApplicationState(entry.fromState).toLowerCase()}</>
+            <>
+              {" "}
+              · after {formatDuration(entry.hoursInPreviousState)} in{" "}
+              {formatApplicationState(entry.fromState)}
+            </>
           )}
         </p>
 

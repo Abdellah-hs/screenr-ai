@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { daysInStage, defaultPreviewStage, eventLabel, lastActivityLabel, relativeAge } from "./detail-view";
 import {
-  daysInStage,
-  defaultPreviewStage,
-  lastActivityLabel,
-  relativeAge,
-} from "./detail-view";
+  APPLICATION_STAGE_BUCKET,
+  type ApplicationState,
+} from "@/lib/constants";
 
 const NOW = new Date("2026-08-20T12:00:00Z");
 
@@ -76,5 +75,18 @@ describe("defaultPreviewStage", () => {
 
   it("falls back to New on an empty campaign so the section still has a name", () => {
     expect(defaultPreviewStage({})).toBe("applied");
+  });
+});
+
+describe("eventLabel", () => {
+  it("keeps CV capitalised — callers must not case-fold it to fit a sentence", () => {
+    expect(eventLabel("screening_review_pending")).toBe("CV scored, waiting for approval");
+    expect(eventLabel("processing_failed")).toBe("CV could not be read");
+  });
+
+  it("names every state, falling back to the formatted state rather than blank", () => {
+    for (const state of Object.keys(APPLICATION_STAGE_BUCKET) as ApplicationState[]) {
+      expect(eventLabel(state).length, state).toBeGreaterThan(0);
+    }
   });
 });

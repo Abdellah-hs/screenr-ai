@@ -94,14 +94,14 @@ describe("stageScoreRows", () => {
   it("names a stage the pipeline has not reached differently from one it has", () => {
     const rows = stageScoreRows([score("resume", 78)], "screening_sent");
 
-    expect(rows[1]).toMatchObject({ detail: "awaiting the call", reached: true });
-    expect(rows[2]).toMatchObject({ detail: "not reached yet", reached: false });
+    expect(rows[1]).toMatchObject({ detail: "Awaiting the call", reached: true });
+    expect(rows[2]).toMatchObject({ detail: "Not reached yet", reached: false });
   });
 
   it("says the screening expired rather than that it was never taken", () => {
     const rows = stageScoreRows([score("resume", 78)], "screening_expired");
 
-    expect(rows[1].detail).toBe("screening expired");
+    expect(rows[1].detail).toBe("Screening expired");
   });
 
   it("carries the rubric version and date when a score exists", () => {
@@ -138,7 +138,7 @@ describe("stageScoreRows", () => {
   it("flags a stage that was passed without producing a score", () => {
     const rows = stageScoreRows([score("screening", 84)], "screening_scored");
 
-    expect(rows[0].detail).toBe("no score recorded");
+    expect(rows[0].detail).toBe("No score recorded");
   });
 
   it("never leaves a row's detail blank, in any state", () => {
