@@ -385,3 +385,68 @@ describe("createCampaign — team reviewers flag", () => {
     });
   });
 });
+
+/**
+ * Screening questions used to be set only after creation, so every campaign was
+ * born in the state the detail page has to warn about: no questions means no
+ * candidate can be approved into screening. They now ride the create form and
+ * are written in the same transaction as the campaign.
+ */
+describe("createCampaign — screening questions", () => {
+  /** Argument position of the staged questions in the insertCampaignTx call. */
+  const QUESTIONS_ARG = 5;
+
+  function formWithQuestions(questionsJson?: string): FormData {
+    const form = new FormData();
+    form.set("title", "Senior Engineer");
+    form.set("status", "draft");
+    if (questionsJson !== undefined) {
+      form.set("screening_questions_json", questionsJson);
+    }
+    return form;
+  }
+
+  beforeEach(() => {
+    mockInsertCampaignTx.mockResolvedValue(VALID_CAMPAIGN_ID);
+  });
+
+  it("passes questions staged on the form into the create transaction", async () => {
+    await createCampaign(
+      formWithQuestions(
+        JSON.stringify([
+          { prompt: "Describe a system you scaled past its first design.", is_required: true },
+          { prompt: "What made you look outside your current role?", is_required: false },
+        ]),
+      ),
+    );
+
+    expect(mockInsertCampaignTx.mock.calls[0][QUESTIONS_ARG]).toEqual([
+      { prompt: "Describe a system you scaled past its first design.", is_required: true },
+      { prompt: "What made you look outside your current role?", is_required: false },
+    ]);
+  });
+
+  it("strips the client-side id so it can never be written as a row id", async () => {
+    await createCampaign(
+      formWithQuestions(
+        JSON.stringify([
+          { id: "sq-abc123", prompt: "Why this role, and why now?", is_required: true },
+        ]),
+      ),
+    );
+
+    expect(mockInsertCampaignTx.mock.calls[0][QUESTIONS_ARG]).toEqual([
+      { prompt: "Why this role, and why now?", is_required: true },
+    ]);
+  });
+
+  it("creates the campaign with no questions when the recruiter skips them", async () => {
+    await createCampaign(formWithQuestions());
+
+    expect(mockInsertCampaignTx).toHaveBeenCalledTimes(1);
+    expect(mockInsertCampaignTx.mock.calls[0][QUESTIONS_ARG]).toEqual([]);
+    expect(mockInsertCampaignTx.mock.calls[0][0]).toMatchObject({
+      title: "Senior Engineer",
+    });
+  });
+});

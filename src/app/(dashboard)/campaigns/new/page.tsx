@@ -15,6 +15,7 @@ function todayLocalYmd(): string {
 }
 import { DescriptionField } from "@/components/campaigns/description-field";
 import RubricEditor from "@/components/campaigns/rubric-editor";
+import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import AiSettingsFields from "@/components/campaigns/ai-settings-fields";
 import SlaTimersEditor from "@/components/campaigns/sla-timers-editor";
 import TeamReviewersEditor from "@/components/campaigns/team-reviewers-editor";
@@ -175,6 +176,14 @@ export default function NewCampaignPage() {
         {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
         <div className="pt-4 border-t border-[#E5E7EB] mt-2">
           <RubricEditor />
+        </div>
+
+        {/* Screening Questions — set up here rather than after creation, so a
+            campaign is never created in a state where nobody can be approved
+            into screening. Staged into a hidden input and written by
+            createCampaign; still editable later on the campaign page. */}
+        <div className="pt-4 border-t border-[#E5E7EB] mt-2">
+          <ScreeningQuestionsEditor initialQuestions={[]} />
         </div>
 
         {/* Team Reviewers — behind NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS, default off.

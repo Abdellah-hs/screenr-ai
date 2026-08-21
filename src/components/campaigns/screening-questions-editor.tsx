@@ -7,6 +7,7 @@ import {
   generateScreeningQuestions,
   saveScreeningQuestions,
 } from "@/lib/actions/screening-questions";
+import { generateScreeningQuestionsFromDescription } from "@/lib/actions/ai-generate";
 
 interface EditableQuestion {
   id?: string;
@@ -15,9 +16,20 @@ interface EditableQuestion {
 }
 
 interface ScreeningQuestionsEditorProps {
-  campaignId: string;
+  /**
+   * Omitted on the create form, where the campaign row does not exist yet.
+   * Its absence switches the editor into "form mode": questions are staged
+   * into a hidden input and written by `createCampaign` in the same
+   * transaction as the campaign, instead of being saved on their own.
+   */
+  campaignId?: string;
   initialQuestions: EditableQuestion[];
-  canGenerate: boolean;
+  /**
+   * Whether the campaign already has a job description long enough for AI
+   * generation. Form mode reads the description live out of the form instead,
+   * so it leaves this true and reports a too-short description on click.
+   */
+  canGenerate?: boolean;
 }
 
 function clientId() {
@@ -27,8 +39,9 @@ function clientId() {
 export default function ScreeningQuestionsEditor({
   campaignId,
   initialQuestions,
-  canGenerate,
+  canGenerate = true,
 }: ScreeningQuestionsEditorProps) {
+  const isFormMode = !campaignId;
   const [open, setOpen] = useState(false);
   const [questions, setQuestions] = useState<(EditableQuestion & { _key: string })[]>(
     () => initialQuestions.map((q) => ({ ...q, _key: q.id ?? clientId() }))
@@ -74,9 +87,28 @@ export default function ScreeningQuestionsEditor({
 
   function handleRegenerate() {
     setError(null);
+
+    // On the create form the description lives in the form, not the database,
+    // so read it straight off the field the same way RubricEditor does.
+    let description = "";
+    if (isFormMode) {
+      description =
+        document
+          .querySelector<HTMLTextAreaElement>('textarea[name="description"]')
+          ?.value?.trim() ?? "";
+      if (description.length < 10) {
+        setError(
+          "Write a job description first — the questions are generated from it."
+        );
+        return;
+      }
+    }
+
     startGenerate(async () => {
       try {
-        const generated = await generateScreeningQuestions(campaignId);
+        const generated = isFormMode
+          ? await generateScreeningQuestionsFromDescription(description)
+          : await generateScreeningQuestions(campaignId);
         setQuestions(
           generated.map((q) => ({
             _key: clientId(),
@@ -98,7 +130,10 @@ export default function ScreeningQuestionsEditor({
       prompt: q.prompt.trim(),
       is_required: q.is_required,
     }));
-    if (cleaned.length === 0) {
+    // An empty set is legal while creating a campaign (the recruiter can add
+    // questions before any candidate reaches screening) but not once it is
+    // live, where wiping them silently breaks the approve gate.
+    if (!isFormMode && cleaned.length === 0) {
       setError("Add at least one question before saving.");
       return;
     }
@@ -106,6 +141,17 @@ export default function ScreeningQuestionsEditor({
       setError("Every question must be at least 10 characters.");
       return;
     }
+
+    if (isFormMode) {
+      // Nothing to persist yet — the hidden input carries these to
+      // `createCampaign`, which writes them alongside the campaign row.
+      setQuestions((prev) =>
+        prev.map((q, i) => ({ ...q, prompt: cleaned[i].prompt }))
+      );
+      setOpen(false);
+      return;
+    }
+
     startSave(async () => {
       try {
         await saveScreeningQuestions(campaignId, cleaned);
@@ -121,6 +167,25 @@ export default function ScreeningQuestionsEditor({
   return (
     <>
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
+        {isFormMode && (
+          <input
+            type="hidden"
+            name="screening_questions_json"
+            /* Only questions that would survive the server-side schema are
+               staged. `safeParseJsonArray` drops the *whole* array on any
+               invalid element, so shipping a half-typed row — left behind by
+               closing the modal with Cancel — would silently discard every
+               good question with it. */
+            value={JSON.stringify(
+              questions
+                .map((q) => ({
+                  prompt: q.prompt.trim(),
+                  is_required: q.is_required,
+                }))
+                .filter((q) => q.prompt.length >= 10)
+            )}
+          />
+        )}
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-sm font-semibold text-[#111827] uppercase tracking-wider">
@@ -157,6 +222,8 @@ export default function ScreeningQuestionsEditor({
           <p className="text-sm text-[#6B7280]">
             No questions configured yet. Click <strong>Set up</strong> to
             generate them with AI or write your own.
+            {isFormMode &&
+              " You can also add them after the campaign is created."}
           </p>
         )}
       </div>
@@ -331,9 +398,9 @@ export default function ScreeningQuestionsEditor({
             variant="primary"
             size="sm"
             onClick={handleSave}
-            disabled={busy || questions.length === 0}
+            disabled={busy || (!isFormMode && questions.length === 0)}
           >
-            {saving ? "Saving…" : "Save questions"}
+            {isFormMode ? "Done" : saving ? "Saving…" : "Save questions"}
           </Button>
         </ModalFooter>
       </Modal>

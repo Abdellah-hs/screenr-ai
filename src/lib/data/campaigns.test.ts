@@ -397,12 +397,14 @@ describe("insertCampaignTx", () => {
     return { select: () => ({ single: insertSingle }) };
   });
   const auditInsert = vi.fn(() => Promise.resolve({ error: null }));
+  const questionInsert = vi.fn(() => Promise.resolve({ error: null }));
 
   beforeEach(() => {
     vi.clearAllMocks();
     insertedPayloads.length = 0;
     mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
       if (table === "campaign_audit_log") return { insert: auditInsert };
+      if (table === "screening_questions") return { insert: questionInsert };
       return { insert: campaignInsert };
     });
   });
@@ -410,7 +412,7 @@ describe("insertCampaignTx", () => {
   it("derives the public_slug from the title and returns the new id", async () => {
     insertSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
 
-    const id = await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1");
+    const id = await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], [], "user-1");
 
     expect(id).toBe("camp-1");
     expect(insertedPayloads[0]).toMatchObject({
@@ -424,7 +426,7 @@ describe("insertCampaignTx", () => {
       .mockResolvedValueOnce({ data: null, error: { code: "23505" } })
       .mockResolvedValueOnce({ data: { id: "camp-2" }, error: null });
 
-    const id = await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1");
+    const id = await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], [], "user-1");
 
     expect(id).toBe("camp-2");
     expect(insertedPayloads).toHaveLength(2);
@@ -435,8 +437,51 @@ describe("insertCampaignTx", () => {
     insertSingle.mockResolvedValue({ data: null, error: { code: "500", message: "db down" } });
 
     await expect(
-      insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], "user-1"),
+      insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], [], "user-1"),
     ).rejects.toThrow("db down");
     expect(insertedPayloads).toHaveLength(1);
+  });
+
+  // Screening questions staged on the create form land in the same Tx as the
+  // campaign, so a new campaign is never born unable to approve anyone into
+  // screening. sort_order is the array index — the order they are asked in.
+  it("writes staged screening questions against the new campaign id", async () => {
+    insertSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+
+    await insertCampaignTx(
+      campaignPayload("Backend Engineer"),
+      [],
+      [],
+      [],
+      [],
+      [
+        { prompt: "Describe a system you scaled past its first design.", is_required: true },
+        { prompt: "What made you look outside your current role?", is_required: false },
+      ],
+      "user-1",
+    );
+
+    expect(questionInsert).toHaveBeenCalledWith([
+      {
+        campaign_id: "camp-1",
+        prompt: "Describe a system you scaled past its first design.",
+        is_required: true,
+        sort_order: 0,
+      },
+      {
+        campaign_id: "camp-1",
+        prompt: "What made you look outside your current role?",
+        is_required: false,
+        sort_order: 1,
+      },
+    ]);
+  });
+
+  it("skips the screening_questions write when none were staged", async () => {
+    insertSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+
+    await insertCampaignTx(campaignPayload("Backend Engineer"), [], [], [], [], [], "user-1");
+
+    expect(questionInsert).not.toHaveBeenCalled();
   });
 });
