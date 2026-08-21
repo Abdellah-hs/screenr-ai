@@ -75,6 +75,9 @@ type AvailabilityRuleInput = {
   start_minute: number;
   end_minute: number;
 };
+type ScreeningQuestionInput = {
+  prompt: string;
+};
 
 // Slug-collision retry budget for insertCampaignTx. A handful of suffixed
 // attempts is plenty — collisions are rare (only same-titled campaigns).
@@ -727,6 +730,7 @@ export async function insertCampaignTx(
   slaTimers: SlaTimerInput[],
   reviewers: ReviewerInput[],
   availabilityRules: AvailabilityRuleInput[],
+  screeningQuestions: ScreeningQuestionInput[],
   userId: string
 ): Promise<string> {
   const supabase = await createClient();
@@ -816,6 +820,19 @@ export async function insertCampaignTx(
         weekday: a.weekday,
         start_minute: a.start_minute,
         end_minute: a.end_minute,
+      }))
+    );
+  }
+
+  // 5c. Insert screening questions staged on the create form. Same shape and
+  //     ordering rule as `replaceScreeningQuestions` — `sort_order` is the
+  //     array index, which is the order the candidate is asked them in.
+  if (screeningQuestions.length > 0) {
+    await supabase.from("screening_questions").insert(
+      screeningQuestions.map((q, i) => ({
+        campaign_id: campaign.id,
+        prompt: q.prompt,
+        sort_order: i,
       }))
     );
   }

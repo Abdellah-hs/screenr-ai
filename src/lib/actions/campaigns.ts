@@ -122,7 +122,7 @@ export async function createCampaign(formData: FormData) {
     interview_persona: interviewPersona,
     interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
     interview_booking_horizon_days: interviewBookingHorizonDays,
-    rubrics, slaTimers, reviewers, availabilityRules
+    rubrics, slaTimers, reviewers, availabilityRules, screeningQuestions
   } = parseCampaignFormData(formData);
 
   // Hiding the editor removes the hidden input, but a form field is a
@@ -154,6 +154,10 @@ export async function createCampaign(formData: FormData) {
     slaTimers,
     teamReviewers,
     availabilityRules,
+    // Written in the same transaction as the campaign so a new campaign is
+    // never born unable to approve anyone into screening. Empty is still
+    // allowed — the detail-page banner remains the safety net for that.
+    screeningQuestions.map((q) => ({ prompt: q.prompt })),
     userId
   );
 

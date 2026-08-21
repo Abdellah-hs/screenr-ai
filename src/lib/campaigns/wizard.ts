@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SCORE_THRESHOLD,
   type AutomationMode,
   type CampaignReviewer,
   type CampaignStatusSelection,
@@ -95,10 +96,17 @@ export interface CampaignDraft {
   deadlineEnforced: boolean;
 
   automationMode: AutomationMode;
+  resumeThreshold: number;
   screeningThreshold: number;
   interviewPersona: InterviewPersona;
 
   rubrics: EvaluationRubric[];
+  /**
+   * What the voice AI asks, in order. Collected here rather than after
+   * creation so a campaign is never created in a state where nobody can be
+   * approved into screening — the apply link goes live immediately.
+   */
+  screeningQuestions: { id?: string; prompt: string }[];
   reviewers: CampaignReviewer[];
   slaTimers: SlaTimer[];
 
@@ -134,10 +142,12 @@ export function emptyDraft(): CampaignDraft {
     deadlineEnforced: false,
 
     automationMode: "human_in_loop",
-    screeningThreshold: 70,
+    resumeThreshold: DEFAULT_SCORE_THRESHOLD,
+    screeningThreshold: DEFAULT_SCORE_THRESHOLD,
     interviewPersona: "neutral",
 
     rubrics: RUBRIC_STAGES.map((s) => emptyRubric(s.key)),
+    screeningQuestions: [],
     reviewers: [],
     slaTimers: [],
 
@@ -336,6 +346,9 @@ export function draftToFormData(draft: CampaignDraft): FormData {
   fd.set("deadline_enforced", draft.deadlineEnforced ? "true" : "false");
 
   fd.set("automation_mode", draft.automationMode);
+  // Two bars. Sending only one would silently leave the CV gate on its column
+  // default while the recruiter believed they had set it.
+  fd.set("resume_threshold", String(draft.resumeThreshold));
   fd.set("screening_threshold", String(draft.screeningThreshold));
   fd.set("interview_persona", draft.interviewPersona);
 
@@ -348,6 +361,17 @@ export function draftToFormData(draft: CampaignDraft): FormData {
   fd.set("rubrics_json", JSON.stringify(draft.rubrics));
   fd.set("sla_timers_json", JSON.stringify(draft.slaTimers));
   fd.set("reviewers_json", JSON.stringify(draft.reviewers));
+  // Only questions that would survive the server-side schema. safeParseJsonArray
+  // drops the WHOLE array on any invalid element, so one half-typed question
+  // would silently discard every good one with it.
+  fd.set(
+    "screening_questions_json",
+    JSON.stringify(
+      draft.screeningQuestions
+        .map((q) => ({ prompt: q.prompt.trim() }))
+        .filter((q) => q.prompt.length >= 10),
+    ),
+  );
   fd.set("availability_rules_json", JSON.stringify([]));
 
   return fd;

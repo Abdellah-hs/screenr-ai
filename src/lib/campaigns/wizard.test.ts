@@ -169,6 +169,92 @@ describe("draftPreflight", () => {
   });
 });
 
+describe("draftToFormData — screening questions", () => {
+  /**
+   * Collected in the wizard rather than after creation. Approving anyone into
+   * screening needs questions, and the apply link goes live the moment the
+   * campaign does — so a campaign created without them can take applications
+   * it cannot act on.
+   */
+  it("carries the staged questions through to the server parser", () => {
+    const draft = validDraft({
+      screeningQuestions: [
+        { prompt: "Describe a system you scaled past its first design." },
+        { prompt: "What made you look outside your current role?" },
+      ],
+    });
+
+    const parsed = parseCampaignFormData(draftToFormData(draft));
+
+    expect(parsed.screeningQuestions).toEqual([
+      { prompt: "Describe a system you scaled past its first design." },
+      { prompt: "What made you look outside your current role?" },
+    ]);
+  });
+
+  it("creates a campaign with none when the recruiter skipped them", () => {
+    const parsed = parseCampaignFormData(draftToFormData(validDraft()));
+
+    expect(parsed.screeningQuestions).toEqual([]);
+  });
+
+  /**
+   * safeParseJsonArray drops the WHOLE array on any invalid element, so a
+   * half-typed question left in the draft would silently discard every good
+   * one alongside it. Filtering here keeps the rest.
+   */
+  it("drops a half-typed question without taking the good ones with it", () => {
+    const draft = validDraft({
+      screeningQuestions: [
+        { prompt: "Describe a system you scaled past its first design." },
+        { prompt: "why?" },
+      ],
+    });
+
+    const parsed = parseCampaignFormData(draftToFormData(draft));
+
+    expect(parsed.screeningQuestions).toEqual([
+      { prompt: "Describe a system you scaled past its first design." },
+    ]);
+  });
+
+  it("trims a question before staging it", () => {
+    const draft = validDraft({
+      screeningQuestions: [{ prompt: "   Tell us about a hard trade-off.   " }],
+    });
+
+    const parsed = parseCampaignFormData(draftToFormData(draft));
+
+    expect(parsed.screeningQuestions).toEqual([
+      { prompt: "Tell us about a hard trade-off." },
+    ]);
+  });
+});
+
+describe("draftToFormData — both score bars", () => {
+  /**
+   * The wizard predated the threshold split and sent only one number, which
+   * would have left the CV gate on its column default while the recruiter
+   * believed they had set it.
+   */
+  it("sends the resume and screening bars separately", () => {
+    const draft = validDraft({ resumeThreshold: 80, screeningThreshold: 55 });
+
+    const parsed = parseCampaignFormData(draftToFormData(draft));
+
+    expect(parsed.resume_threshold).toBe(80);
+    expect(parsed.screening_threshold).toBe(55);
+  });
+
+  it("does not let one bar stand in for the other", () => {
+    const draft = validDraft({ resumeThreshold: 90, screeningThreshold: 40 });
+
+    const parsed = parseCampaignFormData(draftToFormData(draft));
+
+    expect(parsed.resume_threshold).not.toBe(parsed.screening_threshold);
+  });
+});
+
 describe("draftToFormData", () => {
   it("produces a payload the server action's own parser accepts", () => {
     const draft = validDraft({

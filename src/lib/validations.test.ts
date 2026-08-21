@@ -291,6 +291,47 @@ describe('parseCampaignFormData', () => {
     expect(result.rubrics).toEqual([]);
   });
 
+  it('parses screening questions staged on the create form', () => {
+    const fd = buildFormData({
+      screening_questions_json: JSON.stringify([
+        { prompt: 'Describe a system you scaled past its first design.' },
+        { prompt: 'What made you look outside your current role?' },
+      ]),
+    });
+
+    const result = parseCampaignFormData(fd);
+
+    expect(result.screeningQuestions).toEqual([
+      { prompt: 'Describe a system you scaled past its first design.' },
+      { prompt: 'What made you look outside your current role?' },
+    ]);
+  });
+
+  it('returns no screening questions when the field is absent', () => {
+    const fd = buildFormData();
+    const result = parseCampaignFormData(fd);
+    expect(result.screeningQuestions).toEqual([]);
+  });
+
+  // An empty set is legal at creation: a recruiter without a job description
+  // yet cannot generate questions, and blocking creation on that is worse than
+  // the "no questions yet" banner the campaign page already shows.
+  it('accepts an explicitly empty screening question set', () => {
+    const fd = buildFormData({ screening_questions_json: '[]' });
+    const result = parseCampaignFormData(fd);
+    expect(result.screeningQuestions).toEqual([]);
+  });
+
+  it('drops a screening question set whose prompts are too short', () => {
+    const fd = buildFormData({
+      screening_questions_json: JSON.stringify([{ prompt: 'why?' }]),
+    });
+
+    const result = parseCampaignFormData(fd);
+
+    expect(result.screeningQuestions).toEqual([]);
+  });
+
   it('parses availability rules and the scalar interview-config fields', () => {
     const fd = buildFormData({
       interview_slot_minutes: '45',

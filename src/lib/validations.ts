@@ -179,7 +179,18 @@ export function parseCampaignFormData(formData: FormData) {
     z.array(availabilityRuleSchema)
   );
 
-  return { ...data, rubrics, slaTimers, reviewers, availabilityRules };
+  // Screening questions are staged on the create form and written in the same
+  // transaction as the campaign, so a campaign is never born in the state the
+  // detail page has to warn about ("no questions yet — candidates can't be
+  // approved into screening"). The draft schema allows an empty set: a
+  // recruiter who hasn't written a job description yet can't generate any, and
+  // blocking campaign creation on that is worse than the banner.
+  const screeningQuestions = safeParseJsonArray(
+    formData.get("screening_questions_json") as string,
+    screeningQuestionsDraftSchema
+  );
+
+  return { ...data, rubrics, slaTimers, reviewers, availabilityRules, screeningQuestions };
 }
 
 function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
@@ -314,6 +325,13 @@ export const screeningQuestionSchema = z.object({
 export const screeningQuestionsArraySchema = z
   .array(screeningQuestionSchema)
   .min(1, "At least one question is required")
+  .max(15, "Too many questions");
+
+// Same shape, but empty is legal. `saveScreeningQuestions` refuses an empty set
+// because wiping a live campaign's questions silently breaks the approve gate;
+// creating a campaign without them is a normal, recoverable starting point.
+export const screeningQuestionsDraftSchema = z
+  .array(screeningQuestionSchema)
   .max(15, "Too many questions");
 
 export const screeningAnswerSchema = z.object({

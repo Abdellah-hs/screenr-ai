@@ -7,16 +7,33 @@ import {
   generateScreeningQuestions,
   saveScreeningQuestions,
 } from "@/lib/actions/screening-questions";
+import { generateScreeningQuestionsFromDescription } from "@/lib/actions/ai-generate";
 
-interface EditableQuestion {
+export interface EditableQuestion {
   id?: string;
   prompt: string;
 }
 
 interface ScreeningQuestionsEditorProps {
-  campaignId: string;
+  /**
+   * Empty inside the create wizard, where the campaign row does not exist yet.
+   * Its absence is what makes the editor stage questions into `onChange`
+   * instead of saving them on their own.
+   */
+  campaignId?: string;
   initialQuestions: EditableQuestion[];
-  canGenerate: boolean;
+  canGenerate?: boolean;
+  /**
+   * Controlled mode, same contract as RubricEditor: pass `value` + `onChange`
+   * and the wizard owns the questions, so leaving the step cannot lose them.
+   */
+  value?: EditableQuestion[];
+  onChange?: (questions: EditableQuestion[]) => void;
+  /**
+   * The job description to draft from. The wizard holds it in its draft rather
+   * than in the DOM, so it has to be handed in — there is no field to read.
+   */
+  description?: string;
 }
 
 function clientId() {
@@ -24,14 +41,29 @@ function clientId() {
 }
 
 export default function ScreeningQuestionsEditor({
-  campaignId,
+  campaignId = "",
   initialQuestions,
-  canGenerate,
+  canGenerate = true,
+  value,
+  onChange,
+  description,
 }: ScreeningQuestionsEditorProps) {
+  const staged = !campaignId;
   const [open, setOpen] = useState(false);
-  const [questions, setQuestions] = useState<(EditableQuestion & { _key: string })[]>(
+  const [internal, setInternal] = useState<(EditableQuestion & { _key: string })[]>(
     () => initialQuestions.map((q) => ({ ...q, _key: q.id ?? clientId() }))
   );
+  const questions = value
+    ? value.map((q, i) => ({ ...q, _key: q.id ?? `sq-controlled-${i}` }))
+    : internal;
+
+  function setQuestions(
+    update: (prev: (EditableQuestion & { _key: string })[]) => (EditableQuestion & { _key: string })[],
+  ) {
+    const next = update(questions);
+    if (value === undefined) setInternal(next);
+    onChange?.(next.map((q) => ({ ...(q.id ? { id: q.id } : {}), prompt: q.prompt })));
+  }
   const [generating, startGenerate] = useTransition();
   const [saving, startSave] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -67,10 +99,18 @@ export default function ScreeningQuestionsEditor({
 
   function handleRegenerate() {
     setError(null);
+
+    if (staged && (description ?? "").trim().length < 10) {
+      setError("Write the job description first — the questions are drafted from it.");
+      return;
+    }
+
     startGenerate(async () => {
       try {
-        const generated = await generateScreeningQuestions(campaignId);
-        setQuestions(
+        const generated = staged
+          ? await generateScreeningQuestionsFromDescription((description ?? "").trim())
+          : await generateScreeningQuestions(campaignId);
+        setQuestions(() =>
           generated.map((q) => ({
             _key: clientId(),
             prompt: q.prompt,
@@ -89,7 +129,7 @@ export default function ScreeningQuestionsEditor({
     const cleaned = questions.map((q) => ({
       prompt: q.prompt.trim(),
     }));
-    if (cleaned.length === 0) {
+    if (!staged && cleaned.length === 0) {
       setError("Add at least one question before saving.");
       return;
     }
@@ -97,6 +137,14 @@ export default function ScreeningQuestionsEditor({
       setError("Every question must be at least 10 characters.");
       return;
     }
+
+    if (staged) {
+      // Nothing to persist yet — the wizard carries these into createCampaign,
+      // which writes them in the same transaction as the campaign.
+      setOpen(false);
+      return;
+    }
+
     startSave(async () => {
       try {
         await saveScreeningQuestions(campaignId, cleaned);

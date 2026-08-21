@@ -17,6 +17,7 @@ import {
 } from "@/lib/campaigns/wizard";
 import { DescriptionField } from "./description-field";
 import RubricEditor from "./rubric-editor";
+import ScreeningQuestionsEditor from "./screening-questions-editor";
 import SlaTimersEditor from "./sla-timers-editor";
 import TeamReviewersEditor from "./team-reviewers-editor";
 import InterviewAvailabilityEditor from "./interview-availability-editor";
@@ -179,7 +180,37 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
       </section>
 
       <section className={`${CARD} flex flex-col gap-[18px]`}>
+        {/* Two bars, and they grade different things: a resume ranking orders
+            CVs against the rubric, a screening score grades spoken answers.
+            One box would put both stages on the same fail line, which is the
+            bug the split fixed. */}
         <div className="grid grid-cols-1 items-start gap-4 sm:[grid-template-columns:200px_minmax(0,1fr)]">
+          <div>
+            <label htmlFor="resume_threshold" className={LABEL}>
+              Resume threshold
+            </label>
+            <input
+              id="resume_threshold"
+              name="resume_threshold"
+              type="number"
+              min={0}
+              max={100}
+              value={draft.resumeThreshold}
+              onChange={(e) =>
+                patch({ resumeThreshold: parseInt(e.target.value) || 0 })
+              }
+              className={`${FIELD} tabular-nums`}
+            />
+            {/* Says what it does not do as well. A missing must-have rejects in
+                every mode, so "rejects nobody here" would be true of this
+                number and false about the stage. */}
+            <p className={HINT}>
+              Ranking 0–100. A missing must-have rejects whatever this says.
+            </p>
+          </div>
+
+          <div className="sm:col-span-2" />
+
           <div>
             <label htmlFor="screening_threshold" className={LABEL}>
               Screening threshold
@@ -353,10 +384,25 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
 
 export function StepRubric({ draft, patch }: { draft: CampaignDraft; patch: Patch }) {
   return (
-    <div className={CARD}>
-      <RubricEditor
-        value={draft.rubrics}
-        onChange={(rubrics) => patch({ rubrics })}
+    <div className="flex flex-col gap-4">
+      <div className={CARD}>
+        <RubricEditor
+          value={draft.rubrics}
+          onChange={(rubrics) => patch({ rubrics })}
+          description={draft.description}
+        />
+      </div>
+
+      {/* Asked here rather than after the campaign exists. Approving anyone
+          into screening needs questions, and the apply link goes live the
+          moment the campaign does — so collecting them later means a campaign
+          that can take applications it cannot act on. Still optional: a
+          recruiter without a description yet cannot draft any, and blocking
+          creation on that is worse than the banner on the campaign page. */}
+      <ScreeningQuestionsEditor
+        initialQuestions={[]}
+        value={draft.screeningQuestions}
+        onChange={(screeningQuestions) => patch({ screeningQuestions })}
         description={draft.description}
       />
     </div>

@@ -17,6 +17,7 @@ import {
   generateSocialPosts as aiGenerateSocialPosts,
   type SocialPosts,
 } from "@/lib/services/openai";
+import { generateQuestionsForRole } from "@/lib/services/screening-questions";
 
 const AI_GEN_LIMIT = { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 };
 
@@ -37,6 +38,30 @@ export async function generateRubricDimensions(
   checkRateLimit(userId, AI_GEN_LIMIT);
   const validatedDescription = aiDescriptionSchema.parse(description);
   return aiGenerateRubricDimensions(validatedDescription, campaignId);
+}
+
+/**
+ * Draft screening questions from a job description alone — no campaign row
+ * needed. This is the create-form counterpart to
+ * `generateScreeningQuestions(campaignId)` in `actions/screening-questions.ts`,
+ * which reads the description back out of the database and so cannot run before
+ * the campaign exists. Advisory only: it returns questions for the recruiter to
+ * edit, and `createCampaign` is what persists them.
+ */
+export async function generateScreeningQuestionsFromDescription(
+  description: string
+): Promise<{ prompt: string }[]> {
+  const userId = await requireUserId();
+  checkRateLimit(userId, AI_GEN_LIMIT);
+  const validatedDescription = aiDescriptionSchema.parse(description);
+  return generateQuestionsForRole({
+    // No campaign means no active resume rubric to ground against, so the
+    // description is the whole input — the same trade `generateScreeningCriteria`
+    // already makes on this form.
+    jobDescription: validatedDescription,
+    screeningCriteria: [],
+    count: 5,
+  });
 }
 
 /**
