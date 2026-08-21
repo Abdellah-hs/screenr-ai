@@ -152,7 +152,7 @@ beforeEach(() => {
   mockFetchApp.mockResolvedValue(appRow());
   mockFetchResponse.mockResolvedValue(responseRow());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mockFetchQuestions.mockResolvedValue([{ id: "q1", prompt: "Describe a scaling problem you solved.", is_required: true } as any]);
+  mockFetchQuestions.mockResolvedValue([{ id: "q1", prompt: "Describe a scaling problem you solved." } as any]);
   mockCreateGrant.mockResolvedValue(GRANT);
   mockTransition.mockResolvedValue(undefined);
   mockSystemTransition.mockResolvedValue(undefined);

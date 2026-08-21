@@ -1,25 +1,14 @@
 import { z } from "zod/v4";
 
 /**
- * How much proof of a criterion the resume actually contains.
- *
- * This is the whole of what the model is allowed to say. It never scores, never
- * weighs, never ranks and never recommends — it reads a document and reports
- * what it found, in a vocabulary with fixed meanings. Every number downstream
- * comes from this label via a lookup table, which is what makes two runs over
- * the same CV produce the same result: the model would have to change its
- * *reading* to change the outcome, not merely its arithmetic.
+ * The evidence vocabulary is shared with the screening stage — see
+ * `@/lib/scoring/evidence-levels`. Re-exported here so every consumer of this
+ * package keeps its existing import, while the enum itself has exactly one
+ * definition and the two stages cannot drift onto different ladders.
  */
-export const EvidenceLevelSchema = z.enum([
-  "not_present",
-  "unclear",
-  "weak",
-  "partial",
-  "strong",
-  "very_strong",
-]);
+import { EvidenceLevelSchema, type EvidenceLevel } from "@/lib/scoring/evidence-levels";
 
-export type EvidenceLevel = z.infer<typeof EvidenceLevelSchema>;
+export { EvidenceLevelSchema, type EvidenceLevel };
 
 export const EvidenceSourceSectionSchema = z.enum([
   "headline",

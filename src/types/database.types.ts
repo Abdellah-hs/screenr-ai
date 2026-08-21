@@ -933,7 +933,6 @@ export type Database = {
           campaign_id: string
           created_at: string
           id: string
-          is_required: boolean
           prompt: string
           sort_order: number
           updated_at: string
@@ -942,7 +941,6 @@ export type Database = {
           campaign_id: string
           created_at?: string
           id?: string
-          is_required?: boolean
           prompt: string
           sort_order?: number
           updated_at?: string
@@ -951,7 +949,6 @@ export type Database = {
           campaign_id?: string
           created_at?: string
           id?: string
-          is_required?: boolean
           prompt?: string
           sort_order?: number
           updated_at?: string

@@ -210,7 +210,6 @@ export default async function CampaignDetailPage({
           initialQuestions={screeningQuestions.map((q) => ({
             id: q.id,
             prompt: q.prompt,
-            is_required: q.is_required,
           }))}
           canGenerate={(campaign.description?.trim().length ?? 0) >= 10}
         />

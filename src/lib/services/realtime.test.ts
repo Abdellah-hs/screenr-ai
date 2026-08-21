@@ -6,8 +6,8 @@ import { buildScreeningInstructions } from "./realtime";
 // because the anti-gaming interview design lives in its wording.
 describe("buildScreeningInstructions", () => {
   const questions = [
-    { prompt: "Tell me about a hard scaling problem you solved.", is_required: true },
-    { prompt: "What is your favorite tool and why?", is_required: false },
+    { prompt: "Tell me about a hard scaling problem you solved." },
+    { prompt: "What is your favorite tool and why?" },
   ];
 
   it("includes every question prompt as an internal topic", () => {
@@ -17,11 +17,25 @@ describe("buildScreeningInstructions", () => {
     expect(out).toContain("What is your favorite tool and why?");
   });
 
-  it("marks required vs optional topics", () => {
+  /**
+   * Replaces a test that asserted [required] / [optional] markers. Screening
+   * has no must-have gate, and the overall score is the mean over EVERY
+   * question — so a topic the agent skips scores 0 against the candidate.
+   * Telling the interviewer some topics were optional was telling it that
+   * costing someone points was acceptable pacing.
+   */
+  it("tells the agent to cover every topic, with no optional ones", () => {
     const out = buildScreeningInstructions({ questions });
 
-    expect(out).toMatch(/hard scaling problem.*\[required\]/);
-    expect(out).toMatch(/favorite tool.*\[optional\]/);
+    expect(out).not.toMatch(/\[required\]|\[optional\]/);
+    expect(out).toMatch(/cover EVERY one of these/);
+  });
+
+  it("explains that a skipped topic costs the candidate", () => {
+    const out = buildScreeningInstructions({ questions });
+
+    expect(out).toMatch(/scored as unanswered and counts against the candidate/);
+    expect(out).toMatch(/an unasked question scores zero/);
   });
 
   it("instructs the agent to ask unscripted follow-ups and not read topics verbatim", () => {

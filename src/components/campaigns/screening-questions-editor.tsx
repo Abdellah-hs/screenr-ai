@@ -11,7 +11,6 @@ import {
 interface EditableQuestion {
   id?: string;
   prompt: string;
-  is_required: boolean;
 }
 
 interface ScreeningQuestionsEditorProps {
@@ -52,7 +51,7 @@ export default function ScreeningQuestionsEditor({
   function addQuestion() {
     setQuestions((prev) => [
       ...prev,
-      { _key: clientId(), prompt: "", is_required: true },
+      { _key: clientId(), prompt: "" },
     ]);
   }
 
@@ -66,12 +65,6 @@ export default function ScreeningQuestionsEditor({
     );
   }
 
-  function updateRequired(key: string, is_required: boolean) {
-    setQuestions((prev) =>
-      prev.map((q) => (q._key === key ? { ...q, is_required } : q))
-    );
-  }
-
   function handleRegenerate() {
     setError(null);
     startGenerate(async () => {
@@ -81,7 +74,6 @@ export default function ScreeningQuestionsEditor({
           generated.map((q) => ({
             _key: clientId(),
             prompt: q.prompt,
-            is_required: q.is_required,
           }))
         );
       } catch (err) {
@@ -96,7 +88,6 @@ export default function ScreeningQuestionsEditor({
     setError(null);
     const cleaned = questions.map((q) => ({
       prompt: q.prompt.trim(),
-      is_required: q.is_required,
     }));
     if (cleaned.length === 0) {
       setError("Add at least one question before saving.");
@@ -145,11 +136,6 @@ export default function ScreeningQuestionsEditor({
             {questions.map((q) => (
               <li key={q._key} className="text-sm text-[#111827]">
                 <span>{q.prompt}</span>
-                {q.is_required && (
-                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-red-50 text-red-700 text-[10px] font-medium uppercase">
-                    Required
-                  </span>
-                )}
               </li>
             ))}
           </ol>
@@ -281,15 +267,6 @@ export default function ScreeningQuestionsEditor({
                   </svg>
                 </button>
               </div>
-              <label className="mt-2 ml-8 inline-flex items-center gap-1.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={q.is_required}
-                  onChange={(e) => updateRequired(q._key, e.target.checked)}
-                  className="w-4 h-4 rounded border-[#D1D5DB] text-[#0369A1] cursor-pointer focus:ring-[#0369A1] focus-visible:ring-2"
-                />
-                <span className="text-xs text-[#6B7280]">Required answer</span>
-              </label>
             </div>
           ))}
         </div>

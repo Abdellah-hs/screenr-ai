@@ -225,11 +225,6 @@ export default function ScreeningThread({
               </span>
               <p className="text-sm font-medium text-[#111827] mb-1">
                 {q.prompt}
-                {q.is_required && (
-                  <span className="ml-2 text-[10px] font-medium text-red-600 uppercase">
-                    Required
-                  </span>
-                )}
               </p>
 
               {answer?.answer_text || (isVoice && answer?.score != null) ? (

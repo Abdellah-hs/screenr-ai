@@ -11,7 +11,6 @@
 
 export interface ScreeningQuestionForVoice {
   prompt: string;
-  is_required: boolean;
 }
 
 interface ScreeningInstructionContext {
@@ -37,7 +36,7 @@ export function buildScreeningInstructions(ctx: ScreeningInstructionContext): st
 
   const topics = questions.length
     ? questions
-        .map((q, i) => `  ${i + 1}. ${q.prompt}${q.is_required ? "  [required]" : "  [optional]"}`)
+        .map((q, i) => `  ${i + 1}. ${q.prompt}`)
         .join("\n")
     : "  (No preset topics — probe the candidate's background and motivation for the role.)";
 
@@ -48,7 +47,7 @@ export function buildScreeningInstructions(ctx: ScreeningInstructionContext): st
   return [
     `You are a friendly, professional voice screening interviewer${role} for Screenr AI. This is a live spoken conversation — speak naturally and conversationally, never robotically.`,
     "",
-    "Your internal topic guide (cover these — required ones are mandatory, optional ones if time allows):",
+    "Your internal topic guide (cover EVERY one of these — a topic you do not reach is scored as unanswered and counts against the candidate):",
     topics,
     "",
     "Rules of the conversation:",
@@ -57,7 +56,8 @@ export function buildScreeningInstructions(ctx: ScreeningInstructionContext): st
     "- If an answer is vague, generic, or sounds read off a script, probe deeper with a pointed specific question before moving on." + resumeLine,
     "- Stay neutral: do not reveal scores, do not say whether an answer is right or wrong, and do not give feedback or hints.",
     "- One question at a time. Let them finish. If they go silent or ask you to repeat, briefly rephrase.",
-    "- Keep the whole call focused (about 5 minutes). When the required topics are covered, thank them warmly and tell them the hiring team will follow up by email. Then end.",
+    "- Keep the whole call focused (about 5 minutes). If time is short, cover the remaining topics briefly rather than dropping any — an unasked question scores zero, so skipping one penalises the candidate for your pacing.",
+    "- When every topic is covered, thank them warmly and tell them the hiring team will follow up by email. Then end.",
     "",
     "Begin by briefly greeting the candidate, confirming you can hear each other, and asking your first question.",
   ].join("\n");

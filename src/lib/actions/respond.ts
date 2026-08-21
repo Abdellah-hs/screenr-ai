@@ -295,7 +295,7 @@ export async function startCandidateVoiceScreening(
 
   const instructions = buildScreeningInstructions({
     jobTitle: app.campaign_title,
-    questions: questions.map((q) => ({ prompt: q.prompt, is_required: q.is_required })),
+    questions: questions.map((q) => ({ prompt: q.prompt })),
   });
 
   return createScreeningRoomGrant({ applicationId: application_id, instructions });

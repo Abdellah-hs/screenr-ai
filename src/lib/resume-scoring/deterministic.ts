@@ -14,33 +14,20 @@ import {
 import type { ValidatedResumeEvidence } from "./validate";
 
 /**
- * Evidence level → score. A lookup table, not a judgement.
+ * The level → score table is shared with the screening stage
+ * (`@/lib/scoring/evidence-levels`) so a `strong` reading means the same number
+ * wherever it was read. Re-exported so this package's public surface is
+ * unchanged.
  *
- * This is the seam where the AI stops and the machine starts. The model chose a
- * label; every number after this point is a consequence of that label and
- * nothing else, so the same reading of the same CV cannot produce two different
- * outcomes. Changing these numbers changes hiring decisions, so the constant is
- * versioned (RESUME_SCORING_RULES_VERSION) and any edit invalidates cached
- * results rather than silently re-grading history.
- *
- * `unclear` scores 0 alongside `not_present` on purpose: "we could not tell" is
- * not partial credit.
+ * RESUME_SCORING_RULES_VERSION below still versions the *resume* rules that
+ * consume it; an edit to the shared table must bump it, exactly as before.
  */
-export const EVIDENCE_LEVEL_SCORE = {
-  not_present: 0,
-  unclear: 0,
-  weak: 25,
-  partial: 55,
-  strong: 80,
-  very_strong: 100,
-} as const;
+import { EVIDENCE_LEVEL_SCORE, scoreEvidenceLevel } from "@/lib/scoring/evidence-levels";
+
+export { EVIDENCE_LEVEL_SCORE, scoreEvidenceLevel };
 
 /** Version of the deterministic rules below. Part of the cache key. */
 export const RESUME_SCORING_RULES_VERSION = "v1_must_have_gate";
-
-export function scoreEvidenceLevel(level: keyof typeof EVIDENCE_LEVEL_SCORE): number {
-  return EVIDENCE_LEVEL_SCORE[level];
-}
 
 export interface ScoredCriterion {
   id: string;

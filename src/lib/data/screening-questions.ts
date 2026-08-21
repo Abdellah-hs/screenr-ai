@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
+import type { EvidenceLevel } from "@/lib/scoring/evidence-levels";
 import type { ApplicationState } from "@/lib/constants";
 import type { Json } from "@/types/database.types";
 import type { ProctoringReport } from "@/lib/proctoring/incidents";
@@ -179,7 +180,6 @@ export interface ScreeningQuestionRow {
   id: string;
   campaign_id: string;
   prompt: string;
-  is_required: boolean;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -198,6 +198,14 @@ export interface ScoredAnswerRow {
    */
   evidence_quote?: string;
   evidence_turn_index?: number | null;
+  /**
+   * The evidence level this question's score was derived from, AFTER quote
+   * verification. `score` is a consequence of this label and nothing else, so
+   * storing only the number would leave a reader unable to tell a verified
+   * "strong" from a downgraded one. Absent on responses scored before the
+   * evidence model, and on the legacy typed-answer path.
+   */
+  evidence_level?: EvidenceLevel;
 }
 
 /** One spoken turn of a voice-screening call, in conversation order. */
@@ -252,7 +260,7 @@ export async function fetchScreeningQuestionsByCampaignId(
 
 export async function replaceScreeningQuestions(
   campaignId: string,
-  questions: { prompt: string; is_required: boolean }[]
+  questions: { prompt: string }[]
 ): Promise<ScreeningQuestionRow[]> {
   const supabase = await createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -275,7 +283,6 @@ export async function replaceScreeningQuestions(
   const rows = questions.map((q, i) => ({
     campaign_id: campaignId,
     prompt: q.prompt,
-    is_required: q.is_required,
     sort_order: i,
   }));
 
@@ -584,6 +591,7 @@ export async function saveAnswerScores(args: {
     rationale: string;
     evidence_quote?: string;
     evidence_turn_index?: number | null;
+    evidence_level?: EvidenceLevel;
   }[];
   rubricVersion: number | null;
   audit: ScreeningScoreAuditFields;
@@ -622,6 +630,9 @@ export async function saveAnswerScores(args: {
             evidence_turn_index: s.evidence_turn_index ?? null,
           }
         : {}),
+      // Written even when no quote survived: "we read this and found nothing"
+      // is exactly the case where the bare 0 is least self-explanatory.
+      ...(s.evidence_level ? { evidence_level: s.evidence_level } : {}),
     };
   });
 

@@ -11,10 +11,16 @@ vi.mock("@/lib/services/email", () => ({ sendEmail: vi.fn() }));
 vi.mock("@/lib/services/email-templates/screening-questions", () => ({
   buildScreeningQuestionsEmail: vi.fn(),
 }));
+// The voice scorer now lives in its own module and builds an OpenAI client at
+// import time, so it has to be mocked even by tests that never score a voice
+// response — otherwise importing the action under test throws on a missing key.
+vi.mock("@/lib/services/screening-evidence", () => ({
+  extractTranscriptEvidence: vi.fn(),
+  buildCandidateSpeech: vi.fn(() => ""),
+}));
 vi.mock("@/lib/services/screening-questions", () => ({
   generateQuestionsForRole: vi.fn(),
   scoreAnswers: vi.fn(),
-  scoreTranscript: vi.fn(),
 }));
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
@@ -41,7 +47,7 @@ import { revalidatePath } from "next/cache";
 import { requireUserId } from "@/lib/auth/guards";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
 import { replaceScreeningQuestions } from "@/lib/data/screening-questions";
-import { scoreAnswers, scoreTranscript } from "@/lib/services/screening-questions";
+import { scoreAnswers } from "@/lib/services/screening-questions";
 import {
   fetchCampaignScoringConfig,
   fetchActiveRubricVersion,
@@ -57,6 +63,10 @@ import {
   type VoiceTranscriptTurn,
 } from "@/lib/data/screening-questions";
 import type { AnswerScoringEvidence } from "@/lib/services/screening-questions";
+import {
+  buildCandidateSpeech,
+  extractTranscriptEvidence,
+} from "@/lib/services/screening-evidence";
 
 const mockRequireUserId = vi.mocked(requireUserId);
 const mockFetchApp = vi.mocked(fetchApplicationForScreeningSend);
@@ -65,7 +75,8 @@ const mockFetchResponse = vi.mocked(fetchScreeningResponseByApplicationId);
 const mockFetchConfig = vi.mocked(fetchCampaignScoringConfig);
 const mockFetchRubricVersion = vi.mocked(fetchActiveRubricVersion);
 const mockScoreAnswers = vi.mocked(scoreAnswers);
-const mockScoreTranscript = vi.mocked(scoreTranscript);
+const mockExtractEvidence = vi.mocked(extractTranscriptEvidence);
+const mockCandidateSpeech = vi.mocked(buildCandidateSpeech);
 const mockSaveScores = vi.mocked(saveAnswerScores);
 const mockTransition = vi.mocked(transitionApplication);
 const mockAssertActive = vi.mocked(assertCampaignActiveById);
@@ -76,7 +87,6 @@ const question: ScreeningQuestionRow = {
   id: "q1",
   campaign_id: "camp-1",
   prompt: "Describe a scaling problem you solved.",
-  is_required: true,
   sort_order: 0,
   created_at: "2026-06-03T09:00:00.000Z",
   updated_at: "2026-06-03T09:00:00.000Z",
@@ -117,6 +127,35 @@ const evidence: AnswerScoringEvidence = {
   promptVersion: "v1_voice_screening_scoring",
 };
 
+/**
+ * The voice model returns a LEVEL and a verbatim quote — never a number. The
+ * 80 that reaches the decision rule below is derived from "strong" by
+ * `src/lib/screening-scoring/`, which is the whole point of the change.
+ */
+const transcriptEvidence = {
+  evidence: {
+    answers: [
+      {
+        question_id: "q1",
+        evidence_level: "strong" as const,
+        evidence_items: [
+          {
+            quote: "We sharded the orders table by tenant",
+            turn_index: 1,
+            explanation: "A concrete scaling change the candidate made.",
+          },
+        ],
+        notes: "Sharding by tenant — specific.",
+      },
+    ],
+    extraction_summary: "Concrete scaling example.",
+  },
+  rawOutput: '{"answers":[{"evidence_level":"strong"}]}',
+  model: "gpt-4o-mini",
+  promptVersion: "v3_screening_evidence",
+  skipped: false,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockRequireUserId.mockResolvedValue("user-1");
@@ -142,7 +181,9 @@ beforeEach(() => {
   });
   mockFetchRubricVersion.mockResolvedValue(3);
   mockScoreAnswers.mockResolvedValue({ ...evidence, promptVersion: "v1_screening_scoring" });
-  mockScoreTranscript.mockResolvedValue(evidence);
+  mockExtractEvidence.mockResolvedValue(transcriptEvidence);
+  // The real one is pure; the action passes its output to quote verification.
+  mockCandidateSpeech.mockReturnValue("We sharded the orders table by tenant.");
   mockSaveScores.mockResolvedValue(undefined);
   mockTransition.mockResolvedValue(undefined);
 });
@@ -152,13 +193,76 @@ describe("scoreScreeningAnswers — voice transcript", () => {
     mockFetchResponse.mockResolvedValue(responseRow({ transcript }));
   });
 
-  it("scores the transcript (not typed answers) when a transcript is present", async () => {
+  it("reads the transcript (not typed answers) when a transcript is present", async () => {
     await scoreScreeningAnswers(APP_ID);
 
-    expect(mockScoreTranscript).toHaveBeenCalledWith(
+    expect(mockExtractEvidence).toHaveBeenCalledWith(
       expect.objectContaining({ transcript }),
     );
     expect(mockScoreAnswers).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The change this suite exists to protect: nothing the model returns is a
+   * number. "strong" is worth 80 because the deterministic table says so, and
+   * that is the figure the decision rule and the stored score both see.
+   */
+  it("derives the score from the evidence level, not from the model", async () => {
+    await scoreScreeningAnswers(APP_ID);
+
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.overall.score).toBe(80);
+    expect(saved.perAnswer[0].score).toBe(80);
+  });
+
+  it("stores the verified quote so the score traces back to the transcript", async () => {
+    await scoreScreeningAnswers(APP_ID);
+
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.perAnswer[0].evidence_quote).toBe("We sharded the orders table by tenant");
+    expect(saved.perAnswer[0].evidence_turn_index).toBe(1);
+  });
+
+  it("stores the level the score was derived from, not just the number", async () => {
+    await scoreScreeningAnswers(APP_ID);
+
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.perAnswer[0].evidence_level).toBe("strong");
+  });
+
+  it("stores the level even when nothing could be verified", async () => {
+    mockCandidateSpeech.mockReturnValue("Something else entirely.");
+
+    await scoreScreeningAnswers(APP_ID);
+
+    // A bare 0 is least self-explanatory precisely here: "unclear" says the
+    // claim failed verification, not that the candidate said nothing.
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.perAnswer[0].evidence_level).toBe("unclear");
+  });
+
+  it("records which scoring rules produced the number", async () => {
+    await scoreScreeningAnswers(APP_ID);
+
+    const snapshot = mockSaveScores.mock.calls[0][0].audit.inputSnapshot as Record<string, unknown>;
+    expect(snapshot.scoring_rules_version).toBe("v1_evidence_levels");
+    expect(snapshot.validation_warnings).toEqual([]);
+  });
+
+  it("drops an unverifiable quote and scores the question as no evidence", async () => {
+    mockCandidateSpeech.mockReturnValue("Something else entirely.");
+
+    await scoreScreeningAnswers(APP_ID);
+
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.perAnswer[0].score).toBe(0);
+    expect(saved.perAnswer[0].evidence_quote).toBeUndefined();
+    // Two distinct facts are recorded, not one: the quote failed verification,
+    // and the level it was supporting was therefore downgraded.
+    const warnings = (saved.audit.inputSnapshot as Record<string, unknown>)
+      .validation_warnings as string[];
+    expect(warnings.some((w) => /could not be found/.test(w))).toBe(true);
+    expect(warnings.some((w) => /downgraded/.test(w))).toBe(true);
   });
 
   it("persists the scripted-cadence signal as voice-modality audit evidence", async () => {
@@ -188,7 +292,7 @@ describe("scoreScreeningAnswers — legacy text answers", () => {
     await scoreScreeningAnswers(APP_ID);
 
     expect(mockScoreAnswers).toHaveBeenCalled();
-    expect(mockScoreTranscript).not.toHaveBeenCalled();
+    expect(mockExtractEvidence).not.toHaveBeenCalled();
     const saved = mockSaveScores.mock.calls[0][0];
     expect((saved.audit.inputSnapshot as Record<string, unknown>).modality).toBe("text");
   });
@@ -199,7 +303,7 @@ describe("scoreScreeningAnswers — guards", () => {
     mockFetchResponse.mockResolvedValue(responseRow({ status: "sent" }));
 
     await expect(scoreScreeningAnswers(APP_ID)).rejects.toThrow(/hasn't submitted/i);
-    expect(mockScoreTranscript).not.toHaveBeenCalled();
+    expect(mockExtractEvidence).not.toHaveBeenCalled();
     expect(mockScoreAnswers).not.toHaveBeenCalled();
   });
 
@@ -215,7 +319,7 @@ describe("scoreScreeningAnswers — guards", () => {
     );
 
     await expect(scoreScreeningAnswers(APP_ID)).rejects.toThrow(/paused/i);
-    expect(mockScoreTranscript).not.toHaveBeenCalled();
+    expect(mockExtractEvidence).not.toHaveBeenCalled();
     expect(mockScoreAnswers).not.toHaveBeenCalled();
   });
 });
@@ -228,11 +332,11 @@ describe("saveScreeningQuestions", () => {
     vi.mocked(replaceScreeningQuestions).mockResolvedValue([]);
 
     await saveScreeningQuestions(CAMPAIGN_ID, [
-      { prompt: "Describe a scaling problem you solved recently.", is_required: true },
+      { prompt: "Describe a scaling problem you solved recently." },
     ]);
 
     expect(vi.mocked(replaceScreeningQuestions)).toHaveBeenCalledWith(CAMPAIGN_ID, [
-      { prompt: "Describe a scaling problem you solved recently.", is_required: true },
+      { prompt: "Describe a scaling problem you solved recently." },
     ]);
     // "layout" is the regression under test: candidate detail pages under the
     // campaign render the question set (screening thread, HITL approve gate)
