@@ -12,6 +12,7 @@ import {
   calculateScreeningScore,
   validateScreeningEvidence,
   SCREENING_SCORING_RULES_VERSION,
+  type EvidenceLevel,
   type ScoredScreeningAnswer,
 } from "@/lib/screening-scoring";
 import { analyzeTranscriptCadence } from "@/lib/screening/transcript-cadence";
@@ -228,6 +229,7 @@ interface ScreeningScoringOutput {
     rationale: string;
     evidence_quote?: string;
     evidence_turn_index?: number | null;
+    evidence_level?: EvidenceLevel;
   }[];
   model: string;
   promptVersion: string;
@@ -283,6 +285,7 @@ function toPersistedAnswer(answer: ScoredScreeningAnswer) {
     question_id: answer.question_id,
     score: answer.score,
     rationale,
+    evidence_level: answer.evidence_level,
     // Only attached when a quote actually survived verification — the UI
     // distinguishes "we looked and found nothing" from "this predates evidence
     // capture", and writing an empty quote would collapse the two.

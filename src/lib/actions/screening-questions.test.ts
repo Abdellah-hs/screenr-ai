@@ -224,6 +224,24 @@ describe("scoreScreeningAnswers — voice transcript", () => {
     expect(saved.perAnswer[0].evidence_turn_index).toBe(1);
   });
 
+  it("stores the level the score was derived from, not just the number", async () => {
+    await scoreScreeningAnswers(APP_ID);
+
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.perAnswer[0].evidence_level).toBe("strong");
+  });
+
+  it("stores the level even when nothing could be verified", async () => {
+    mockCandidateSpeech.mockReturnValue("Something else entirely.");
+
+    await scoreScreeningAnswers(APP_ID);
+
+    // A bare 0 is least self-explanatory precisely here: "unclear" says the
+    // claim failed verification, not that the candidate said nothing.
+    const saved = mockSaveScores.mock.calls[0][0];
+    expect(saved.perAnswer[0].evidence_level).toBe("unclear");
+  });
+
   it("records which scoring rules produced the number", async () => {
     await scoreScreeningAnswers(APP_ID);
 
