@@ -661,11 +661,53 @@ Two separate things were wrong, and the second is the worse one:
 - **The scoring unit is the rubric dimension**, read across the WHOLE
   transcript. A candidate who evidences a competency while answering some other
   question has evidenced it.
-- **The overall is the weighted mean over every dimension, covered or not.** A
-  competency the interview never reached scores 0 and stays in the denominator,
-  exactly as at screening: dropping it would let a candidate who evidenced one
-  thing brilliantly and never touched the rest outscore one who covered
-  everything.
+- **The overall is the weighted mean over the dimensions the interview actually
+  REACHED**, re-normalised across them (decision 2026-08-28, revised same day).
+  A competency nobody asked about is left out rather than scored 0. This is the
+  one place the interview deliberately diverges from screening, and the
+  difference is upstream rather than a matter of taste:
+
+  | | Screening | Interview |
+  | --- | --- | --- |
+  | Where questions come from | drafted FROM the rubric | improvised from the candidate's CV |
+  | Coverage guaranteed? | `checkScreeningQuestionCoverage`, a hard blocker | nothing, by design |
+  | An unprobed dimension is | a fixable authoring error | expected behaviour |
+  | So scoring it 0 | exposes the mistake | blames the candidate for a question nobody asked |
+
+  **The CV-anchoring is what makes the divergence correct, and it is not
+  incidental.** "You said you rebuilt the ingest pipeline — what broke?" is hard
+  to bluff; "tell me about system design" is easy. Probing claims is what makes
+  interview evidence worth grading at all, so no mechanism aims a question at
+  each dimension and none should be added.
+
+  **A screening-style coverage check cannot exist here** — that one matches a
+  question LIST against dimensions, and interview questions are improvised, so
+  there is no list. A question-count check was considered and rejected for the
+  same reason the per-question scorer was: evidence is read across the whole
+  transcript, one answer can evidence three dimensions, so "6 dimensions > 5
+  questions" is not a shortfall.
+
+- **What this gives up, and the remedy.** A candidate who evidenced one
+  competency brilliantly and touched nothing else now outranks one who covered
+  everything adequately. A test pins that exact inversion so it cannot be
+  forgotten. `covered_count` / `covered_weight` are therefore **not optional**:
+  they are computed, persisted on the score AND the audit row, and rendered
+  above the breakdown, because 100 from one dimension of five and 80 from all
+  five are otherwise indistinguishable. The remedy is disclosure rather than
+  arithmetic, and that works here **only because the interview never gates** —
+  suppressing a thin score would be gate-like behaviour on the one stage that
+  has no gate.
+
+- **`not_present` is the only excluded level, and the prompt had to be hardened
+  for it.** Once an unreached dimension is dropped rather than scored 0,
+  `not_present` stops being the maximum penalty and becomes *better* for the
+  candidate than `weak` — a new incentive to under-report. So `sc`-style
+  wording was added spelling out that it describes the CONVERSATION ("the topic
+  never came up") and never the quality of an answer; a candidate who was asked
+  and said "I don't know" is `unclear`, which is assessed and scores 0.
+  Validation still downgrades only to `unclear`, never to `not_present`, so the
+  validator can never drop a dimension out of the denominator and raise a score.
+  `INTERVIEW_EVIDENCE_PROMPT_VERSION` is `v3_rubric_dimension_evidence`.
 - **The ladder is shared; the DEFINITIONS are not.**
   `INTERVIEW_EVIDENCE_LEVEL_DEFINITIONS` asks for more at every rung than the
   screening wording, and a test asserts the two are never identical. A single
@@ -690,8 +732,7 @@ Two separate things were wrong, and the second is the worse one:
   actually graded in. The two overalls are not comparable — one an unweighted
   mean of model-chosen competencies, the other a weighted mean over the
   recruiter's rubric — so re-score to move a candidate onto the current rules.
-- `INTERVIEW_SCORING_RULES_VERSION` is `v1_weighted_dimensions`; the prompt is
-  `v2_rubric_dimension_evidence`. The audit snapshot also records the rubric it
+- `INTERVIEW_SCORING_RULES_VERSION` is `v2_covered_dimensions_only`. The audit snapshot also records the rubric it
   graded against and whether the default set stood in, so a stored score cannot
   later be mistaken for one graded against a rubric added afterwards.
 - **`strengths` / `concerns` are gone** (empty arrays). They came from the

@@ -130,6 +130,8 @@ export async function runInterviewScoring(
     dimensions: [],
     dimension_scores: scored.dimensions,
     rules_version: INTERVIEW_SCORING_RULES_VERSION,
+    covered_count: scored.covered_count,
+    covered_weight: scored.covered_weight,
     validation_warnings: scored.validation_warnings,
     strengths: [],
     concerns: [],
@@ -160,6 +162,10 @@ export async function runInterviewScoring(
             weight: d.weight,
           })),
           used_default_rubric: rubricDimensions.length === 0,
+          // What the overall was actually computed over. A stored score that
+          // cannot say how much of the rubric it saw is not auditable.
+          covered_count: scored.covered_count,
+          covered_weight: scored.covered_weight,
           validation_warnings: scored.validation_warnings,
           // Which conversation produced this transcript. `prompt_version` on the
           // audit row is the SCORER's version; these two describe the interview

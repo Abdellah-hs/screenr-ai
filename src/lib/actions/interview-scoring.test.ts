@@ -229,6 +229,42 @@ describe("runInterviewScoring", () => {
   });
 
   /**
+   * A dimension the conversation never reached is left OUT of the score, and
+   * how much of the rubric was actually assessed is persisted with it — without
+   * that, 100 from one dimension of two is indistinguishable from 100 from both.
+   */
+  it("excludes an unreached dimension and records the coverage", async () => {
+    mockExtractEvidence.mockResolvedValue(
+      evidence([
+        {
+          dimension_id: "dim-1",
+          evidence_level: "strong" as const,
+          evidence_items: [{ quote: ANSWER, turn_index: 1, explanation: "Real." }],
+          notes: null,
+        },
+        {
+          dimension_id: "dim-2",
+          evidence_level: "not_present" as const,
+          evidence_items: [],
+          notes: "Never came up.",
+        },
+      ]),
+    );
+
+    const result = await runInterviewScoring(INPUT);
+
+    // 80, not 40: the unreached dimension is not part of the question.
+    expect(result).toEqual({ overall_score: 80 });
+
+    const { score, audit } = mockSaveScore.mock.calls[0][0];
+    expect(score.covered_count).toBe(1);
+    expect(score.covered_weight).toBe(0.5);
+    // Still listed in the breakdown, so the gap is visible.
+    expect(score.dimension_scores).toHaveLength(2);
+    expect(audit.inputSnapshot.covered_weight).toBe(0.5);
+  });
+
+  /**
    * A campaign with no interview rubric is graded by a degenerate rubric through
    * the SAME code path — not by a second scorer, which is a path nobody tests.
    */

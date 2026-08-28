@@ -21,6 +21,12 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export const INTERVIEW_EVIDENCE_MODEL = "gpt-4o-mini";
 
 /**
+ * v3 tightens what "not_present" may mean. Once an unreached dimension is left
+ * OUT of the score rather than scored 0, "not_present" stops being the maximum
+ * penalty and becomes better for the candidate than "weak" — so the prompt has
+ * to be explicit that it describes the conversation, never the quality of an
+ * answer.
+ *
  * v2: evidence per **rubric dimension**, no numbers.
  *
  * v1 (`v1_interview_scoring`) asked the model for a 0-100 score per competency
@@ -28,7 +34,7 @@ export const INTERVIEW_EVIDENCE_MODEL = "gpt-4o-mini";
  * interview scored before 2026-08-28, so the bump is what lets a stored score
  * say which mechanism produced it.
  */
-export const INTERVIEW_EVIDENCE_PROMPT_VERSION = "v2_rubric_dimension_evidence";
+export const INTERVIEW_EVIDENCE_PROMPT_VERSION = "v3_rubric_dimension_evidence";
 
 export interface InterviewEvidenceResult {
   evidence: EvidenceResponse;
@@ -117,10 +123,15 @@ Quoting rules (critical — a quote that fails these is discarded and the dimens
 - Copy the words exactly as they appear. Do not paraphrase, correct, tidy, or join separated phrases with an ellipsis.
 - If nothing in the interview bears on a dimension, use "not_present" and return an empty evidence_items array.
 
+"not_present" vs a poor answer (read this carefully — the two are not interchangeable):
+- "not_present" means the CONVERSATION NEVER WENT NEAR the topic. It is a statement about the interview, not about the candidate, and a dimension marked this way is left out of the score entirely rather than scored low.
+- A candidate who WAS asked about something and answered badly, vaguely, or said they did not know is NOT "not_present". That is "unclear" or "weak" — they were given the chance and what they said established little.
+- So never reach for "not_present" because an answer was poor. Use it only when you cannot point to any part of the interview where the subject came up at all.
+
 Judging the evidence:
 - Do NOT award a higher level for general enthusiasm, stated interest, confidence, or merely naming a relevant technology. A level above "weak" requires the candidate describing work they actually did.
 - Judge only what the candidate said. Do not infer competence from their job title, from their CV, from a question having been asked, or from what a person in their role would probably know.
-- A candidate who says they do not know something has not evidenced the competency, but that is a "not_present" or "unclear" reading — never a reason to mark down a different dimension.
+- A candidate who says they do not know something has not evidenced the competency. That is an "unclear" reading — they were asked and could not answer — never "not_present", and never a reason to mark down a different dimension.
 
 Return JSON in this exact format:
 {

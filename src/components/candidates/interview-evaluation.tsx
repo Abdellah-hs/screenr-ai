@@ -141,8 +141,14 @@ function DimensionRow({ dimension }: { dimension: ScoredInterviewDimension }) {
 export default function InterviewEvaluation({
   dimensions,
   usedDefaultRubric = false,
+  coveredWeight,
 }: {
   dimensions: ScoredInterviewDimension[];
+  /**
+   * Share of the rubric's weight the interview actually reached, 0-1. Undefined
+   * for scores written before coverage was measured.
+   */
+  coveredWeight?: number;
   /**
    * True when the campaign had no interview rubric and the default competency
    * set stood in. Worth saying plainly: the recruiter is looking at a breakdown
@@ -152,8 +158,38 @@ export default function InterviewEvaluation({
 }) {
   if (dimensions.length === 0) return null;
 
+  const assessed = dimensions.filter((d) => d.evidence_level !== "not_present");
+  const unreached = dimensions.length - assessed.length;
+  const share =
+    coveredWeight != null ? Math.round(coveredWeight * 100) : null;
+
   return (
     <div className="space-y-4">
+      {/* Above the breakdown, because it changes how the overall should be
+          read. The score is the mean over the dimensions the interview
+          REACHED, so without this a 90 from one dimension and a 90 from six
+          look like the same result. */}
+      {unreached > 0 && (
+        <section className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-5 py-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#92400E]">
+            The interview covered part of the rubric
+          </h4>
+          <p className="mt-2 max-w-[68ch] text-xs leading-[1.6] text-[#92400E]">
+            {assessed.length} of {dimensions.length} dimension
+            {dimensions.length === 1 ? "" : "s"} were assessed
+            {share != null ? `, ${share}% of the rubric's weight` : ""}. The score
+            is the weighted mean of those only — a competency the conversation
+            never reached is left out rather than scored zero, because the
+            candidate was never asked about it.
+          </p>
+          <p className="mt-2 max-w-[68ch] text-xs leading-[1.6] text-[#B45309]">
+            Read it as a verdict on what was discussed, not on the whole rubric.
+            A score from a narrow slice is not comparable to one from full
+            coverage.
+          </p>
+        </section>
+      )}
+
       <section className={CARD}>
         <div className={CARD_HEADER}>
           <h4 className={CARD_EYEBROW}>

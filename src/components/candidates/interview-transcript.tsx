@@ -77,6 +77,7 @@ export default function InterviewTranscript({
         <div className="mb-4">
           <InterviewEvaluation
             dimensions={session.scores.dimension_scores}
+            coveredWeight={session.scores.covered_weight}
             usedDefaultRubric={session.scores.dimension_scores.some((d) =>
               d.dimension_id.startsWith("default:"),
             )}

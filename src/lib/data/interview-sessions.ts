@@ -76,6 +76,17 @@ export interface InterviewScore {
   dimension_scores?: ScoredInterviewDimension[] | null;
   /** Which arithmetic produced the overall. Null on the legacy numeric path. */
   rules_version?: string | null;
+  /**
+   * How much of the rubric the interview actually reached: the number of
+   * assessed dimensions and their share of the rubric's weight (0-1).
+   *
+   * Not optional decoration. Since v2 the overall is the mean over the ASSESSED
+   * dimensions only, so 100 from one dimension of five and 80 from all five are
+   * both plausible numbers that mean very different things. Absent on scores
+   * written before this, which is honest — nothing measured it then.
+   */
+  covered_count?: number;
+  covered_weight?: number;
   /** Quotes discarded and levels downgraded on the way to this score. */
   validation_warnings?: string[];
   /**

@@ -46,27 +46,94 @@ describe("calculateInterviewScore", () => {
   });
 
   it("weights the overall by the recruiter's rubric", () => {
-    // 80×0.75 + 0×0.25 = 60. Equal weighting would have given 40.
+    // 80×0.75 + 25×0.25 = 66.25 -> 66. Equal weighting would have given 53.
     const result = calculateInterviewScore(
-      validated({ d1: "strong", d2: "not_present" }),
+      validated({ d1: "strong", d2: "weak" }),
       rubric(0.75, 0.25),
     );
 
-    expect(result.overall_score).toBe(60);
+    expect(result.overall_score).toBe(66);
   });
 
   /**
-   * The property that stops a candidate who evidenced one competency brilliantly
-   * and never touched the rest from outscoring one who covered everything.
+   * Changed 2026-08-28, and it is the one place this scorer diverges from
+   * screening's. The interview improvises its questions from the candidate's CV
+   * by design, so a dimension nobody asked about is expected rather than an
+   * authoring error — scoring it 0 would blame the candidate for a question
+   * that was never put to them.
    */
-  it("counts a dimension the interview never reached, rather than dropping it", () => {
-    const covered = calculateInterviewScore(
+  it("leaves a dimension the interview never reached out of the score", () => {
+    const result = calculateInterviewScore(
       validated({ d1: "very_strong", d2: "not_present" }),
       rubric(0.5, 0.5),
     );
 
-    expect(covered.overall_score).toBe(50);
-    expect(covered.dimensions).toHaveLength(2);
+    // 100, not 50: the second dimension is not part of the question.
+    expect(result.overall_score).toBe(100);
+    // But it is still listed, so the breakdown shows what went unasked.
+    expect(result.dimensions).toHaveLength(2);
+    expect(result.covered_count).toBe(1);
+    expect(result.covered_weight).toBe(0.5);
+  });
+
+  /**
+   * The cost of the rule above, pinned so it cannot be forgotten: a narrow
+   * interview outranks a thorough one. That is why coverage travels with the
+   * score and is rendered beside it — the remedy is disclosure, not arithmetic,
+   * because this stage never gates.
+   */
+  it("lets a narrow interview outscore a broad one, with coverage saying so", () => {
+    const narrow = calculateInterviewScore(
+      validated({ d1: "very_strong", d2: "not_present", d3: "not_present" }),
+      rubric(1, 1, 1),
+    );
+    const broad = calculateInterviewScore(
+      validated({ d1: "strong", d2: "strong", d3: "strong" }),
+      rubric(1, 1, 1),
+    );
+
+    expect(narrow.overall_score).toBeGreaterThan(broad.overall_score);
+    expect(narrow.covered_weight).toBeLessThan(broad.covered_weight);
+    expect(broad.covered_weight).toBe(1);
+  });
+
+  /**
+   * `unclear` is the level an unverified quote is knocked down to, and it means
+   * the candidate DID address the topic. Excluding it would let the validator's
+   * own correction raise a score — the one direction validation must never move.
+   */
+  it("still counts a dimension that was addressed but established nothing", () => {
+    const result = calculateInterviewScore(
+      validated({ d1: "strong", d2: "unclear" }),
+      rubric(0.5, 0.5),
+    );
+
+    expect(result.overall_score).toBe(40);
+    expect(result.covered_count).toBe(2);
+  });
+
+  it("scores 0 when the interview reached nothing at all", () => {
+    const result = calculateInterviewScore(
+      validated({ d1: "not_present", d2: "not_present" }),
+      rubric(0.5, 0.5),
+    );
+
+    expect(result.overall_score).toBe(0);
+    expect(result.covered_count).toBe(0);
+    expect(result.covered_weight).toBe(0);
+  });
+
+  /**
+   * Re-normalising matters: without it, dropping half the rubric would halve
+   * every score rather than removing it from the question.
+   */
+  it("re-normalises the assessed weights so a full answer still reaches 100", () => {
+    const result = calculateInterviewScore(
+      validated({ d1: "very_strong", d2: "not_present", d3: "not_present" }),
+      rubric(0.2, 0.4, 0.4),
+    );
+
+    expect(result.overall_score).toBe(100);
   });
 
   it("re-normalises weights that do not sum to 1", () => {
@@ -82,12 +149,12 @@ describe("calculateInterviewScore", () => {
 
   it("falls back to equal shares when a rubric carries no weights at all", () => {
     const result = calculateInterviewScore(
-      validated({ d1: "strong", d2: "not_present" }),
+      validated({ d1: "strong", d2: "weak" }),
       rubric(0, 0),
     );
 
     // Not 0 — an unweighted rubric means "no preference", not "nothing counts".
-    expect(result.overall_score).toBe(40);
+    expect(result.overall_score).toBe(53);
   });
 
   it("carries the reported level through so a downgrade stays visible", () => {
