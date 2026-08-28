@@ -7,9 +7,16 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { AutomationMode, InterviewPersona } from "@/lib/constants";
 import { INTERVIEW_PROMPT_VERSION } from "@/lib/services/interview";
-import { scoreInterview } from "@/lib/services/interview-scoring";
+import { extractInterviewEvidence } from "@/lib/services/interview-evidence";
+import { buildCandidateSpeech } from "@/lib/scoring/transcript";
+import { validateTranscriptEvidence } from "@/lib/scoring/transcript-evidence";
+import {
+  calculateInterviewScore,
+  interviewScoringDimensions,
+  INTERVIEW_SCORING_RULES_VERSION,
+} from "@/lib/interview-scoring";
 import { evaluateInterviewScoringOutcome } from "@/lib/rules/interview-scoring";
-import { fetchActiveRubricVersion } from "@/lib/data/campaigns";
+import { fetchInterviewRubricDimensions } from "@/lib/data/campaigns";
 import { transitionApplicationAsSystem } from "@/lib/data/transitions";
 import {
   fetchInterviewSessionByApplicationId,
@@ -40,6 +47,20 @@ export interface RunInterviewScoringInput {
    * cautious mode so an omitted value can never auto-advance anyone.
    */
   automationMode?: AutomationMode;
+  /**
+   * `auto` (the default) is the candidate's own submit: score, then let the
+   * rule layer advance the application. `rescore` is a recruiter refreshing the
+   * evidence — it writes a new score and audit row and **applies no
+   * transition**.
+   *
+   * A re-score must not transition, and the reason is not merely that it would
+   * be a no-op. The application has usually already passed through
+   * `interview_scored`, so re-running the rule would either fail on an illegal
+   * edge or, in `fully_auto`, push a candidate a manager is actively reviewing
+   * back into `manager_review`. Same rule the resume re-score follows: fresh
+   * evidence, untouched pipeline state.
+   */
+  mode?: "auto" | "rescore";
 }
 
 /**
@@ -72,29 +93,46 @@ export async function runInterviewScoring(
 
   const transcript = session.transcript ?? [];
 
-  const [evidence, rubricVersion] = await Promise.all([
-    scoreInterview({
-      jobDescription: input.description,
-      resumeSummary: input.resumeSummary,
-      transcript,
-    }),
-    fetchActiveRubricVersion(campaignId, "interview", db),
-  ]);
+  // The rubric comes back with its own version on the SAME row, so this is one
+  // read rather than the two it used to be.
+  const { dimensions: rubricDimensions, version: rubricVersion } =
+    await fetchInterviewRubricDimensions(campaignId, db);
+
+  // The recruiter's rubric, or the default competency set when they have none.
+  // Never an empty list — that would score every candidate 0.
+  const dimensions = interviewScoringDimensions(rubricDimensions);
+
+  // Three steps, deliberately separate: the model reports evidence, code checks
+  // that evidence against what the candidate actually said, and only then does
+  // arithmetic turn it into a number. The model never sees a scale, so it has
+  // no way to express an opinion as a score.
+  const evidence = await extractInterviewEvidence({
+    jobDescription: input.description,
+    resumeSummary: input.resumeSummary,
+    dimensions,
+    transcript,
+  });
+
+  const validated = validateTranscriptEvidence({
+    response: evidence.evidence,
+    dimensionIds: dimensions.map((d) => d.id),
+    candidateSpeech: buildCandidateSpeech(transcript),
+  });
+
+  const scored = calculateInterviewScore(validated, dimensions);
 
   const score: InterviewScore = {
-    overall_score: evidence.result.overall_score,
-    overall_rationale: evidence.result.overall_rationale,
-    dimensions: evidence.result.dimensions.map((d) => ({
-      name: d.name,
-      score: d.score,
-      rationale: d.rationale,
-      // The quote and its position are persisted, not just used to validate and
-      // dropped — a manager needs to reach the words behind the number.
-      evidence_quote: d.evidence_quote,
-      evidence_turn_index: d.evidence_turn_index,
-    })),
-    strengths: evidence.result.strengths,
-    concerns: evidence.result.concerns,
+    overall_score: scored.overall_score,
+    overall_rationale: validated.extraction_summary,
+    // Empty on this path: the breakdown is `dimension_scores`, and a stored
+    // score must say which unit it was graded in rather than being redrawn in
+    // a unit it never used.
+    dimensions: [],
+    dimension_scores: scored.dimensions,
+    rules_version: INTERVIEW_SCORING_RULES_VERSION,
+    validation_warnings: scored.validation_warnings,
+    strengths: [],
+    concerns: [],
     rubric_version: rubricVersion,
     scored_at: new Date().toISOString(),
   };
@@ -112,6 +150,17 @@ export async function runInterviewScoring(
         inputSnapshot: {
           transcript_turns: transcript.length,
           job_description_length: input.description.length,
+          // Which arithmetic, and what it graded against. Without these a
+          // stored score cannot say whether it came from the rubric or from
+          // the default set that stands in when a campaign has none.
+          scoring_rules_version: INTERVIEW_SCORING_RULES_VERSION,
+          rubric_dimensions: dimensions.map((d) => ({
+            id: d.id,
+            name: d.name,
+            weight: d.weight,
+          })),
+          used_default_rubric: rubricDimensions.length === 0,
+          validation_warnings: scored.validation_warnings,
           // Which conversation produced this transcript. `prompt_version` on the
           // audit row is the SCORER's version; these two describe the interview
           // itself, without which a score can't be read back in context.
@@ -123,11 +172,19 @@ export async function runInterviewScoring(
     db,
   );
 
+  // A recruiter re-score stops here: the evidence is refreshed and the
+  // application stays exactly where it was.
+  if (input.mode === "rescore") {
+    revalidatePath(`/campaigns/${campaignId}/candidates/${applicationId}`);
+    revalidatePath(`/campaigns/${campaignId}`);
+    return { overall_score: scored.overall_score };
+  }
+
   // Rule layer decides the transition from the persisted score. Best-effort:
   // the score is durable; a failed transition just leaves a recruiter to
   // advance manually.
   const decisions = evaluateInterviewScoringOutcome(
-    { overall_score: evidence.result.overall_score },
+    { overall_score: scored.overall_score },
     { automation_mode: input.automationMode ?? "human_in_loop" },
   );
   for (const decision of decisions) {
@@ -145,5 +202,5 @@ export async function runInterviewScoring(
   revalidatePath(`/campaigns/${campaignId}/candidates/${applicationId}`);
   revalidatePath(`/campaigns/${campaignId}`);
 
-  return { overall_score: evidence.result.overall_score };
+  return { overall_score: scored.overall_score };
 }

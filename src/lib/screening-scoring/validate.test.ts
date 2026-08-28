@@ -4,7 +4,8 @@ import {
   validateScreeningEvidence,
 } from "./validate";
 import { buildCandidateSpeech } from "./transcript";
-import type { EvidenceLevel, ScreeningEvidenceResponse, TranscriptTurn } from "./evidence";
+import type { EvidenceLevel, ScreeningEvidenceResponse } from "./evidence";
+import type { TranscriptTurn } from "./transcript";
 
 const TRANSCRIPT: TranscriptTurn[] = [
   {
@@ -31,11 +32,11 @@ const TRANSCRIPT: TranscriptTurn[] = [
 
 const SPEECH = buildCandidateSpeech(TRANSCRIPT);
 
-function answer(
-  overrides: Partial<ScreeningEvidenceResponse["answers"][number]> = {},
-): ScreeningEvidenceResponse["answers"][number] {
+function finding(
+  overrides: Partial<ScreeningEvidenceResponse["dimensions"][number]> = {},
+): ScreeningEvidenceResponse["dimensions"][number] {
   return {
-    question_id: "q1",
+    dimension_id: "d1",
     evidence_level: "strong",
     evidence_items: [
       {
@@ -50,70 +51,75 @@ function answer(
 }
 
 function response(
-  answers: ScreeningEvidenceResponse["answers"],
+  dimensions: ScreeningEvidenceResponse["dimensions"],
 ): ScreeningEvidenceResponse {
-  return { answers, extraction_summary: "Two questions covered." };
+  return { dimensions, extraction_summary: "Two competencies covered." };
 }
 
 describe("validateScreeningEvidence — structural failures", () => {
-  it("rejects the run when the answer count does not match the questions", () => {
+  it("rejects the run when the finding count does not match the rubric", () => {
     expect(() =>
       validateScreeningEvidence({
-        response: response([answer()]),
-        questionIds: ["q1", "q2"],
+        response: response([finding()]),
+        dimensionIds: ["d1", "d2"],
         candidateSpeech: SPEECH,
       }),
     ).toThrow(ScreeningEvidenceValidationError);
   });
 
-  it("rejects the run when a question is answered twice", () => {
+  it("rejects the run when a dimension is reported twice", () => {
     expect(() =>
       validateScreeningEvidence({
-        response: response([answer(), answer()]),
-        questionIds: ["q1", "q2"],
+        response: response([finding(), finding()]),
+        dimensionIds: ["d1", "d2"],
         candidateSpeech: SPEECH,
       }),
     ).toThrow(/more than once/);
   });
 
-  it("rejects the run when a question has no evidence at all", () => {
+  it("rejects the run when a rubric dimension has no evidence at all", () => {
     expect(() =>
       validateScreeningEvidence({
-        response: response([answer(), answer({ question_id: "q3" })]),
-        questionIds: ["q1", "q2"],
+        response: response([finding(), finding({ dimension_id: "d3" })]),
+        dimensionIds: ["d1", "d2"],
         candidateSpeech: SPEECH,
       }),
-    ).toThrow(/No evidence was returned for question q2/);
+    ).toThrow(/No evidence was returned for dimension d2/);
   });
 
-  it("returns answers in the order the questions were asked, not the order returned", () => {
+  /**
+   * The deterministic scorer zips findings against the rubric by index, so the
+   * order here is load-bearing rather than cosmetic: a model that answers out
+   * of order must not shift every dimension's score onto its neighbour.
+   */
+  it("returns findings in rubric order, not the order the model returned them", () => {
     const result = validateScreeningEvidence({
-      response: response([answer({ question_id: "q2" }), answer({ question_id: "q1" })]),
-      questionIds: ["q1", "q2"],
+      response: response([finding({ dimension_id: "d2" }), finding({ dimension_id: "d1" })]),
+      dimensionIds: ["d1", "d2"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers.map((a) => a.question_id)).toEqual(["q1", "q2"]);
+    expect(result.dimensions.map((d) => d.dimension_id)).toEqual(["d1", "d2"]);
   });
 });
 
 describe("validateScreeningEvidence — quote verification", () => {
   it("keeps a level whose quote appears in the candidate's speech", () => {
     const result = validateScreeningEvidence({
-      response: response([answer()]),
-      questionIds: ["q1"],
+      response: response([finding()]),
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("strong");
-    expect(result.answers[0].evidence_items).toHaveLength(1);
+    expect(result.dimensions[0].evidence_level).toBe("strong");
+    expect(result.dimensions[0].evidence_items).toHaveLength(1);
     expect(result.warnings).toEqual([]);
   });
 
   it("discards a quote the candidate never said and downgrades the level", () => {
     const result = validateScreeningEvidence({
       response: response([
-        answer({
+        finding({
           evidence_items: [
             {
               quote: "I rewrote the entire platform in Rust over a weekend",
@@ -123,26 +129,26 @@ describe("validateScreeningEvidence — quote verification", () => {
           ],
         }),
       ]),
-      questionIds: ["q1"],
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("unclear");
-    expect(result.answers[0].reported_evidence_level).toBe("strong");
-    expect(result.answers[0].evidence_items).toEqual([]);
+    expect(result.dimensions[0].evidence_level).toBe("unclear");
+    expect(result.dimensions[0].reported_evidence_level).toBe("strong");
+    expect(result.dimensions[0].evidence_items).toEqual([]);
     expect(result.warnings[0]).toMatch(/could not be found/);
   });
 
   /**
    * The load-bearing one. The interviewer's turn contains the topic of every
    * question by construction, so a quote lifted from it would verify against
-   * the full transcript and award credit for the question merely having been
-   * asked. Verification runs against the candidate's speech alone.
+   * the full transcript and award credit for the topic merely having been
+   * raised. Verification runs against the candidate's speech alone.
    */
   it("refuses a quote taken from the interviewer rather than the candidate", () => {
     const result = validateScreeningEvidence({
       response: response([
-        answer({
+        finding({
           evidence_items: [
             {
               quote: "Tell me about a system you scaled past its first design",
@@ -152,63 +158,62 @@ describe("validateScreeningEvidence — quote verification", () => {
           ],
         }),
       ]),
-      questionIds: ["q1"],
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("unclear");
-    expect(result.answers[0].evidence_items).toEqual([]);
+    expect(result.dimensions[0].evidence_level).toBe("unclear");
+    expect(result.dimensions[0].evidence_items).toEqual([]);
   });
 
   it("downgrades a level asserted with no quote at all", () => {
     const result = validateScreeningEvidence({
-      response: response([answer({ evidence_level: "very_strong", evidence_items: [] })]),
-      questionIds: ["q1"],
+      response: response([finding({ evidence_level: "very_strong", evidence_items: [] })]),
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("unclear");
+    expect(result.dimensions[0].evidence_level).toBe("unclear");
     expect(result.warnings[0]).toMatch(/no supporting quote/);
   });
 
   it("keeps only the quotes that verify when a level ships several", () => {
     const result = validateScreeningEvidence({
       response: response([
-        answer({
+        finding({
           evidence_items: [
             { quote: "We moved the billing service", turn_index: 1, explanation: "real" },
             { quote: "I led a team of forty", turn_index: 1, explanation: "invented" },
           ],
         }),
       ]),
-      questionIds: ["q1"],
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("strong");
-    expect(result.answers[0].evidence_items).toHaveLength(1);
+    expect(result.dimensions[0].evidence_level).toBe("strong");
+    expect(result.dimensions[0].evidence_items).toHaveLength(1);
     expect(result.warnings).toHaveLength(1);
   });
 
   it("discards evidence attached to a not_present verdict rather than trusting either half", () => {
     const result = validateScreeningEvidence({
-      response: response([answer({ evidence_level: "not_present" })]),
-      questionIds: ["q1"],
+      response: response([finding({ evidence_level: "not_present" })]),
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("not_present");
-    expect(result.answers[0].evidence_items).toEqual([]);
+    expect(result.dimensions[0].evidence_level).toBe("not_present");
+    expect(result.dimensions[0].evidence_items).toEqual([]);
     expect(result.warnings[0]).toMatch(/were discarded/);
   });
 
   it("matches a quote across cosmetic punctuation and case differences", () => {
     const result = validateScreeningEvidence({
       response: response([
-        answer({
+        finding({
           evidence_items: [
             {
-              // Curly apostrophe and different casing than the transcript.
               quote: "READ-REPLICA SETUP AFTER IT STARTED TIMING OUT",
               turn_index: 1,
               explanation: "Same words.",
@@ -216,37 +221,38 @@ describe("validateScreeningEvidence — quote verification", () => {
           ],
         }),
       ]),
-      questionIds: ["q1"],
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
-    expect(result.answers[0].evidence_level).toBe("strong");
-  });
-});
-
-describe("validateScreeningEvidence — the transcript outranks the model", () => {
-  it("forces not_present for a question code already found unanswered", () => {
-    const result = validateScreeningEvidence({
-      response: response([answer({ evidence_level: "very_strong" })]),
-      questionIds: ["q1"],
-      candidateSpeech: SPEECH,
-      unansweredQuestionIds: new Set(["q1"]),
-    });
-
-    expect(result.answers[0].evidence_level).toBe("not_present");
-    expect(result.answers[0].reported_evidence_level).toBe("very_strong");
-    expect(result.warnings[0]).toMatch(/never reached/);
+    expect(result.dimensions[0].evidence_level).toBe("strong");
   });
 
-  it("does not warn when the model agreed the question was never reached", () => {
+  /**
+   * Evidence is per competency, not per question — so a candidate who proves a
+   * dimension while answering some other question has still proved it. This is
+   * the behaviour per-question scoring could not express.
+   */
+  it("credits evidence found anywhere in the call, not only where it was asked for", () => {
     const result = validateScreeningEvidence({
-      response: response([answer({ evidence_level: "not_present", evidence_items: [] })]),
-      questionIds: ["q1"],
+      response: response([
+        finding({
+          dimension_id: "d1",
+          evidence_items: [
+            {
+              // Said while answering the motivation question, not the scaling one.
+              quote: "I want to own a product surface end to end",
+              turn_index: 3,
+              explanation: "Ownership, evidenced in a different answer.",
+            },
+          ],
+        }),
+      ]),
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
-      unansweredQuestionIds: new Set(["q1"]),
     });
 
-    expect(result.answers[0].evidence_level).toBe("not_present");
+    expect(result.dimensions[0].evidence_level).toBe("strong");
     expect(result.warnings).toEqual([]);
   });
 });
@@ -264,13 +270,13 @@ describe("validateScreeningEvidence — validation never raises a level", () => 
 
   it.each(LEVELS)("leaves %s no higher than the model reported it", (level) => {
     const result = validateScreeningEvidence({
-      response: response([answer({ evidence_level: level })]),
-      questionIds: ["q1"],
+      response: response([finding({ evidence_level: level })]),
+      dimensionIds: ["d1"],
       candidateSpeech: SPEECH,
     });
 
     const before = RANK.get(level) ?? 0;
-    const after = RANK.get(result.answers[0].evidence_level) ?? 0;
+    const after = RANK.get(result.dimensions[0].evidence_level) ?? 0;
     expect(after).toBeLessThanOrEqual(before);
   });
 });

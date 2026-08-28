@@ -1,82 +1,64 @@
-import { z } from "zod/v4";
 import { EvidenceLevelSchema, type EvidenceLevel } from "@/lib/scoring/evidence-levels";
+import {
+  EvidenceItemSchema,
+  DimensionEvidenceSchema,
+  EvidenceResponseSchema,
+  type EvidenceItem,
+  type DimensionEvidence,
+  type EvidenceResponse,
+} from "@/lib/scoring/transcript-evidence";
 
 export { EvidenceLevelSchema, type EvidenceLevel };
 
 /**
- * One spoken turn of a voice-screening call, in conversation order.
- *
- * Declared here rather than imported from the data layer so this package stays
- * pure — `src/lib/data/screening-questions.ts` owns the row shape, and its
- * `VoiceTranscriptTurn` is structurally identical.
+ * The reporting shape moved to `@/lib/scoring/transcript-evidence` on
+ * 2026-08-28, when the AI interview came onto the same pipeline. Both stages
+ * grade speech against a weighted rubric, so what a model is allowed to say has
+ * exactly one definition; only what each level MEANS is stage-specific, and
+ * that is what stays in this file.
  */
-export interface TranscriptTurn {
-  role: "agent" | "candidate";
-  text: string;
-  at: string;
-}
+export const ScreeningEvidenceItemSchema = EvidenceItemSchema;
+export const ScreeningDimensionEvidenceSchema = DimensionEvidenceSchema;
+export const ScreeningEvidenceResponseSchema = EvidenceResponseSchema;
 
-export const ScreeningEvidenceItemSchema = z.object({
-  /** Copied verbatim from the candidate's speech. Verified against the transcript later. */
-  quote: z.string(),
-  /**
-   * Which transcript turn the quote came from. Advisory: verification searches
-   * the candidate's speech as a whole, because a model that reads the right
-   * words out of the right answer but miscounts the turn index has still found
-   * the evidence.
-   */
-  turn_index: z.number().nullable(),
-  explanation: z.string(),
-});
+export type ScreeningEvidenceItem = EvidenceItem;
+export type ScreeningDimensionEvidence = DimensionEvidence;
+export type ScreeningEvidenceResponse = EvidenceResponse;
 
-export const ScreeningAnswerEvidenceSchema = z.object({
-  question_id: z.string(),
-  evidence_level: EvidenceLevelSchema,
-  evidence_items: z.array(ScreeningEvidenceItemSchema),
-  notes: z.string().nullable(),
-});
-
-export const ScreeningEvidenceResponseSchema = z.object({
-  answers: z.array(ScreeningAnswerEvidenceSchema),
-  extraction_summary: z.string(),
-});
-
-export type ScreeningEvidenceItem = z.infer<typeof ScreeningEvidenceItemSchema>;
-export type ScreeningAnswerEvidence = z.infer<typeof ScreeningAnswerEvidenceSchema>;
-export type ScreeningEvidenceResponse = z.infer<typeof ScreeningEvidenceResponseSchema>;
+export { UNANSWERED_LEVEL } from "@/lib/scoring/transcript-evidence";
 
 /**
- * What each level means for a *spoken answer*, as handed to the model.
+ * What each level means for a *spoken* competency, as handed to the model.
  *
- * The ladder is shared with resume screening; these definitions are not, and
- * must not be. A CV proves a skill by listing a role and a duration; an answer
- * proves it by what the candidate can actually say about the work when asked.
- * Reusing the resume wording here would quietly grade speech as though it were
- * a document — penalising a candidate for not reciting dates and job titles out
- * loud.
+ * The ladder is shared with resume screening and the AI interview; these
+ * definitions are not, and must not be. A CV proves a skill by listing a role
+ * and a duration; speech proves it by what the candidate can actually say about
+ * the work when asked. Reusing the resume wording here would quietly grade
+ * speech as though it were a document — penalising a candidate for not reciting
+ * dates and job titles out loud.
+ *
+ * They are also deliberately not shared with the INTERVIEW definitions, which
+ * are calibrated for a long technical conversation rather than a short filter.
+ * See `INTERVIEW_EVIDENCE_LEVEL_DEFINITIONS`.
+ *
+ * Worded for a competency rather than a question since evidence is reported per
+ * rubric dimension: what matters is whether the call established the skill at
+ * all, not whether it was established in the turn that asked about it.
  *
  * Kept next to the enum so the prompt and the type can never drift apart, and
  * exported because the audit log records which wording produced a run.
  */
 export const SCREENING_EVIDENCE_LEVEL_DEFINITIONS: Record<EvidenceLevel, string> = {
   not_present:
-    "The candidate never addressed this question. It was never asked, the call ended before reaching it, or they explicitly declined to answer.",
+    "Nothing anywhere in the call bears on this. The topic never came up, the call ended before reaching it, or the candidate explicitly declined.",
   unclear:
-    "The candidate said something touching the topic, but it does not establish an answer — a deflection, a restatement of the question, or a reply too vague to tell whether they have the experience.",
+    "The candidate said something touching this, but it does not establish the skill — a deflection, a restatement of the question, or a reply too vague to tell whether they have the experience.",
   weak:
-    "The candidate claims the experience but supplies nothing behind it: naming a tool, a topic, or a job title without any account of what they actually did.",
+    "The candidate claims this but supplies nothing behind it: naming a tool, a topic, or a job title without any account of what they actually did.",
   partial:
-    "There is a concrete but limited answer — one example, briefly described, or a description of what they know rather than what they did with it.",
+    "There is concrete but limited evidence — one example, briefly described, or a description of what they know rather than what they did with it.",
   strong:
-    "A clear, specific answer grounded in the candidate's own work: what the situation was, what they did about it, and what came of it.",
+    "Clear, specific evidence grounded in the candidate's own work: what the situation was, what they did about it, and what came of it.",
   very_strong:
-    "Several substantial examples, or one answered with real depth — trade-offs weighed, decisions justified, outcomes and their limits described unprompted.",
+    "Several substantial examples, or one covered with real depth — trade-offs weighed, decisions justified, outcomes and their limits described unprompted.",
 };
-
-/**
- * The level a question gets when the candidate never reached it.
- *
- * Distinct from every other path into `not_present`: this one is decided by
- * code, from the transcript itself, and is not the model's to overturn.
- */
-export const UNANSWERED_LEVEL: EvidenceLevel = "not_present";

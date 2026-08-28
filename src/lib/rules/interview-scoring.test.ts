@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { evaluateInterviewScoringOutcome } from "./interview-scoring";
+import {
+  evaluateInterviewScoringOutcome,
+  assertInterviewRescoreAllowed,
+} from "./interview-scoring";
 
 const HITL = { automation_mode: "human_in_loop" } as const;
 const AUTO = { automation_mode: "fully_auto" } as const;
@@ -66,5 +69,33 @@ describe("evaluateInterviewScoringOutcome", () => {
 
     expect(transitions).toHaveLength(1);
     expect(transitions[0].toState).toBe("interview_scored");
+  });
+});
+
+describe("assertInterviewRescoreAllowed", () => {
+  it.each(["hired", "rejected", "archived"] as const)(
+    "throws for the closed state %s",
+    (status) => {
+      expect(() => assertInterviewRescoreAllowed(status)).toThrow(/closed/);
+    },
+  );
+
+  it.each([
+    "interview_completed",
+    "interview_scored",
+    "manager_review",
+    "reference_check",
+    "final_interview_scheduling",
+  ] as const)("allows the in-pipeline state %s", (status) => {
+    expect(() => assertInterviewRescoreAllowed(status)).not.toThrow();
+  });
+
+  /**
+   * Deliberately unlike the screening re-score, which refuses an already-scored
+   * response. Moving an interview scored by the retired numeric prompt onto the
+   * current rules is the whole reason this exists.
+   */
+  it("allows an interview that has already been scored", () => {
+    expect(() => assertInterviewRescoreAllowed("interview_scored")).not.toThrow();
   });
 });

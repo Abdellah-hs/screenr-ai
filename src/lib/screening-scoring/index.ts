@@ -8,6 +8,7 @@
  *
  * See CLAUDE.md → "Control > AI > Data".
  */
+export * from "./dimensions";
 export * from "./evidence";
 export * from "./transcript";
 export * from "./validate";
