@@ -272,6 +272,48 @@ export interface FrameSignals {
 /** What a kept box means to the app. COCO classes collapse into these two. */
 export type SignalLabel = "person" | "phone";
 
+/**
+ * Every person/phone candidate the model produced, with the two numbers that
+ * decide whether it counts. Diagnostic only — nothing in the pipeline reads it.
+ *
+ * It exists because "my phone was not detected" has three different causes that
+ * look identical from outside: the model scored it below the floor, the box was
+ * too small a share of the frame, or the model never saw it at all. Lowering a
+ * threshold fixes only the first, and lowering one for the other two adds false
+ * accusations without catching anything. This is what tells them apart.
+ */
+export function describeCandidates(
+  detections: Detection[],
+  frame: { width: number; height: number },
+): { label: SignalLabel; score: number; areaRatio: number }[] {
+  const frameArea = Math.max(0, frame.width) * Math.max(0, frame.height);
+  if (frameArea === 0) return [];
+
+  return detections
+    .filter((d) => d.classId === PERSON_CLASS_ID || PHONE_CLASS_IDS.has(d.classId))
+    .map((d) => {
+      const x1 = Math.max(0, Math.min(d.box[0], frame.width));
+      const y1 = Math.max(0, Math.min(d.box[1], frame.height));
+      const x2 = Math.max(0, Math.min(d.box[2], frame.width));
+      const y2 = Math.max(0, Math.min(d.box[3], frame.height));
+      return {
+        label: (d.classId === PERSON_CLASS_ID ? "person" : "phone") as SignalLabel,
+        score: d.score,
+        areaRatio: (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+/** The floors `describeCandidates` output should be read against. */
+export const DETECTION_FLOORS = {
+  person: PERSON_MIN_SCORE,
+  additionalPerson: ADDITIONAL_PERSON_MIN_SCORE,
+  phone: PHONE_MIN_SCORE,
+  personArea: PERSON_MIN_AREA_RATIO,
+  phoneArea: PHONE_MIN_AREA_RATIO,
+} as const;
+
 /** A detection that survived every threshold, clipped to the frame. */
 export interface CountedDetection {
   label: SignalLabel;

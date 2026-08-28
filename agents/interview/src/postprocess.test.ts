@@ -3,6 +3,8 @@ import {
   DECODE_MIN_SCORE,
   INPUT_SIZE,
   PERSON_CLASS_ID,
+  describeCandidates,
+  DETECTION_FLOORS,
   countKept,
   countSignals,
   decodeYoloxOutput,
@@ -569,5 +571,71 @@ describe("observationConfidence", () => {
     expect(observationConfidence(0.95)).toBeGreaterThanOrEqual(
       VISION_MIN_CONFIDENCE,
     );
+  });
+});
+
+/**
+ * The diagnostic behind "my phone was not detected". Three causes look
+ * identical from outside — scored too low, too small, or never produced — and
+ * they need opposite fixes, so this has to report the raw numbers rather than
+ * a verdict.
+ */
+describe("describeCandidates", () => {
+  const frame = { width: 1000, height: 1000 };
+
+  it("reports the score and frame share of every person and phone", () => {
+    const result = describeCandidates(
+      [
+        { classId: PERSON_CLASS_ID, score: 0.9, box: [0, 0, 500, 500] },
+        { classId: 67, score: 0.31, box: [0, 0, 100, 100] },
+      ],
+      frame,
+    );
+
+    expect(result).toEqual([
+      { label: "person", score: 0.9, areaRatio: 0.25 },
+      { label: "phone", score: 0.31, areaRatio: 0.01 },
+    ]);
+  });
+
+  it("keeps a candidate that its floor would reject, which is the point", () => {
+    // 0.31 is below PHONE_MIN_SCORE (0.45). If this were filtered, the log
+    // could never distinguish "scored too low" from "never seen".
+    const result = describeCandidates(
+      [{ classId: 67, score: 0.31, box: [0, 0, 100, 100] }],
+      frame,
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].score).toBeLessThan(DETECTION_FLOORS.phone);
+  });
+
+  it("counts a remote as a phone, like the counting path does", () => {
+    const result = describeCandidates(
+      [{ classId: 65, score: 0.5, box: [0, 0, 100, 100] }],
+      frame,
+    );
+
+    expect(result[0].label).toBe("phone");
+  });
+
+  it("ignores classes the product does not report on", () => {
+    // 63 is `laptop` — deliberately not a finding, so it must not appear here
+    // either and imply the detector saw something it will act on.
+    expect(
+      describeCandidates([{ classId: 63, score: 0.99, box: [0, 0, 100, 100] }], frame),
+    ).toEqual([]);
+  });
+
+  it("orders strongest first, so the log's first entry is the best evidence", () => {
+    const result = describeCandidates(
+      [
+        { classId: 67, score: 0.2, box: [0, 0, 100, 100] },
+        { classId: PERSON_CLASS_ID, score: 0.8, box: [0, 0, 100, 100] },
+      ],
+      frame,
+    );
+
+    expect(result.map((c) => c.score)).toEqual([0.8, 0.2]);
   });
 });
