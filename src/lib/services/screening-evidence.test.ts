@@ -21,6 +21,11 @@ const questions = [
   { id: "q-2", prompt: "What is your debugging approach?" },
 ];
 
+const dimensions = [
+  { id: "dim-1", name: "System design depth", weight: 0.6 },
+  { id: "dim-2", name: "Debugging method", weight: 0.4 },
+];
+
 const transcript: TranscriptTurn[] = [
   { role: "agent", text: "Walk me through a hard system design.", at: "2026-06-03T10:00:00.000Z" },
   {
@@ -42,9 +47,9 @@ function aiResponse(payload: unknown) {
 
 function evidencePayload(overrides: Record<string, unknown> = {}) {
   return {
-    answers: [
+    dimensions: [
       {
-        question_id: "q-1",
+        dimension_id: "dim-1",
         evidence_level: "strong",
         evidence_items: [
           {
@@ -56,7 +61,7 @@ function evidencePayload(overrides: Record<string, unknown> = {}) {
         notes: "Concrete ownership of a large change.",
       },
       {
-        question_id: "q-2",
+        dimension_id: "dim-2",
         evidence_level: "partial",
         evidence_items: [
           {
@@ -68,7 +73,7 @@ function evidencePayload(overrides: Record<string, unknown> = {}) {
         notes: null,
       },
     ],
-    extraction_summary: "Covered both questions with concrete detail.",
+    extraction_summary: "Covered both competencies with concrete detail.",
     ...overrides,
   };
 }
@@ -89,12 +94,13 @@ describe("extractTranscriptEvidence", () => {
 
     const result = await extractTranscriptEvidence({
       jobDescription: "JD",
+      dimensions,
       questions,
       transcript,
     });
 
-    expect(result.evidence.answers).toHaveLength(2);
-    expect(result.evidence.answers[0].evidence_level).toBe("strong");
+    expect(result.evidence.dimensions).toHaveLength(2);
+    expect(result.evidence.dimensions[0].evidence_level).toBe("strong");
     expect(result.model).toBe("gpt-4o-mini");
     expect(result.promptVersion).toBe(SCREENING_EVIDENCE_PROMPT_VERSION);
     expect(result.rawOutput).toContain("evidence_level");
@@ -103,7 +109,7 @@ describe("extractTranscriptEvidence", () => {
   it("sends the spoken transcript to the model", async () => {
     mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
 
-    await extractTranscriptEvidence({ jobDescription: "JD", questions, transcript });
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
 
     const userMessage = mockCreate.mock.calls[0][0].messages[1].content as string;
     expect(userMessage).toContain("I led the migration of our monolith");
@@ -119,10 +125,13 @@ describe("extractTranscriptEvidence", () => {
   it("never asks the model for a score", async () => {
     mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
 
-    await extractTranscriptEvidence({ jobDescription: "JD", questions, transcript });
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
 
     const systemPrompt = mockCreate.mock.calls[0][0].messages[0].content as string;
-    expect(systemPrompt).toMatch(/REPORT EVIDENCE, not to score/);
+    // Matched loosely on purpose: the instruction has to survive rewording of
+    // the prompt around it, and what must never come back is the number.
+    expect(systemPrompt).toMatch(/REPORT EVIDENCE/);
+    expect(systemPrompt).toMatch(/not to score/);
     expect(systemPrompt).toMatch(/never assign numbers/i);
     expect(systemPrompt).not.toMatch(/0-100/);
   });
@@ -130,7 +139,7 @@ describe("extractTranscriptEvidence", () => {
   it("defines every evidence level for the model", async () => {
     mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
 
-    await extractTranscriptEvidence({ jobDescription: "JD", questions, transcript });
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
 
     const systemPrompt = mockCreate.mock.calls[0][0].messages[0].content as string;
     for (const level of ["not_present", "unclear", "weak", "partial", "strong", "very_strong"]) {
@@ -141,20 +150,75 @@ describe("extractTranscriptEvidence", () => {
   it("tells the model to quote the candidate verbatim and never the interviewer", async () => {
     mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
 
-    await extractTranscriptEvidence({ jobDescription: "JD", questions, transcript });
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
 
     const systemPrompt = mockCreate.mock.calls[0][0].messages[0].content as string;
     expect(systemPrompt).toMatch(/VERBATIM/);
     expect(systemPrompt).toMatch(/Never quote the Interviewer/);
   });
 
+  it("gives the model the rubric to report against", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
+
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
+
+    const userMessage = mockCreate.mock.calls[0][0].messages[1].content as string;
+    expect(userMessage).toContain("[dim-1] System design depth");
+    expect(userMessage).toContain("[dim-2] Debugging method");
+  });
+
+  /**
+   * The rubric carries the recruiter's importance decision as a weight, and the
+   * weighting is applied deterministically afterwards. Showing the model the
+   * weights would let it lean on them — reporting more generously for the
+   * dimension it can see counts for most, which is the model scoring by proxy.
+   */
+  it("does not show the model how much each dimension is worth", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
+
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
+
+    const userMessage = mockCreate.mock.calls[0][0].messages[1].content as string;
+    expect(userMessage).not.toContain("0.6");
+    expect(userMessage).not.toContain("0.4");
+  });
+
+  /**
+   * The questions are context for reading the conversation, not the unit being
+   * graded. Passing their ids would invite the model to report per question.
+   */
+  it("supplies the questions as context but not as ids to report on", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
+
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
+
+    const userMessage = mockCreate.mock.calls[0][0].messages[1].content as string;
+    expect(userMessage).toContain("What is your debugging approach?");
+    expect(userMessage).not.toContain("[q-1]");
+    expect(userMessage).not.toContain("[q-2]");
+  });
+
+  /**
+   * The behaviour per-question extraction could not express: a competency
+   * evidenced while answering some other question still counts.
+   */
+  it("tells the model to look for each dimension across the whole call", async () => {
+    mockCreate.mockResolvedValueOnce(aiResponse(evidencePayload()));
+
+    await extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript });
+
+    const systemPrompt = mockCreate.mock.calls[0][0].messages[0].content as string;
+    expect(systemPrompt).toMatch(/ANY answer/);
+    expect(systemPrompt).toMatch(/do not treat a dimension as covered merely because a question/i);
+  });
+
   it("rejects a response whose shape does not parse", async () => {
     mockCreate.mockResolvedValueOnce(
-      aiResponse({ answers: [{ question_id: "q-1", evidence_level: "excellent" }] }),
+      aiResponse({ dimensions: [{ dimension_id: "dim-1", evidence_level: "excellent" }] }),
     );
 
     await expect(
-      extractTranscriptEvidence({ jobDescription: "JD", questions, transcript }),
+      extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript }),
     ).rejects.toThrow();
   });
 
@@ -162,7 +226,7 @@ describe("extractTranscriptEvidence", () => {
     mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: "" } }] });
 
     await expect(
-      extractTranscriptEvidence({ jobDescription: "JD", questions, transcript }),
+      extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript }),
     ).rejects.toThrow("OpenAI returned an empty response");
   });
 
@@ -170,7 +234,7 @@ describe("extractTranscriptEvidence", () => {
     delete process.env.OPENAI_API_KEY;
 
     await expect(
-      extractTranscriptEvidence({ jobDescription: "JD", questions, transcript }),
+      extractTranscriptEvidence({ jobDescription: "JD", dimensions, questions, transcript }),
     ).rejects.toThrow("OPENAI_API_KEY is not configured");
   });
 });
@@ -186,16 +250,17 @@ describe("extractTranscriptEvidence — a call nobody spoke in", () => {
     { role: "agent", text: "Are you still there?", at: "2026-06-03T10:00:40.000Z" },
   ];
 
-  it("reports not_present for every question without calling the model", async () => {
+  it("reports not_present for every dimension without calling the model", async () => {
     const result = await extractTranscriptEvidence({
       jobDescription: "JD",
+      dimensions,
       questions,
       transcript: silent,
     });
 
     expect(mockCreate).not.toHaveBeenCalled();
     expect(result.skipped).toBe(true);
-    expect(result.evidence.answers.map((a) => a.evidence_level)).toEqual([
+    expect(result.evidence.dimensions.map((a) => a.evidence_level)).toEqual([
       "not_present",
       "not_present",
     ]);
@@ -204,16 +269,18 @@ describe("extractTranscriptEvidence — a call nobody spoke in", () => {
   it("attaches no evidence items it would have to invent", async () => {
     const result = await extractTranscriptEvidence({
       jobDescription: "JD",
+      dimensions,
       questions,
       transcript: silent,
     });
 
-    expect(result.evidence.answers.every((a) => a.evidence_items.length === 0)).toBe(true);
+    expect(result.evidence.dimensions.every((a) => a.evidence_items.length === 0)).toBe(true);
   });
 
   it("treats a candidate turn of pure whitespace as silence", async () => {
     const result = await extractTranscriptEvidence({
       jobDescription: "JD",
+      dimensions,
       questions,
       transcript: [...silent, { role: "candidate", text: "   ", at: "2026-06-03T10:01:00.000Z" }],
     });
@@ -227,6 +294,7 @@ describe("extractTranscriptEvidence — a call nobody spoke in", () => {
 
     const result = await extractTranscriptEvidence({
       jobDescription: "JD",
+      dimensions,
       questions,
       transcript,
     });

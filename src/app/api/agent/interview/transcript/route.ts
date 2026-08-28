@@ -3,6 +3,7 @@ import { z } from "zod/v4";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { saveInterviewTranscriptDraft } from "@/lib/data/interview-sessions";
 import { uuidSchema, voiceTranscriptTurnSchema } from "@/lib/validations";
+import { requireBearerSecret } from "@/lib/auth/guards";
 
 // Service-role write driven by a machine caller — always run on the server,
 // never cached.
@@ -31,14 +32,8 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const secret = process.env.AGENT_API_SECRET;
-  if (!secret) {
-    console.error("AGENT_API_SECRET is not configured; refusing agent report.");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  }
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearerSecret(request, "AGENT_API_SECRET", "agent report");
+  if (denied) return denied;
 
   let body: unknown;
   try {

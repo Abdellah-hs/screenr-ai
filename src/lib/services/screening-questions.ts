@@ -1,5 +1,6 @@
 import OpenAI from "openai";
-import type { ResumeCriterion } from "@/lib/resume-scoring";
+import type { ScreeningDimension } from "@/lib/screening-scoring";
+import { assertApiKeyConfigured } from "@/lib/services/openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -7,20 +8,70 @@ export interface GeneratedScreeningQuestion {
   prompt: string;
 }
 
+/** Questions drafted when there is no rubric to size the set against. */
+export const DEFAULT_SCREENING_QUESTION_COUNT = 5;
+export const MIN_DRAFTED_SCREENING_QUESTIONS = 3;
+export const MAX_DRAFTED_SCREENING_QUESTIONS = 8;
+
+/**
+ * How many questions to draft for a rubric of this size.
+ *
+ * One question per dimension is the target, because the rubric is the scoring
+ * unit: a dimension no question goes looking for scores 0 for every candidate.
+ * A fixed count could not hold that — five questions against seven dimensions
+ * left two unprobed, and against three dimensions it spent two questions on
+ * topics nothing grades.
+ *
+ * Bounded at both ends, and both bounds are deliberate:
+ *
+ * - **Floor of 3.** Evidence is extracted across the WHOLE transcript per
+ *   dimension, so extra questions give each dimension more chances to be
+ *   evidenced. A two-question call puts half the score on each answer, where
+ *   one fumbled opening halves the result.
+ * - **Ceiling of 8.** Past that a spoken call is long enough that candidates
+ *   abandon it, and the prompt already knows how to combine related dimensions
+ *   when there are more of them than questions. A saved set is capped at 15 by
+ *   `screeningQuestionsArraySchema` regardless.
+ *
+ * The recruiter can still add or delete questions afterwards — this sizes the
+ * draft, it does not constrain the set.
+ */
+export function screeningQuestionCountForRubric(dimensionCount: number): number {
+  if (dimensionCount <= 0) return DEFAULT_SCREENING_QUESTION_COUNT;
+  return Math.min(
+    MAX_DRAFTED_SCREENING_QUESTIONS,
+    Math.max(MIN_DRAFTED_SCREENING_QUESTIONS, dimensionCount),
+  );
+}
+
+/**
+ * Draft the questions the voice screening will ask, from the screening rubric.
+ *
+ * The rubric is the input because the rubric is what the answers are scored
+ * against: every dimension gets evidence extracted for it, so a dimension no
+ * question goes looking for scores 0 by default. Questions drafted from the job
+ * description alone had no such guarantee — they could probe five things the
+ * rubric never mentions while leaving a weighted dimension untouched.
+ *
+ * Until 2026-08-22 this took the **resume** criteria, which was the wrong
+ * rubric for this stage: it drafted questions against what the CV was gated on
+ * rather than what the call would be graded on.
+ *
+ * Advisory, like every other generator here — the recruiter edits and saves.
+ */
 export async function generateQuestionsForRole(params: {
   jobDescription: string;
-  screeningCriteria: Pick<ResumeCriterion, "label" | "priority">[];
+  /** The screening rubric. Empty falls back to the description alone. */
+  rubricDimensions: Pick<ScreeningDimension, "name">[];
+  /** Override the rubric-derived count. Callers normally omit this. */
   count?: number;
 }): Promise<GeneratedScreeningQuestion[]> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured");
-  }
+  assertApiKeyConfigured();
 
-  const { jobDescription, screeningCriteria, count = 5 } = params;
+  const { jobDescription, rubricDimensions } = params;
+  const count = params.count ?? screeningQuestionCountForRubric(rubricDimensions.length);
 
-  const criteriaList = screeningCriteria
-    .map((c) => `- ${c.label} (${c.priority === "must_have" ? "must-have" : "nice-to-have"})`)
-    .join("\n");
+  const dimensionList = rubricDimensions.map((d) => `- ${d.name}`).join("\n");
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -29,7 +80,9 @@ export async function generateQuestionsForRole(params: {
     messages: [
       {
         role: "system",
-        content: `You are an expert HR hiring consultant. Generate targeted, open-ended screening questions a recruiter would email to a candidate who passed initial resume screening. The goal is to surface evidence the resume cannot — concrete examples, decision-making, motivation, and depth on the mandatory criteria.
+        content: `You are an expert HR hiring consultant. Generate targeted, open-ended questions for a SPOKEN screening call with a candidate who passed initial resume screening. The goal is to surface evidence the resume cannot — concrete examples, decisions made, and depth on the competencies the recruiter will grade.
+
+You are given the EVALUATION RUBRIC for this screening. The candidate's answers will be scored by extracting evidence for each rubric dimension, so a dimension no question goes looking for will score zero.
 
 Return JSON in this exact format:
 {
@@ -40,10 +93,12 @@ Return JSON in this exact format:
 
 Rules:
 - Produce exactly ${count} questions
+- Every rubric dimension must be probed by at least one question. If there are more dimensions than questions, combine the closest-related ones rather than dropping any.
+- If there are more questions than dimensions, spend the extra ones probing the same dimensions from a different angle. Do not introduce a topic the rubric does not name — nothing scores it.
 - Each prompt is a single clear question (no multi-part stacked questions)
 - Each prompt is 1-2 sentences, phrased in second person ("Tell us about...", "Describe a time when...")
-- Avoid yes/no questions — every question must invite a written narrative answer
-- Cover every must-have criterion explicitly; touch the nice-to-have ones when there is room
+- Written to be ASKED ALOUD and answered in speech: plain wording, nothing that needs re-reading, no lists to enumerate
+- Avoid yes/no questions — every question must invite a narrative answer
 - Do not ask for information already on a typical resume (work history, job titles, dates)`,
       },
       {
@@ -51,8 +106,8 @@ Rules:
         content: `## Job Description
 ${jobDescription}
 
-## Screening Criteria
-${criteriaList || "(no explicit criteria — use the job description to infer what to probe)"}`,
+## Evaluation Rubric — the answers will be scored on these
+${dimensionList || "(no rubric yet — use the job description to infer what to probe)"}`,
       },
     ],
   });
@@ -123,9 +178,7 @@ export async function scoreAnswers(params: {
   questions: { id: string; prompt: string }[];
   answers: { question_id: string; answer_text: string }[];
 }): Promise<AnswerScoringEvidence> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured");
-  }
+  assertApiKeyConfigured();
 
   const { jobDescription, questions, answers } = params;
 

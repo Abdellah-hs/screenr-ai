@@ -6,8 +6,9 @@
  * (`agents/interview/`) runs, and — unlike screening — anchors the whole
  * conversation in the candidate's actual résumé so questions are grounded in
  * their real experience rather than a generic script. The instructions travel
- * to the worker via LiveKit room metadata (set server-side; the candidate can't
- * touch them).
+ * to the worker via LiveKit room metadata (set server-side, so the candidate
+ * cannot alter them — but LiveKit ships room metadata to every participant, so
+ * they CAN read them; see the trust model in `src/lib/services/livekit.ts`).
  *
  * Pure + deterministic: given the same résumé + job title + format it returns
  * the same instruction string, so it's fully unit-testable.
