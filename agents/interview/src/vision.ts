@@ -47,18 +47,29 @@ export interface VisionObservation {
 }
 
 /**
- * How often an observation is RECORDED for the proctoring report. The rule
- * thresholds are expressed in milliseconds, not sample counts, so they stay
- * correct at any cadence; intervals above ~15s start losing the shorter
- * incidents entirely, and on a 10-minute call there is little room to widen it
- * before ~60 samples becomes too few to say anything.
+ * How often an observation is RECORDED for the proctoring report.
  *
- * Deliberately NOT the same knob as the overlay cadence below. The app bounds a
- * report at 500 observations, so driving this at overlay speed would blow the
- * schema on a long call — and would quietly change what every stored report
- * means.
+ * This is the RESOLUTION of every stored finding, and it was 10s — which threw
+ * away most real ones. An incident's duration is measured first flagged sample
+ * to last, so the cadence rounds every finding DOWN to a multiple of itself: at
+ * 10s a phone in view for 18 seconds lands on two samples and measures 10s,
+ * falls under `PHONE_VISIBLE_MIN_MS` (15s), and is discarded along with the
+ * still that was captured for it. A condition had to hold ~20s+ to be seen at
+ * all, so an ordinary glance at a phone left no evidence whatsoever.
+ *
+ * 5s halves that error without touching a single threshold — the bar is still
+ * 15 seconds of a condition genuinely holding, and a lone stray frame still
+ * spans zero time and can still never accuse anyone. It is close to free
+ * because the overlay already runs the detector every second: this only decides
+ * how often a reading is KEPT, not how often one is computed.
+ *
+ * Bounded above by the rules and below by the schema. The app caps a report at
+ * 500 observations, and `INTERVIEW_DURATION_MINUTES` is 10 — 120 samples here,
+ * so there is room, but driving this at overlay speed would blow that cap on a
+ * long call and quietly change what every stored report means. It stays a
+ * separate knob from the overlay cadence for exactly that reason.
  */
-const SAMPLE_INTERVAL_MS = Number(process.env.VISION_SAMPLE_INTERVAL_MS) || 10_000;
+const SAMPLE_INTERVAL_MS = Number(process.env.VISION_SAMPLE_INTERVAL_MS) || 5_000;
 
 /** Set `VISION_OVERLAY=0` to stop publishing boxes to the candidate's browser. */
 const OVERLAY_ENABLED = (process.env.VISION_OVERLAY ?? "1") !== "0";
@@ -90,12 +101,27 @@ const SNAPSHOTS_ENABLED = (process.env.VISION_SNAPSHOTS ?? "1") !== "0";
  * Minimum gap between stored snapshots of the SAME condition.
  *
  * A phone left on the desk for five minutes is one finding, not three hundred
- * photographs of a candidate. One still every 30s is enough to show a recruiter
- * that the condition persisted, and bounds a pathological interview to a couple
- * of dozen small images.
+ * photographs of a candidate — this is what bounds that.
+ *
+ * Halved from 30s on 2026-08-28, when the incident thresholds dropped to 5s. A
+ * finding can now be two samples long, and an image only attaches if a snapshot
+ * falls INSIDE the incident's window: at 30s a second brief sighting soon after
+ * the first was throttled out and its incident rendered with no picture, which
+ * is the failure the threshold change was made to fix. The gap that loses an
+ * image shrinks from ~30s to ~15s.
+ *
+ * It costs transient uploads, not stored images: `attachSnapshots` keeps one
+ * still per incident at submit and deletes the rest, so what a finished
+ * interview holds is bounded by findings, never by this.
  */
 const SNAPSHOT_MIN_INTERVAL_MS =
-  Number(process.env.VISION_SNAPSHOT_INTERVAL_MS) || 30_000;
+  Number(process.env.VISION_SNAPSHOT_INTERVAL_MS) || 15_000;
+
+/**
+ * How long to wait for a camera track before saying, in the log, that there
+ * isn't one. Generous: the candidate has to grant a permission prompt first.
+ */
+const NO_CAMERA_WARN_MS = 30_000;
 
 /** A single frame lifted off the live track, in RGBA. */
 interface RawFrame {
@@ -104,12 +130,35 @@ interface RawFrame {
   height: number;
 }
 
+/**
+ * How long to wait for one frame off a subscribed track before giving up.
+ *
+ * A muted camera keeps its subscription and simply stops sending, with no
+ * end-of-stream to read — so an unbounded `read()` stays pending for as long as
+ * the mute lasts, and the `busy` flag it is holding stops every later tick. The
+ * detector has had a timeout since it was written (`DETECT_TIMEOUT_MS`); this is
+ * the same reasoning one step earlier in the pipeline. Comfortably longer than
+ * any real inter-frame gap, so it only ever fires on a genuine stall.
+ */
+const FRAME_CAPTURE_TIMEOUT_MS = 5_000;
+
 /** Grab one frame off the track and hand back raw pixels. */
 async function captureFrame(track: RemoteTrack): Promise<RawFrame | null> {
   const stream = new VideoStream(track);
   const reader = stream.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { value, done } = await reader.read();
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<{ value: undefined; done: true }>((resolve) => {
+        timer = setTimeout(() => {
+          console.error(
+            `vision: no frame within ${FRAME_CAPTURE_TIMEOUT_MS}ms — camera muted or stalled`,
+          );
+          resolve({ value: undefined, done: true });
+        }, FRAME_CAPTURE_TIMEOUT_MS);
+      }),
+    ]);
     if (done || !value) return null;
 
     // The wire format varies by codec/browser (I420 in practice); converting to
@@ -125,8 +174,10 @@ async function captureFrame(track: RemoteTrack): Promise<RawFrame | null> {
     );
     return null;
   } finally {
+    clearTimeout(timer);
     // VideoStream is a ReadableStream: cancelling tears down the underlying
-    // frame source, so a 10s sampling loop doesn't leak one per tick.
+    // frame source, so a 10s sampling loop doesn't leak one per tick. On the
+    // timeout path this is also what releases the read that never resolved.
     await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
@@ -205,15 +256,47 @@ export function startVisionProctoring(
   // the first sample isn't also paying the model-load cost.
   preloadDetector();
 
-  const onSubscribed = (track: RemoteTrack) => {
-    if (track.kind === TrackKind.KIND_VIDEO) videoTrack = track;
+  const adopt = (track: RemoteTrack, how: string) => {
+    if (track.kind !== TrackKind.KIND_VIDEO || videoTrack === track) return;
+    videoTrack = track;
+    console.info(`vision: watching the candidate's camera (${how})`);
   };
+
+  const onSubscribed = (track: RemoteTrack) => adopt(track, "subscribed");
   const onUnsubscribed = (track: RemoteTrack) => {
     if (track === videoTrack) videoTrack = null;
   };
 
   ctx.room.on(RoomEvent.TrackSubscribed, onSubscribed);
   ctx.room.on(RoomEvent.TrackUnsubscribed, onUnsubscribed);
+
+  // The camera may ALREADY be subscribed by the time we get here, and
+  // `TrackSubscribed` does not re-fire for it. This runs after `ctx.connect()`
+  // and after the instructions fetch — an HTTP round trip to the app — while
+  // the candidate publishes their camera within about a second of joining. Lose
+  // that race and `videoTrack` stays null for the whole interview: the sampler
+  // ticks, returns immediately every time, logs nothing, and the report comes
+  // back `vision_sampled: false` with no indication that anything went wrong.
+  //
+  // The candidate's own browser has always reconciled the mirror image of this
+  // for the agent's audio track; the worker simply never did it for the camera.
+  for (const participant of ctx.room.remoteParticipants.values()) {
+    for (const publication of participant.trackPublications.values()) {
+      if (publication.track) adopt(publication.track, "already subscribed");
+    }
+  }
+
+  // A camera that never arrives is the one failure this module cannot report as
+  // evidence, so it says so in the log instead of leaving a silent gap.
+  const noCameraWarning = setTimeout(() => {
+    if (!videoTrack) {
+      console.warn(
+        `vision: no camera track ${Math.round(NO_CAMERA_WARN_MS / 1000)}s in — ` +
+          `no camera evidence will be reported for this interview`,
+      );
+    }
+  }, NO_CAMERA_WARN_MS);
+  noCameraWarning.unref?.();
 
   const tickMs = OVERLAY_ENABLED
     ? Math.min(OVERLAY_INTERVAL_MS, SAMPLE_INTERVAL_MS)
@@ -300,6 +383,7 @@ export function startVisionProctoring(
     stop: () => {
       stopped = true;
       clearInterval(timer);
+      clearTimeout(noCameraWarning);
       ctx.room.off(RoomEvent.TrackSubscribed, onSubscribed);
       ctx.room.off(RoomEvent.TrackUnsubscribed, onUnsubscribed);
     },

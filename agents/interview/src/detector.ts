@@ -45,11 +45,18 @@ const DETECT_TIMEOUT_MS = 5_000;
 /**
  * How many times the thread may be (re)started before proctoring gives up.
  *
- * This process is long-lived and serves one interview after another, so a crash
- * must not be permanent: without a respawn, one bad frame during one candidate's
- * call would silently cost every later candidate on this worker their camera
- * evidence. Bounded, because a thread that dies on every frame is a broken
- * install, and retrying it forever would just burn CPU quietly.
+ * The budget is per INTERVIEW, and that is a property of the runtime rather
+ * than of this file: `@livekit/agents` forks a fresh child process per job
+ * (`JobProcExecutor.createProcess` → `fork`, one job, then join), so every
+ * module-level value here — this counter, `gaveUp`, the `pending` map — starts
+ * clean for each candidate. An earlier version of this comment claimed the
+ * opposite ("this process is long-lived and serves one interview after
+ * another") and would have justified exactly the wrong change: resetting the
+ * counter on success, when the point of a bounded budget is that a candidate
+ * whose detector dies on every frame is not made to pay for the retries.
+ *
+ * Bounded, because a thread that dies on every frame is a broken install, and
+ * retrying it forever would just burn CPU quietly for the rest of the call.
  */
 const MAX_SPAWN_ATTEMPTS = 3;
 

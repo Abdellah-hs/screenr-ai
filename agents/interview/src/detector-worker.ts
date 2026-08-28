@@ -21,26 +21,21 @@
  */
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
-import sharp from "sharp";
 import type * as OrtTypes from "onnxruntime-node";
 import {
+  DECODE_MIN_SCORE,
   INPUT_SIZE,
   countKept,
   decodeYoloxOutput,
-  frameUsability,
-  letterboxRatio,
-  luminanceStats,
   nms,
   observationConfidence,
   selectSignals,
   toOverlayBoxes,
   type OverlayBox,
 } from "./postprocess.js";
+import { preprocess } from "./preprocess.js";
 
 const require = createRequire(import.meta.url);
-
-/** YOLOX pads the letterbox remainder with this constant, not with black. */
-const PAD_VALUE = 114;
 
 /** Request/response envelopes. `id` correlates replies; frames may overtake. */
 export interface DetectRequest {
@@ -94,58 +89,6 @@ async function loadSession(): Promise<OrtTypes.InferenceSession | null> {
   }
 }
 
-/**
- * Build YOLOX's input tensor from a raw RGBA frame.
- *
- * Two conventions here are YOLOX-specific and easy to get wrong, both taken from
- * its own `demo/ONNXRuntime` reference: the model wants **BGR** channel order,
- * and it wants raw **0–255** values with no mean/std normalisation. Feeding it
- * normalised RGB produces boxes that look reasonable and are quietly wrong.
- *
- * The luminance stats are measured on the RESIZED CONTENT ONLY, before padding.
- * A 16:9 webcam frame letterboxed into a square is ~44% flat grey padding, which
- * would drag the mean toward 114 and crush the standard deviation — a well-lit
- * interview would then score as an unusable frame.
- */
-async function preprocess(
-  rgba: Uint8Array,
-  width: number,
-  height: number,
-): Promise<{ tensorData: Float32Array; usability: number; ratio: number } | null> {
-  const ratio = letterboxRatio(width, height);
-  if (ratio <= 0) return null;
-
-  const contentWidth = Math.max(1, Math.min(INPUT_SIZE, Math.round(width * ratio)));
-  const contentHeight = Math.max(1, Math.min(INPUT_SIZE, Math.round(height * ratio)));
-
-  const content = await sharp(rgba, { raw: { width, height, channels: 4 } })
-    .resize(contentWidth, contentHeight, { fit: "fill", kernel: "linear" })
-    .removeAlpha()
-    .raw()
-    .toBuffer();
-
-  const { mean, stdDev } = luminanceStats(content);
-
-  const plane = INPUT_SIZE * INPUT_SIZE;
-  const tensorData = new Float32Array(3 * plane).fill(PAD_VALUE);
-
-  for (let y = 0; y < contentHeight; y++) {
-    const srcRow = y * contentWidth * 3;
-    const dstRow = y * INPUT_SIZE;
-    for (let x = 0; x < contentWidth; x++) {
-      const src = srcRow + x * 3;
-      const dst = dstRow + x;
-      tensorData[dst] = content[src + 2]; // B
-      tensorData[plane + dst] = content[src + 1]; // G
-      tensorData[2 * plane + dst] = content[src]; // R
-    }
-  }
-
-  // The ratio travels with the tensor it scaled: decoding the boxes back to
-  // frame coordinates must use the exact value the pixels were resized by.
-  return { tensorData, usability: frameUsability(mean, stdDev), ratio };
-}
-
 async function detect(request: DetectRequest): Promise<DetectReading | null> {
   const active = await loadSession();
   if (!active || !ort) return null;
@@ -170,17 +113,30 @@ async function detect(request: DetectRequest): Promise<DetectReading | null> {
 
   const { ratio } = prepared;
   const frame = { width, height };
-  const thresholds = { personMinScore: minScore, phoneMinScore: minScore };
+  const thresholds = {
+    personMinScore: minScore,
+    additionalPersonMinScore: minScore,
+    phoneMinScore: minScore,
+  };
+
+  // The override has to reach the DECODE floor too. That floor runs in front of
+  // every class threshold, so lowering a class floor without lowering it just
+  // moved a filter nobody could see: the anchor was already gone, and the knob
+  // silently did nothing below 0.2 — exactly the range you reach for when a
+  // real camera is under-detecting.
+  const decodeMinScore =
+    minScore === undefined ? undefined : Math.min(minScore, DECODE_MIN_SCORE);
 
   // Select once; count from that exact array. The overlay and the report can
   // therefore never disagree about what the frame contained.
-  const kept = selectSignals(nms(decodeYoloxOutput(raw, { ratio })), frame, thresholds);
+  const decoded = decodeYoloxOutput(raw, { ratio, minScore: decodeMinScore });
+  const kept = selectSignals(nms(decoded), frame, thresholds);
   const signals = countKept(kept);
 
   return {
     person_count: signals.personCount,
     phone_count: signals.phoneCount,
-    confidence: observationConfidence(prepared.usability, signals),
+    confidence: observationConfidence(prepared.usability),
     boxes: toOverlayBoxes(kept, frame),
   };
 }

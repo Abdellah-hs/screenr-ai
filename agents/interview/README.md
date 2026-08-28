@@ -2,9 +2,20 @@
 
 The server-side interviewer for the on-demand AI **video** interview. It is a
 **separate process** from the Next.js app (forked from `agents/screening/`):
-LiveKit dispatches it into every `interview-*` room the app creates, it runs the
-conversation over OpenAI Realtime, and it POSTs the transcript to the app's
-`/api/agent/interview/transcript` route as the interview progresses.
+LiveKit dispatches it into every `interview-*` room the app creates, it
+**fetches its interviewer instructions** from the app's
+`/api/agent/interview/instructions` route, runs the conversation over OpenAI
+Realtime, and POSTs the transcript to `/api/agent/interview/transcript` as the
+interview progresses.
+
+> **The instructions are fetched, not read off the room.** They used to travel
+> in LiveKit room metadata, which LiveKit delivers to *every* participant — so
+> the candidate's browser received the condensed copy of their résumé and the
+> campaign's interviewing stance on join. Metadata now carries the application
+> id alone. `SCREENR_APP_ORIGIN` and `AGENT_API_SECRET` are therefore required
+> to run an interview at all, and this worker must be **restarted before the
+> app is deployed** (it falls back to metadata, so a new worker runs against
+> either version of the app; an old worker does not).
 
 The candidate joins with camera + mic. This worker drives the spoken
 conversation *and* watches the camera for proctoring — two jobs that are

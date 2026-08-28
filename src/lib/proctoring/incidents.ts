@@ -35,7 +35,7 @@
  */
 
 /** Bump when the thresholds below change, so old reports stay interpretable. */
-export const PROCTORING_REPORT_VERSION = "proctoring-v3";
+export const PROCTORING_REPORT_VERSION = "proctoring-v4";
 
 /**
  * A camera gap must last this long to count. Below it the "gap" is almost always
@@ -60,6 +60,13 @@ export const TAB_BLUR_CRITICAL_MS = 10_000;
  * Nobody detectable in frame. Generous: candidates lean out of shot to think,
  * reach for water, or check a second monitor constantly, and none of that is
  * misconduct. Only sustained absence is worth surfacing.
+ *
+ * Deliberately NOT lowered to 5s with the other two on 2026-08-28. The bar
+ * tracks how ordinary the behaviour is, not how serious the finding sounds:
+ * leaving the frame briefly is something nearly every candidate does and means
+ * nothing, whereas a phone or a second person in shot is not baseline
+ * behaviour. Dropping this one would fill honest reports with noise and teach
+ * recruiters to skim past the section.
  */
 export const PERSON_ABSENT_MIN_MS = 15_000;
 
@@ -67,23 +74,40 @@ export const PERSON_ABSENT_MIN_MS = 15_000;
 export const PERSON_ABSENT_CRITICAL_MS = 60_000;
 
 /**
- * A second person in frame. Deliberately longer than the ~10s sampling interval,
- * so it takes THREE consecutive sightings rather than two: someone walking
- * behind the candidate, or a person on a poster caught at one angle, lands in
- * one or two frames and must not raise an incident.
+ * A second person in frame. At the ~5s sampling interval this is TWO
+ * consecutive sightings — the lowest bar that still holds the rule the whole
+ * module is built on: a single stray frame spans zero time and can never clear
+ * a threshold, so one bad inference still cannot accuse anybody.
+ *
+ * Lowered from 15s on 2026-08-28 at the product owner's direction, after a real
+ * call where someone appeared on camera and the report said nothing. The
+ * trade-off is explicit and was accepted: a person genuinely walking past
+ * behind the candidate now registers, where before it did not. What keeps that
+ * proportionate is the severity ladder — two sightings is a `warning`, and it
+ * takes `MULTIPLE_PEOPLE_CRITICAL_MS` of continuous presence to read as
+ * `critical` — plus the snapshot, so a recruiter sees the frame rather than
+ * only the claim.
+ *
+ * Stated in milliseconds rather than in samples on purpose: the bar is a real
+ * duration and stays correct at any cadence.
  */
-export const MULTIPLE_PEOPLE_MIN_MS = 15_000;
+export const MULTIPLE_PEOPLE_MIN_MS = 5_000;
 
 /** A second person present persistently, not passing through. */
 export const MULTIPLE_PEOPLE_CRITICAL_MS = 30_000;
 
 /**
- * A phone in shot. Same three-sightings logic as `multiple_people`: a phone face
- * down on the desk catches the light in one frame, and a candidate silencing a
- * call is not cheating. Only a device that stays in view long enough to be read
- * from is worth reporting.
+ * A phone in shot. Same two-sightings logic as `multiple_people`, and lowered
+ * with it: an ordinary glance at a phone is now reported, where a 15s bar meant
+ * only a device parked in view long enough to be read from ever was.
+ *
+ * The cost is the honest one — a candidate silencing a call, or a phone face
+ * down on the desk catching the light across two frames, now produces a
+ * `warning` row. It stays a warning until `PHONE_VISIBLE_CRITICAL_MS`, and it
+ * arrives with the frame attached, so the recruiter is judging a picture rather
+ * than a bare accusation.
  */
-export const PHONE_VISIBLE_MIN_MS = 15_000;
+export const PHONE_VISIBLE_MIN_MS = 5_000;
 
 /** A phone held in view long enough to work from, not just moved out of the way. */
 export const PHONE_VISIBLE_CRITICAL_MS = 30_000;
@@ -98,8 +122,10 @@ export const VISION_MIN_CONFIDENCE = 0.6;
 
 /**
  * Consecutive samples further apart than this don't belong to the same run. The
- * worker samples every ~10s; a longer gap means it stalled or the track dropped,
- * and assuming the condition held throughout would invent evidence.
+ * worker samples every ~5s; a longer gap means it stalled or the track dropped,
+ * and assuming the condition held throughout would invent evidence. Left at 30s
+ * rather than tightened with the cadence: it is a stall detector, and a few
+ * dropped frames should break a run only when they add up to a real blind spot.
  */
 export const VISION_MAX_SAMPLE_GAP_MS = 30_000;
 
@@ -145,10 +171,24 @@ export interface VisionObservation {
   /** How many people the detector found. 0 = nobody in shot. */
   person_count: number;
   /**
-   * How usable the frame was as evidence, 0–1 — the detector's own confidence in
-   * what it counted, floored by frame quality (a dark or flat frame scores low).
-   * A detector cannot say "I couldn't see"; this is the worker's stand-in for it,
-   * and it is what keeps an unlit room from reading as an empty one.
+   * How usable the frame was as evidence, 0–1 — purely a measure of whether the
+   * frame COULD BE SEEN (exposure and detail), never of how sure the detector
+   * was about a particular box. A detector cannot say "I couldn't see"; it just
+   * returns fewer boxes, which reads downstream as "nobody was there". This is
+   * the worker's stand-in for the judgement it can't make, and it is what keeps
+   * an unlit room from reading as an empty one.
+   *
+   * That distinction is load-bearing, because this field is read as a GATE (see
+   * `VISION_MIN_CONFIDENCE`) rather than as a discount. Until 2026-08-27 the
+   * worker also capped it at the weakest counted person's score, so a candidate
+   * detected at 0.5 in a well-lit room produced no evidence at all rather than
+   * weak evidence of presence — and since a dropped sample does not break a run,
+   * a candidate visible for twenty seconds of a thirty-second window was
+   * reported absent for all thirty. Detection strength now decides what the
+   * worker COUNTS; it must never come back into this number.
+   *
+   * Samples written before that change carry the old, lower values. They are
+   * not back-filled: a stored report should show what was actually observed.
    */
   confidence: number;
   /** How many phones/handheld devices were in shot. 0 = none. */
@@ -164,8 +204,46 @@ export interface VisionObservation {
 export interface ProctoringSnapshot {
   /** ISO timestamp of the frame — how a snapshot is matched to an incident. */
   at: string;
+  /**
+   * Every condition the frame satisfied, so the still can attach to any
+   * incident it actually depicts.
+   *
+   * A frame showing a second person AND a phone is evidence of both. Filing it
+   * under one label meant the phone finding rendered with no picture purely
+   * because something more serious happened to share the frame — the recruiter
+   * was then asked to weigh an automated accusation with nothing to check it
+   * against, which is the exact gap this feature exists to close.
+   */
+  conditions: VisionIncidentType[];
+  key: string;
+}
+
+/**
+ * A still as stored before 2026-08-28, when one image carried one label.
+ *
+ * Kept as its own type rather than an optional field on the current one so the
+ * write path cannot compile without saying what a frame shows: a still whose
+ * conditions went missing would attach to nothing and be deleted as an orphan,
+ * which is a silent way to lose the evidence this feature exists to keep.
+ * These rows are not back-filled — a stored report should say what was actually
+ * observed, not what today's code would have observed.
+ */
+export interface LegacyProctoringSnapshot {
+  at: string;
   condition: VisionIncidentType;
   key: string;
+}
+
+/** Either shape, as read back from a JSONB column of unknown vintage. */
+export type StoredProctoringSnapshot =
+  | ProctoringSnapshot
+  | LegacyProctoringSnapshot;
+
+/** The conditions a stored still is evidence of, across both stored shapes. */
+export function snapshotConditions(
+  snapshot: StoredProctoringSnapshot,
+): VisionIncidentType[] {
+  return "conditions" in snapshot ? snapshot.conditions : [snapshot.condition];
 }
 
 /** An event that cleared the noise threshold, with its severity decided here. */
@@ -268,28 +346,6 @@ export function conditionsOf(observation: VisionObservation): VisionIncidentType
 }
 
 /**
- * The single condition a one-image piece of evidence should be filed under.
- *
- * A still is one picture, so it gets one label even when the frame satisfies two
- * conditions — an extra person is the more serious claim and wins. This lives
- * here rather than in the worker on purpose: the worker reports counts, and what
- * a set of counts *means* is this layer's vocabulary. Keeping it here means a
- * change to `conditionsOf` can never leave the worker filing stills under a
- * definition the rules no longer use.
- */
-export function primaryCondition(
-  observation: VisionObservation,
-): VisionIncidentType | null {
-  const conditions = conditionsOf(observation);
-  return (
-    conditions.find((c) => c === "multiple_people") ??
-    conditions.find((c) => c === "person_absent") ??
-    conditions[0] ??
-    null
-  );
-}
-
-/**
  * Collapse periodic frame samples into durations.
  *
  * A run is consecutive usable samples in which one condition holds, tracked
@@ -388,13 +444,27 @@ function totalFor(
  * informative frame, and the incident's own duration already says how long it
  * went on. Keeping fewer images of a candidate is the better default.
  *
+ * One still may serve TWO incidents, and that is not a contradiction of the
+ * above — it stores no extra image. A frame showing a second person and a phone
+ * is evidence of both findings, and attaching it only to the more serious one
+ * left the other rendering as a bare accusation with nothing to check it
+ * against, purely because the two happened to coincide.
+ *
  * Pure: matching only, no I/O. Deleting the orphans is the action's job.
  */
 export function attachSnapshots(
   report: ProctoringReport,
-  snapshots: ProctoringSnapshot[],
+  snapshots: StoredProctoringSnapshot[],
 ): { report: ProctoringReport; orphanedKeys: string[] } {
+  // Claimed per CONDITION, not per key: one still per incident as before, but
+  // the same still may serve a `multiple_people` and a `phone_visible` finding
+  // when the frame carries both. Runs of one type never overlap, so this can
+  // only bite on a hand-built report — it is here to keep "the earliest still,
+  // once" deterministic rather than to decide anything.
   const claimed = new Set<string>();
+  // Referenced by any incident at all. This, not `claimed`, is what saves a
+  // still from the prune, so a frame serving two findings is counted once.
+  const used = new Set<string>();
 
   const incidents = report.incidents.map((incident) => {
     if (incident.source !== "vision") return incident;
@@ -407,8 +477,8 @@ export function attachSnapshots(
       .map((s) => ({ snapshot: s, ts: Date.parse(s.at) }))
       .filter(
         ({ snapshot, ts }) =>
-          !claimed.has(snapshot.key) &&
-          snapshot.condition === incident.type &&
+          !claimed.has(`${incident.type} ${snapshot.key}`) &&
+          snapshotConditions(snapshot).some((c) => c === incident.type) &&
           !Number.isNaN(ts) &&
           ts >= startTs &&
           ts <= endTs,
@@ -416,13 +486,14 @@ export function attachSnapshots(
       .sort((a, b) => a.ts - b.ts)[0]?.snapshot;
 
     if (!match) return incident;
-    claimed.add(match.key);
+    claimed.add(`${incident.type} ${match.key}`);
+    used.add(match.key);
     return { ...incident, snapshot_key: match.key };
   });
 
   return {
     report: { ...report, incidents },
-    orphanedKeys: snapshots.filter((s) => !claimed.has(s.key)).map((s) => s.key),
+    orphanedKeys: snapshots.filter((s) => !used.has(s.key)).map((s) => s.key),
   };
 }
 

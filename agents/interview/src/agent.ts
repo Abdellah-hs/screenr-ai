@@ -3,12 +3,18 @@
  *
  * A standalone LiveKit Agents process (NOT part of the Next.js app), forked
  * from the screening worker. The app opens a room per interview attempt
- * (`createInterviewRoomGrant`) with the résumé-grounded interviewer
- * instructions in the room metadata; LiveKit dispatches this worker into the
- * room, where it runs the conversation over OpenAI Realtime and reports every
- * transcript turn back to the app's interview agent API route. The worker never
- * touches application state — it produces evidence (the transcript); the app's
- * rules decide everything else.
+ * (`createInterviewRoomGrant`) carrying the application id in room metadata;
+ * LiveKit dispatches this worker into the room, where it FETCHES its
+ * résumé-grounded interviewer instructions from the app, runs the conversation
+ * over OpenAI Realtime, and reports every transcript turn back to the app's
+ * interview agent API route. The worker never touches application state — it
+ * produces evidence (the transcript); the app's rules decide everything else.
+ *
+ * The instructions are fetched rather than read off the room because LiveKit
+ * delivers room metadata to every participant: while they rode in metadata, the
+ * candidate's own browser received the condensed copy of their résumé and the
+ * campaign's interviewing stance on join. Metadata now carries the application
+ * id alone.
  *
  * The candidate publishes camera + mic. This worker drives the spoken
  * conversation off the audio track; the camera feed is present in the room for
@@ -17,7 +23,9 @@
  *
  * Env (see .env.example): LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
  * (read by the agents CLI), OPENAI_API_KEY (Realtime), SCREENR_APP_ORIGIN +
- * AGENT_API_SECRET (transcript reporting).
+ * AGENT_API_SECRET (fetching instructions and reporting transcript, proctoring
+ * and snapshots — the worker cannot run an interview without them any more,
+ * where before they only cost it the evidence).
  *
  * Run: `pnpm dev` (hot-reload against LiveKit Cloud) or `pnpm start`.
  */
@@ -44,10 +52,18 @@ interface TranscriptTurn {
   at: string;
 }
 
-/** Mirrors `InterviewRoomMetadata` in the app (src/lib/services/livekit.ts). */
+/**
+ * Mirrors `InterviewRoomMetadata` in the app (src/lib/services/livekit.ts).
+ *
+ * `instructions` is the LEGACY field: the app stopped publishing it on
+ * 2026-08-24 because room metadata is candidate-visible. It is still read as a
+ * fallback so this worker runs against an app deployed either side of that
+ * change — which is what makes "restart the workers first" a safe rollout. Once
+ * the app is deployed, this field is dead and can be deleted.
+ */
 interface InterviewRoomMetadata {
   application_id: string;
-  instructions: string;
+  instructions?: string;
 }
 
 // Must be a Realtime model the OPENAI_API_KEY can actually access. This account
@@ -61,10 +77,12 @@ function parseMetadata(raw: string | undefined): InterviewRoomMetadata | null {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw) as Partial<InterviewRoomMetadata>;
-    if (typeof data.application_id !== "string" || typeof data.instructions !== "string") {
-      return null;
-    }
-    return { application_id: data.application_id, instructions: data.instructions };
+    if (typeof data.application_id !== "string") return null;
+    return {
+      application_id: data.application_id,
+      instructions:
+        typeof data.instructions === "string" ? data.instructions : undefined,
+    };
   } catch {
     return null;
   }
@@ -109,6 +127,42 @@ async function postToApp(path: string, label: string, body: unknown): Promise<vo
     }
   } catch (err) {
     console.error(`${label} failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Fetch this interview's instructions from the app.
+ *
+ * Deliberately NOT routed through `postToApp`: everything there is a
+ * best-effort report whose loss costs a recruiter some evidence, and nothing in
+ * it throws. This is the opposite — without instructions there is no interview
+ * to run, so the caller fails loudly rather than improvising questions against
+ * a rubric nobody chose.
+ */
+async function fetchInstructions(applicationId: string): Promise<string | null> {
+  const origin = process.env.SCREENR_APP_ORIGIN;
+  const secret = process.env.AGENT_API_SECRET;
+  if (!origin || !secret) {
+    console.error(
+      "SCREENR_APP_ORIGIN / AGENT_API_SECRET not configured; cannot fetch instructions",
+    );
+    return null;
+  }
+
+  try {
+    const url = `${origin}/api/agent/interview/instructions?application_id=${encodeURIComponent(applicationId)}`;
+    const res = await fetch(url, { headers: { authorization: `Bearer ${secret}` } });
+    if (!res.ok) {
+      console.error(`instructions fetch failed (${res.status}) for ${applicationId}`);
+      return null;
+    }
+    const data = (await res.json()) as { instructions?: unknown };
+    return typeof data.instructions === "string" && data.instructions.length > 0
+      ? data.instructions
+      : null;
+  } catch (err) {
+    console.error("instructions fetch failed:", err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
@@ -165,11 +219,24 @@ export default defineAgent({
     await ctx.connect();
 
     // Only run in rooms the app created for an interview; metadata carries the
-    // application id + interviewer instructions and is set server-side only.
+    // application id, and is set server-side only.
     const meta = parseMetadata(ctx.room.metadata);
     if (!meta || !ctx.room.name?.startsWith("interview-")) {
       console.warn(`not an interview room (${ctx.room.name}); leaving`);
       return;
+    }
+
+    // Fetch first, fall back to metadata for an app deployed before the
+    // instructions moved off the room. Failing here is loud on purpose:
+    // silence is the one outcome the candidate cannot recover from on their own.
+    const instructions =
+      (await fetchInstructions(meta.application_id)) ?? meta.instructions ?? null;
+    if (!instructions) {
+      console.error(
+        `no interviewer instructions for ${meta.application_id} — the candidate would hear ` +
+          `silence. Check SCREENR_APP_ORIGIN / AGENT_API_SECRET.`,
+      );
+      throw new Error(`no instructions for application ${meta.application_id}`);
     }
 
     // Print the model in use so a stale worker is obvious: `dev` mode does NOT
@@ -241,7 +308,7 @@ export default defineAgent({
       await reportVisionObservations(meta.application_id, vision.observations());
     });
 
-    const agent = new voice.Agent({ instructions: meta.instructions });
+    const agent = new voice.Agent({ instructions });
 
     // If the Realtime session can't open (e.g. a model the key can't access),
     // the candidate would otherwise just sit in a silent room. Fail loudly here

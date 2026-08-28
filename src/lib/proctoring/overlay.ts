@@ -190,3 +190,45 @@ export function displayLabels(boxes: OverlayBox[]): OverlayDisplayLabel[] {
     box.label === "phone" ? "phone" : i === primary ? "face" : "second_face",
   );
 }
+
+/**
+ * What, if anything, the candidate is owed in words about the boxes currently
+ * on their self-view.
+ *
+ * Their own face needs no explanation — a green box around it reads as the
+ * camera working. An amber one does not. A candidate who watches "Second face"
+ * appear over their shoulder with nothing next to it will assume they have just
+ * failed something, and the longer it sits there unexplained the more certain
+ * they become. They have not failed anything and structurally cannot have:
+ * these boxes arrive on a data channel, are drawn, and are dropped, while the
+ * report is assembled server-side from the worker's own readings.
+ *
+ * A second face outranks a phone when both are drawn. It is the one that most
+ * reads as an accusation, and someone mid-answer can absorb one sentence.
+ *
+ * Display only, like everything else on this path — the return value reaches a
+ * paragraph and nothing more.
+ */
+export type OverlayNotice = "second_face" | "phone";
+
+export function overlayNotice(
+  labels: readonly OverlayDisplayLabel[],
+): OverlayNotice | null {
+  if (labels.includes("second_face")) return "second_face";
+  if (labels.includes("phone")) return "phone";
+  return null;
+}
+
+/**
+ * How long the notice outlives the box that raised it.
+ *
+ * Boxes are redrawn from every packet, so one the detector loses for a beat —
+ * a turned head, a shifted lamp — vanishes and returns about a second later.
+ * That is honest for a live readout and unbearable for a sentence: reassurance
+ * that strobes is worse than no reassurance at all. So the words linger past
+ * the box, deliberately longer than OVERLAY_STALE_AFTER_MS, and can outlast the
+ * thing they describe by a couple of seconds. That is the safe direction to
+ * err: a candidate reading "nothing is decided" a moment too long has lost
+ * nothing.
+ */
+export const OVERLAY_NOTICE_LINGER_MS = 5_000;
