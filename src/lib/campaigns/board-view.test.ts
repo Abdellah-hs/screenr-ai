@@ -94,13 +94,28 @@ describe("summariseCampaign", () => {
     expect(summary.pendingReview).toBe(2);
   });
 
-  it("counts both post-interview waiting states as awaiting a decision", () => {
+  it("counts every scored-and-waiting state as awaiting a decision", () => {
     const summary = summariseCampaign(
-      [app("interview_scored"), app("manager_review")],
+      [app("screening_scored"), app("interview_scored"), app("manager_review")],
       { status: "active", slaTimers: [], screeningQuestionCount: 1, now: NOW },
     );
 
-    expect(summary.awaitingDecision).toBe(2);
+    expect(summary.awaitingDecision).toBe(3);
+  });
+
+  /**
+   * The screening threshold advances but never rejects, so a below-the-line
+   * candidate rests at `screening_scored` waiting on a person. If the board did
+   * not count them, the auto-reject would have been replaced by a queue that is
+   * invisible from the campaign list — a worse failure than the one it fixed.
+   */
+  it("counts a below-threshold screening as work, not as a finished outcome", () => {
+    const summary = summariseCampaign(
+      [app("screening_scored")],
+      { status: "active", slaTimers: [], screeningQuestionCount: 1, now: NOW },
+    );
+
+    expect(summary.awaitingDecision).toBe(1);
   });
 });
 

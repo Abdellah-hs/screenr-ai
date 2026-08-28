@@ -25,6 +25,7 @@ vi.mock("@/lib/services/screening-questions", () => ({
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
   fetchActiveRubricVersion: vi.fn(),
+  fetchScreeningRubricDimensions: vi.fn(),
   verifyCampaignOwnership: vi.fn(),
 }));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplication: vi.fn() }));
@@ -51,6 +52,7 @@ import { scoreAnswers } from "@/lib/services/screening-questions";
 import {
   fetchCampaignScoringConfig,
   fetchActiveRubricVersion,
+  fetchScreeningRubricDimensions,
 } from "@/lib/data/campaigns";
 import { transitionApplication } from "@/lib/data/transitions";
 import {
@@ -74,12 +76,26 @@ const mockFetchQuestions = vi.mocked(fetchScreeningQuestionsByCampaignId);
 const mockFetchResponse = vi.mocked(fetchScreeningResponseByApplicationId);
 const mockFetchConfig = vi.mocked(fetchCampaignScoringConfig);
 const mockFetchRubricVersion = vi.mocked(fetchActiveRubricVersion);
+const mockFetchDimensions = vi.mocked(fetchScreeningRubricDimensions);
 const mockScoreAnswers = vi.mocked(scoreAnswers);
 const mockExtractEvidence = vi.mocked(extractTranscriptEvidence);
 const mockCandidateSpeech = vi.mocked(buildCandidateSpeech);
 const mockSaveScores = vi.mocked(saveAnswerScores);
 const mockTransition = vi.mocked(transitionApplication);
 const mockAssertActive = vi.mocked(assertCampaignActiveById);
+
+/**
+ * The dimension scores from a save call.
+ *
+ * Throws rather than tiptoeing around the null: voice scoring must always
+ * produce per-dimension scores, so an absent array means the run fell through
+ * to some other path — a genuine failure, and one worth failing loudly on
+ * instead of letting every assertion below quietly read `undefined`.
+ */
+function savedDimensions<T>(saved: { perDimension: T[] | null }): T[] {
+  if (!saved.perDimension) throw new Error("expected per-dimension scores, got none");
+  return saved.perDimension;
+}
 
 const APP_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -105,6 +121,7 @@ function responseRow(over: Partial<ScreeningResponseRow> = {}): ScreeningRespons
     answers: [{ question_id: "q1", prompt: question.prompt, answer_text: "", score: null, rationale: null }],
     transcript: [],
     proctoring: null,
+    dimension_scores: null,
     audio_url: null,
     overall_score: null,
     overall_rationale: null,
@@ -112,6 +129,7 @@ function responseRow(over: Partial<ScreeningResponseRow> = {}): ScreeningRespons
     responded_at: "2026-06-03T10:05:00.000Z",
     scored_at: null,
     expires_at: "2099-01-01T00:00:00.000Z",
+    topic_state: null,
     ...over,
   };
 }
@@ -127,16 +145,22 @@ const evidence: AnswerScoringEvidence = {
   promptVersion: "v1_voice_screening_scoring",
 };
 
+/** The recruiter's screening rubric — what the call is actually graded on. */
+const rubricDimensions = [
+  { id: "dim-1", name: "Scaling experience", weight: 1 },
+];
+
 /**
- * The voice model returns a LEVEL and a verbatim quote — never a number. The
- * 80 that reaches the decision rule below is derived from "strong" by
- * `src/lib/screening-scoring/`, which is the whole point of the change.
+ * The voice model returns a LEVEL and a verbatim quote per RUBRIC DIMENSION —
+ * never a number, and never per question. The 80 that reaches the decision rule
+ * below is derived from "strong" by `src/lib/screening-scoring/`, which is the
+ * whole point of the evidence model.
  */
 const transcriptEvidence = {
   evidence: {
-    answers: [
+    dimensions: [
       {
-        question_id: "q1",
+        dimension_id: "dim-1",
         evidence_level: "strong" as const,
         evidence_items: [
           {
@@ -150,9 +174,9 @@ const transcriptEvidence = {
     ],
     extraction_summary: "Concrete scaling example.",
   },
-  rawOutput: '{"answers":[{"evidence_level":"strong"}]}',
+  rawOutput: '{"dimensions":[{"evidence_level":"strong"}]}',
   model: "gpt-4o-mini",
-  promptVersion: "v3_screening_evidence",
+  promptVersion: "v4_rubric_dimension_evidence",
   skipped: false,
 };
 
@@ -180,6 +204,7 @@ beforeEach(() => {
     screening_criteria: [],
   });
   mockFetchRubricVersion.mockResolvedValue(3);
+  mockFetchDimensions.mockResolvedValue({ dimensions: rubricDimensions, version: 1 });
   mockScoreAnswers.mockResolvedValue({ ...evidence, promptVersion: "v1_screening_scoring" });
   mockExtractEvidence.mockResolvedValue(transcriptEvidence);
   // The real one is pure; the action passes its output to quote verification.
@@ -212,22 +237,24 @@ describe("scoreScreeningAnswers — voice transcript", () => {
 
     const saved = mockSaveScores.mock.calls[0][0];
     expect(saved.overall.score).toBe(80);
-    expect(saved.perAnswer[0].score).toBe(80);
+    expect(savedDimensions(saved)[0].score).toBe(80);
   });
 
   it("stores the verified quote so the score traces back to the transcript", async () => {
     await scoreScreeningAnswers(APP_ID);
 
     const saved = mockSaveScores.mock.calls[0][0];
-    expect(saved.perAnswer[0].evidence_quote).toBe("We sharded the orders table by tenant");
-    expect(saved.perAnswer[0].evidence_turn_index).toBe(1);
+    expect(savedDimensions(saved)[0].evidence_items[0].quote).toBe(
+      "We sharded the orders table by tenant",
+    );
+    expect(savedDimensions(saved)[0].evidence_items[0].turn_index).toBe(1);
   });
 
   it("stores the level the score was derived from, not just the number", async () => {
     await scoreScreeningAnswers(APP_ID);
 
     const saved = mockSaveScores.mock.calls[0][0];
-    expect(saved.perAnswer[0].evidence_level).toBe("strong");
+    expect(savedDimensions(saved)[0].evidence_level).toBe("strong");
   });
 
   it("stores the level even when nothing could be verified", async () => {
@@ -238,25 +265,25 @@ describe("scoreScreeningAnswers — voice transcript", () => {
     // A bare 0 is least self-explanatory precisely here: "unclear" says the
     // claim failed verification, not that the candidate said nothing.
     const saved = mockSaveScores.mock.calls[0][0];
-    expect(saved.perAnswer[0].evidence_level).toBe("unclear");
+    expect(savedDimensions(saved)[0].evidence_level).toBe("unclear");
   });
 
   it("records which scoring rules produced the number", async () => {
     await scoreScreeningAnswers(APP_ID);
 
     const snapshot = mockSaveScores.mock.calls[0][0].audit.inputSnapshot as Record<string, unknown>;
-    expect(snapshot.scoring_rules_version).toBe("v1_evidence_levels");
+    expect(snapshot.scoring_rules_version).toBe("v2_weighted_dimensions");
     expect(snapshot.validation_warnings).toEqual([]);
   });
 
-  it("drops an unverifiable quote and scores the question as no evidence", async () => {
+  it("drops an unverifiable quote and scores the dimension as no evidence", async () => {
     mockCandidateSpeech.mockReturnValue("Something else entirely.");
 
     await scoreScreeningAnswers(APP_ID);
 
     const saved = mockSaveScores.mock.calls[0][0];
-    expect(saved.perAnswer[0].score).toBe(0);
-    expect(saved.perAnswer[0].evidence_quote).toBeUndefined();
+    expect(savedDimensions(saved)[0].score).toBe(0);
+    expect(savedDimensions(saved)[0].evidence_items).toEqual([]);
     // Two distinct facts are recorded, not one: the quote failed verification,
     // and the level it was supporting was therefore downgraded.
     const warnings = (saved.audit.inputSnapshot as Record<string, unknown>)

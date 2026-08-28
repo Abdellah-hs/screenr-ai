@@ -27,7 +27,7 @@ import { EVIDENCE_LEVEL_SCORE, scoreEvidenceLevel } from "@/lib/scoring/evidence
 export { EVIDENCE_LEVEL_SCORE, scoreEvidenceLevel };
 
 /** Version of the deterministic rules below. Part of the cache key. */
-export const RESUME_SCORING_RULES_VERSION = "v1_must_have_gate";
+export const RESUME_SCORING_RULES_VERSION = "v2_ranking_over_all_criteria";
 
 export interface ScoredCriterion {
   id: string;
@@ -37,9 +37,15 @@ export interface ScoredCriterion {
   score: number;
   evidence_items: ResumeEvidenceItem[];
   /**
-   * Recorded because a reviewer asked "how long?" deserves an answer, and
-   * deliberately not scored: letting a self-reported duration move a number
-   * would hand the model a second, unverifiable lever on the outcome.
+   * The duration the CV stated, when it stated one.
+   *
+   * Never arithmetic input: no code multiplies, thresholds or adds this number,
+   * and the score comes from the evidence level alone. It is not inert either,
+   * and has not been since the level definitions were rewritten around counted
+   * examples and duration floors (`v4_resume_evidence`) — the model reads
+   * duration when *choosing* a level, so the figure informs the outcome through
+   * the reading rather than beside it. Recorded so a reviewer who asks "how
+   * long?" gets an answer they can check against the quotes.
    */
   extracted_relevant_months: number | null;
   notes: string | null;
@@ -128,18 +134,43 @@ export function evaluateEligibility(scoredCriteria: ScoredCriterion[]): Eligibil
 }
 
 /**
- * The ranking number — computed only once eligibility has already passed.
+ * The ranking number — computed only once eligibility has already passed, and
+ * averaged over EVERY criterion, must-haves included.
  *
  * Ordering the ineligible is worse than useless: a ranked list invites someone
  * to read down it, and a number next to a candidate who failed a gate is an
  * invitation to argue the gate. So an ineligible candidate gets `null`, not a
  * low score.
  *
- * An eligible candidate with no nice-to-haves scores 100: they met every
- * requirement the recruiter wrote down, and there is nothing further to
- * separate them on.
+ * ## Why must-haves count here (decision 2026-08-23)
+ *
+ * This used to average the nice-to-haves alone, which threw away the reading
+ * of the criteria the recruiter cared about *most*. Two candidates who both
+ * cleared every gate were indistinguishable on the requirements: one with
+ * `very_strong` evidence of years of the work and one with `strong` evidence
+ * of a single project ranked identically, and the order between them was
+ * decided entirely by optional extras. It also produced the pathology that
+ * exposed it — a candidate meeting all three must-haves ranked 13, because the
+ * only criteria in the mean were four nice-to-haves their CV barely touched.
+ *
+ * Including them does NOT weaken the gate, and cannot:
+ *
+ * - Eligibility is decided FIRST, by `evaluateEligibility`, criterion by
+ *   criterion. This function is only ever reached with that answer already in
+ *   hand, and it is passed in rather than re-derived.
+ * - An ineligible candidate has no ranking at all, so there is no number for a
+ *   surplus to inflate. **A nice-to-have still cannot repair a failed
+ *   must-have** — the invariant this module exists to hold is about
+ *   *eligibility*, and it is untouched. What changes is only the *order* of
+ *   candidates who have already passed.
+ *
+ * Every criterion carries equal weight, deliberately. A must-have is not worth
+ * more inside the ranking — its extra importance was already spent, in full, on
+ * the gate that ends the application when it fails. Weighting it again here
+ * would express the same preference twice, and reintroduce the compensating
+ * arithmetic the priority model was built to avoid.
  */
-export function calculateNiceToHaveRanking(
+export function calculateRankingScore(
   scoredCriteria: ScoredCriterion[],
   eligible: boolean,
 ): RankingResult {
@@ -147,16 +178,13 @@ export function calculateNiceToHaveRanking(
     return { ranking_score: null, ranked: false };
   }
 
-  const niceToHaves = scoredCriteria.filter(
-    (criterion) => criterion.priority === "nice_to_have",
-  );
-
-  if (niceToHaves.length === 0) {
+  if (scoredCriteria.length === 0) {
     return { ranking_score: 100, ranked: true };
   }
 
   const average =
-    niceToHaves.reduce((sum, criterion) => sum + criterion.score, 0) / niceToHaves.length;
+    scoredCriteria.reduce((sum, criterion) => sum + criterion.score, 0) /
+    scoredCriteria.length;
 
   return { ranking_score: Math.round(average), ranked: true };
 }
@@ -174,7 +202,7 @@ export function buildDeterministicResumeScore(
 ): DeterministicResumeScoreResult {
   const scoredCriteria = scoreValidatedCriteria(validated, criteria);
   const { eligible, failed_must_haves } = evaluateEligibility(scoredCriteria);
-  const { ranking_score } = calculateNiceToHaveRanking(scoredCriteria, eligible);
+  const { ranking_score } = calculateRankingScore(scoredCriteria, eligible);
 
   return {
     eligible,
@@ -200,10 +228,10 @@ export function resumeScoreRationale(
   const niceToHaveCount = result.criteria.length - mustHaveCount;
 
   const headline = result.eligible
-    ? `Eligible — all ${mustHaveCount} must-have criteria met. Ranking score ${result.ranking_score} from ${niceToHaveCount} nice-to-have criteria.`
+    ? `Eligible — all ${mustHaveCount} must-have criteria met. Ranking score ${result.ranking_score}, the mean evidence score across all ${result.criteria.length} criteria (${mustHaveCount} must-have, ${niceToHaveCount} nice-to-have).`
     : `Ineligible — failed ${result.failed_must_haves.length} of ${mustHaveCount} must-have criteria: ${result.failed_must_haves
         .map((f) => `${f.criterion_label} (${f.evidence_level}, scored ${f.score} vs minimum ${f.minimum_score})`)
-        .join("; ")}. Nice-to-have criteria are not scored for an ineligible candidate.`;
+        .join("; ")}. An ineligible candidate is not ranked.`;
 
   const summary = extractionSummary.trim();
   return summary ? `${headline}\n\nEvidence summary: ${summary}` : headline;

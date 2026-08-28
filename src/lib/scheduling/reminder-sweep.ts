@@ -1,4 +1,4 @@
-import type { gmail_v1 } from "googleapis";
+import type { gmail_v1 } from "googleapis/build/src/apis/gmail";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   claimInterviewReminder,

@@ -51,8 +51,10 @@ export function StageChanger({
    *   has its own column and a second copy of it would be noise.
    * `action` — a full-width button in the decision rail, where the state is
    *   already named above it and what is wanted is somewhere to press.
+   * `bar` — the same button, sized to its label, for the pinned decision bar
+   *   where it sits in a row beside the other actions.
    */
-  trigger?: "chip" | "menu" | "action";
+  trigger?: "chip" | "menu" | "action" | "bar";
   /** Rows rendered above the "Move to" group — a row menu is rarely only
    *  about the state machine. */
   leadingItems?: ReactNode;
@@ -126,7 +128,7 @@ export function StageChanger({
             <circle cx="12" cy="19" r="1" />
           </svg>
         </button>
-      ) : trigger === "action" ? (
+      ) : trigger === "action" || trigger === "bar" ? (
         <button
           ref={triggerRef}
           type="button"
@@ -140,7 +142,8 @@ export function StageChanger({
               : "Move this application to another stage"
           }
           className={cn(
-            "flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border px-4 text-[13px] font-semibold transition-colors duration-150",
+            "flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 text-[13px] font-semibold transition-colors duration-150",
+            trigger === "action" ? "w-full" : "w-max whitespace-nowrap",
             isTerminal
               ? "cursor-default border-[#E5E7EB] bg-[#F9FAFB] text-[#9CA3AF]"
               : "cursor-pointer border-[#D1D5DB] bg-white text-[#374151] hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
@@ -198,7 +201,7 @@ export function StageChanger({
         open={open && (!isTerminal || Boolean(leadingItems))}
         onClose={() => setOpen(false)}
         anchorRef={triggerRef}
-        align={trigger === "menu" ? "right" : "left"}
+        align={trigger === "menu" || trigger === "bar" ? "right" : "left"}
         matchTriggerWidth={trigger === "action"}
       >
         {leadingItems && <div onClick={() => setOpen(false)}>{leadingItems}</div>}

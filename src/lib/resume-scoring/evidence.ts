@@ -75,15 +75,21 @@ export const ResumeEvidenceWireSchema = z.object({
  * them verbatim and the audit log records which wording produced a run.
  */
 export const EVIDENCE_LEVEL_DEFINITIONS: Record<EvidenceLevel, string> = {
-  not_present: "No explicit evidence for the criterion exists in the resume.",
+  not_present:
+    "No explicit evidence of the criterion appears in the resume.",
+
   unclear:
-    "The resume contains ambiguous or indirect wording, but does not clearly establish the criterion.",
+    "The resume contains wording that may relate to the criterion, but the evidence is too ambiguous or indirect to establish that the criterion is actually met.",
+
   weak:
-    "The criterion is mentioned, such as in a skills list, but there is no concrete project, responsibility, duration, or outcome proving use.",
+    "The criterion is explicitly mentioned (e.g., in a skills list) but provides zero concrete examples—no project, responsibility, task, outcome, or duration stated.",
+
   partial:
-    "There is concrete but limited evidence, such as one small project, course, task, or short exposure. The evidence does not establish strong or sustained professional experience.",
+    "The resume provides 1 concrete example of limited exposure: a course, small project, isolated task, or short-term use (<3 months). Shows some actual exposure but not sustained professional use.",
+
   strong:
-    "There is clear evidence of meaningful project or professional use, with concrete responsibilities, outcomes, repeated use, or relevant duration.",
+    "The resume provides 1-2 clear examples of meaningful professional use: concrete projects or roles with specific responsibilities, repeated use, measurable outcomes, or duration ≥3 months.",
+
   very_strong:
-    "There are multiple substantial examples or sustained senior-level, ownership, leadership, architecture, or long-duration evidence.",
+    "The resume provides 3+ substantial examples OR 2+ examples demonstrating ownership, leadership, architecture decisions, or long-term professional experience (≥12 months) with the criterion.",
 };

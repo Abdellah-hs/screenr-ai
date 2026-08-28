@@ -1,4 +1,18 @@
-import { google, type gmail_v1, type Auth } from "googleapis";
+// Deep import, not the `googleapis` root barrel. The root re-exports all 323
+// Google API surfaces — 1031 modules and ~1.5s to load — and this file is
+// reached transitively by most of the dashboard (any page touching a campaign
+// or candidate pulls in outbound email), so the root import put every one of
+// those modules in those routes' dev compile graph. The subpath is the same
+// code for the one API we call, at 130 modules.
+import { gmail as gmailApi, auth as googleAuth, type gmail_v1 } from "googleapis/build/src/apis/gmail";
+
+/**
+ * The OAuth2 client type. Taken from the Gmail subpath's `auth` helper rather
+ * than `OAuth2Client` off the root, and not from `google-auth-library`
+ * directly — pnpm does not hoist that, so importing it would need a new
+ * dependency entry for a type we can already reach.
+ */
+type OAuth2Client = InstanceType<typeof googleAuth.OAuth2>;
 
 // ─── OAuth ───────────────────────────────────────────────────────────────────
 // The Google OAuth *app* identity (client id/secret) lives in env — it is the
@@ -45,9 +59,9 @@ function getOAuthCredentials(): { clientId: string; clientSecret: string } {
  * Build an OAuth2 client for the app. `redirectUri` must exactly match one of
  * the Authorized redirect URIs registered in the Google Cloud OAuth client.
  */
-export function getGoogleOAuthClient(redirectUri: string): Auth.OAuth2Client {
+export function getGoogleOAuthClient(redirectUri: string): OAuth2Client {
   const { clientId, clientSecret } = getOAuthCredentials();
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+  return new googleAuth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
 /**
@@ -121,7 +135,7 @@ function isInvalidGrantError(err: unknown): boolean {
  */
 export async function verifyRefreshToken(refreshToken: string): Promise<boolean> {
   const { clientId, clientSecret } = getOAuthCredentials();
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  const oauth2Client = new googleAuth.OAuth2(clientId, clientSecret);
   oauth2Client.setCredentials({ refresh_token: refreshToken });
   try {
     const { token } = await oauth2Client.getAccessToken();
@@ -148,15 +162,15 @@ export async function revokeRefreshToken(refreshToken: string): Promise<void> {
  * SDK transparently mints short-lived access tokens from the refresh token, so
  * we only ever persist the refresh token.
  */
-export function createGoogleAuthClient(refreshToken: string): Auth.OAuth2Client {
+export function createGoogleAuthClient(refreshToken: string): OAuth2Client {
   const { clientId, clientSecret } = getOAuthCredentials();
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  const oauth2Client = new googleAuth.OAuth2(clientId, clientSecret);
   oauth2Client.setCredentials({ refresh_token: refreshToken });
   return oauth2Client;
 }
 
 /** Gmail client bound to a recruiter's refresh token. */
 export function createGmailClient(refreshToken: string): gmail_v1.Gmail {
-  return google.gmail({ version: "v1", auth: createGoogleAuthClient(refreshToken) });
+  return gmailApi({ version: "v1", auth: createGoogleAuthClient(refreshToken) });
 }
 

@@ -4,11 +4,12 @@ import { after } from "next/server";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { verifyResponseToken } from "@/lib/auth/screening-token";
-import { proctoringEventsSchema } from "@/lib/validations";
+import { callLanguageSchema, proctoringEventsSchema } from "@/lib/validations";
 import { fetchApplicationForResponse } from "@/lib/data/candidates";
 import { isCampaignProcessingActive } from "@/lib/rules/campaign-status";
-import type { CampaignStatus } from "@/lib/constants";
+import { DEFAULT_CALL_LANGUAGE, type CampaignStatus } from "@/lib/constants";
 import {
+  clearScreeningTopicState,
   fetchScreeningQuestionsByCampaignId,
   fetchScreeningResponseByApplicationId,
   fetchScoringContextByApplicationId,
@@ -18,14 +19,14 @@ import {
   type VoiceTranscriptTurn,
   saveScreeningProctoringReport,
 } from "@/lib/data/screening-questions";
-import { runScreeningScoring } from "./score-screening-response";
+import { runScreeningScoring } from "@/lib/screening/score-response";
 import {
   assertResponseIsOpen,
   assertResponseNotResubmitted,
   isResponseExpired,
   ScreeningResponseError,
 } from "@/lib/rules/screening-response";
-import { buildScreeningInstructions } from "@/lib/services/realtime";
+
 import {
   createScreeningRoomGrant,
   type ScreeningRoomGrant,
@@ -248,8 +249,15 @@ async function autoScoreScreening(
  */
 export async function startCandidateVoiceScreening(
   token: string,
+  language: unknown,
 ): Promise<ScreeningRoomGrant> {
   const { application_id } = verifyResponseToken(token);
+  // **Parsed, never trusted.** This value is chosen in the candidate's own
+  // browser and ends up inside the interviewer's instructions, so it is read as
+  // a closed enum: free text here would let them write their own directive into
+  // the prompt. Anything unrecognised falls back rather than failing the call —
+  // a language choice is not worth refusing an interview over.
+  const callLanguage = callLanguageSchema.safeParse(language).data ?? DEFAULT_CALL_LANGUAGE;
   const db = candidateDb();
 
   const ip = await getClientIp();
@@ -293,12 +301,19 @@ export async function startCandidateVoiceScreening(
     );
   }
 
-  const instructions = buildScreeningInstructions({
-    jobTitle: app.campaign_title,
-    questions: questions.map((q) => ({ prompt: q.prompt })),
-  });
+  // A new attempt is a new CALL, so the topic ledger from the previous one goes.
+  // The room and the draft transcript are already replaced; leaving the ledger
+  // behind made the second attempt resume the first one's coverage — topics
+  // marked covered by a transcript that had just been overwritten, and a call
+  // that could open with nothing left to ask.
+  await clearScreeningTopicState(application_id, db);
 
-  return createScreeningRoomGrant({ applicationId: application_id, instructions });
+  // The interviewer's instructions are deliberately NOT built here any more.
+  // They would have to travel to the worker in room metadata, which LiveKit
+  // hands to every participant — so the candidate's browser received the
+  // confidential topic guide on join. The worker now fetches them itself from
+  // `/api/agent/screening/instructions`; this action only opens the room.
+  return createScreeningRoomGrant({ applicationId: application_id, language: callLanguage });
 }
 
 /** Expire the response row and best-effort transition the application. */

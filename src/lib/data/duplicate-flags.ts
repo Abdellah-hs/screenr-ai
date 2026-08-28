@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import type { Database, Json } from "@/types/database.types";
 import type { SupabaseDb } from "@/lib/supabase/types";
 
@@ -213,8 +214,25 @@ export interface DuplicateReviewItem {
  * The HR review queue: every open duplicate flag, each enriched with both
  * candidates' details so the page can show them side by side. Two separate
  * queries (flags, then candidates) stitched in memory — avoids the awkward
- * PostgREST embed of two FKs pointing at the same table. Flags whose
- * candidates can no longer be loaded are skipped.
+ * PostgREST embed of two FKs pointing at the same table.
+ *
+ * **The candidate read runs on the admin client, and it has to.** The flag list
+ * is global by policy (`duplicate_review_queue` SELECT is `USING (true)`), but
+ * `candidates` SELECT requires the row to have an application in one of the
+ * reader's campaigns. Reading the pair with the session client therefore
+ * silently dropped any flag whose candidate failed that predicate — and the
+ * predicate has nothing to do with whether the flag is reviewable. A candidate
+ * orphaned by a campaign delete (`applications.campaign_id` is ON DELETE
+ * CASCADE, so the applications go and the candidate row stays) is invisible to
+ * every recruiter forever, so every flag naming it vanished from the queue with
+ * no error and no count. On this database that hid 44 of 47 open flags behind
+ * "the queue is clear".
+ *
+ * This does not widen what the queue exposes so much as make it work: the flag
+ * row is already globally readable and already carries the matched email and
+ * phone in `match_signals`. If the queue is ever scoped per owner, scope the
+ * FLAG policy — do not reintroduce a tenancy filter as a side effect of an
+ * enrichment join, which is what this was.
  */
 export async function fetchOpenDuplicateFlagsWithCandidates(): Promise<
   DuplicateReviewItem[]
@@ -238,7 +256,7 @@ export async function fetchOpenDuplicateFlagsWithCandidates(): Promise<
     new Set(flags.flatMap((f) => [f.candidate_id, f.matched_candidate_id])),
   );
 
-  const { data: candRows, error: candError } = await supabase
+  const { data: candRows, error: candError } = await createAdminClient()
     .from("candidates")
     .select("id, first_name, last_name, email, phone, created_at")
     .in("id", candidateIds);
@@ -261,12 +279,28 @@ export async function fetchOpenDuplicateFlagsWithCandidates(): Promise<
   }
 
   const items: DuplicateReviewItem[] = [];
+  const unresolvable: string[] = [];
   for (const flag of flags) {
     const candidate = byId.get(flag.candidate_id);
     const matched = byId.get(flag.matched_candidate_id);
-    if (!candidate || !matched) continue; // a candidate row is gone — skip
+    if (!candidate || !matched) {
+      // Both FKs are ON DELETE CASCADE, so a hard-deleted candidate takes its
+      // flags with it and this should be unreachable. It is logged rather than
+      // swallowed because a queue that quietly shrinks is the failure this
+      // function just came back from.
+      unresolvable.push(flag.id);
+      continue;
+    }
     items.push({ flag, candidate, matched });
   }
+
+  if (unresolvable.length > 0) {
+    console.error(
+      `fetchOpenDuplicateFlagsWithCandidates: ${unresolvable.length} open flag(s) reference a candidate row that no longer exists and were omitted from the queue:`,
+      unresolvable,
+    );
+  }
+
   return items;
 }
 
@@ -276,6 +310,22 @@ export async function fetchOpenDuplicateFlagsWithCandidates(): Promise<
  *
  * This is a data-layer helper; the action layer must verify auth and
  * ensure the flag was approved before calling it.
+ *
+ * **The re-point runs on the session client and the soft-delete cannot.** The
+ * two steps are ordered — applications first, so a failure leaves the flag open
+ * and retryable — and step one destroys the row-level predicate step two needs.
+ * `candidates` UPDATE is `USING (EXISTS applications a JOIN campaigns c … WHERE
+ * a.candidate_id = candidates.id AND c.user_id = auth.uid())`, so once the
+ * source has no applications left it matches no policy row. Postgres does not
+ * error on that: the UPDATE simply touches **0 rows** and returns success. The
+ * merge then reported done while the source candidate stayed live — still
+ * winning `findCandidateByEmail` (which only skips `deleted_at` rows), so every
+ * later applicant on that email flagged against a record HR had already merged
+ * away.
+ *
+ * The re-point keeps the session client deliberately: that is the check that
+ * actually authorises the merge (you may only move applications in campaigns you
+ * own). Only the soft-delete escalates, and it verifies it hit a row.
  */
 export async function mergeCandidatesTx(
   sourceCandidateId: string,
@@ -293,13 +343,24 @@ export async function mergeCandidatesTx(
     throw new Error(`Failed to re-point applications: ${appError.message}`);
   }
 
-  // Soft-delete source candidate
-  const { error: delError } = await supabase
+  // Soft-delete source candidate. `.select("id")` is what makes a 0-row update
+  // observable — without it a silently filtered write is indistinguishable from
+  // a successful one.
+  const { data: deleted, error: delError } = await createAdminClient()
     .from("candidates")
     .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq("id", sourceCandidateId);
+    .eq("id", sourceCandidateId)
+    .select("id");
 
   if (delError) {
     throw new Error(`Failed to soft-delete source candidate: ${delError.message}`);
+  }
+
+  // Re-stamping an already-deleted source is harmless, so this only fires when
+  // the row itself is unreachable — which would leave a live duplicate behind.
+  if (!deleted || deleted.length === 0) {
+    throw new Error(
+      `Merge left candidate ${sourceCandidateId} live: its applications moved to ${targetCandidateId} but the soft-delete matched no row. The flag stays open so this can be retried.`,
+    );
   }
 }

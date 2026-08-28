@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod/v4";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { Campaign, CampaignStatus, CampaignStatusSelection } from "@/lib/constants";
@@ -9,8 +10,13 @@ import {
   campaignStatusSchema,
   campaignStatusSelectionSchema,
   campaignIdsSchema,
+  rubricSchema,
 } from "@/lib/validations";
-import { decodeStatusSelection } from "@/lib/rules/campaign-status";
+import {
+  decodeStatusSelection,
+  applyGateBlocker,
+  type ApplyGateBlocker,
+} from "@/lib/rules/campaign-status";
 import { isTeamReviewersEnabled } from "@/lib/flags";
 import { requireUserId } from "@/lib/auth/guards";
 import { scoreUnscoredCampaignCandidates } from "./candidates";
@@ -20,6 +26,7 @@ import {
   fetchCampaignById,
   insertCampaignTx,
   updateCampaignTx,
+  updateCampaignRubricsTx,
   cloneCampaignTx,
   fetchCampaignScoringConfig,
   fetchCampaignStatus,
@@ -29,6 +36,10 @@ import {
   fetchCampaignBoardApplications,
   fetchScreeningQuestionCounts,
 } from "@/lib/data/campaigns";
+import {
+  fetchScreeningQuestionsByCampaignId,
+  replaceScreeningQuestions,
+} from "@/lib/data/screening-questions";
 import {
   summariseCampaign,
   type BoardApplication,
@@ -48,6 +59,11 @@ export interface CampaignBoard {
   campaigns: Campaign[];
   /** Keyed by campaign id. A campaign with no applications is absent. */
   summaries: Record<string, CampaignBoardSummary>;
+  /** Keyed by campaign id: which intake gate is shut, null when the apply link
+   *  is live. Computed here rather than in the list component because one gate
+   *  is a deadline, and a client component reading its own clock would render a
+   *  different answer than the server did. */
+  applyBlockers: Record<string, ApplyGateBlocker | null>;
 }
 
 /**
@@ -73,16 +89,21 @@ export async function getCampaignBoard(): Promise<CampaignBoard> {
     else byCampaign.set(app.campaignId, [app]);
   }
 
+  // One clock for the whole board, so two rows with the same deadline can
+  // never disagree about whether it has passed.
+  const now = new Date();
   const summaries: Record<string, CampaignBoardSummary> = {};
+  const applyBlockers: Record<string, ApplyGateBlocker | null> = {};
   for (const campaign of campaigns) {
     summaries[campaign.id] = summariseCampaign(byCampaign.get(campaign.id) ?? [], {
       status: campaign.status ?? "draft",
       slaTimers: campaign.sla_timers,
       screeningQuestionCount: questionCounts[campaign.id] ?? 0,
     });
+    applyBlockers[campaign.id] = applyGateBlocker(campaign, now);
   }
 
-  return { campaigns, summaries };
+  return { campaigns, summaries, applyBlockers };
 }
 
 // ─── GET single campaign ─────────────────────────────────────────────────────
@@ -109,7 +130,21 @@ export async function getResumeCriteriaCount(campaignId: string): Promise<number
 
 // ─── CREATE campaign ─────────────────────────────────────────────────────────
 
-export async function createCampaign(formData: FormData) {
+/**
+ * Where a finished create lands.
+ *
+ * `share` is the wizard's Create button: the campaign now exists, so its apply
+ * link exists, and the one thing a recruiter needs next is that link and
+ * something to post it with. `campaign` is every other route in — chiefly
+ * "Save draft", which is a recruiter saying "I will finish this later" and must
+ * not be answered with a page urging them to share it.
+ */
+export type CreateCampaignFinish = "campaign" | "share";
+
+export async function createCampaign(
+  formData: FormData,
+  finish: CreateCampaignFinish = "campaign",
+) {
   const userId = await requireUserId();
 
   // Validate all inputs
@@ -157,11 +192,15 @@ export async function createCampaign(formData: FormData) {
     // Written in the same transaction as the campaign so a new campaign is
     // never born unable to approve anyone into screening. Empty is still
     // allowed — the detail-page banner remains the safety net for that.
-    screeningQuestions.map((q) => ({ prompt: q.prompt })),
+    (screeningQuestions ?? []).map((q) => ({ prompt: q.prompt })),
     userId
   );
 
-  redirect(`/campaigns/${campaignId}`);
+  redirect(
+    finish === "share"
+      ? `/campaigns/${campaignId}/share`
+      : `/campaigns/${campaignId}`,
+  );
 }
 
 // ─── UPDATE campaign status (inline, outside the edit form) ──────────────────
@@ -269,6 +308,28 @@ export async function updateCampaignsStatus(
 
 // ─── UPDATE campaign ─────────────────────────────────────────────────────────
 
+/**
+ * Persist an edited question set, but only if it is actually different.
+ *
+ * Compared by prompt and order, which is the whole of what a question is —
+ * ids are the store's, not the recruiter's, and the wizard sends prompts only.
+ */
+async function replaceScreeningQuestionsIfChanged(
+  campaignId: string,
+  questions: { prompt: string }[]
+): Promise<boolean> {
+  const existing = await fetchScreeningQuestionsByCampaignId(campaignId);
+  const before = existing.map((q) => q.prompt);
+  const after = questions.map((q) => q.prompt);
+
+  if (before.length === after.length && before.every((p, i) => p === after[i])) {
+    return false;
+  }
+
+  await replaceScreeningQuestions(campaignId, questions);
+  return true;
+}
+
 export async function updateCampaign(id: string, formData: FormData) {
   const userId = await requireUserId();
 
@@ -284,7 +345,7 @@ export async function updateCampaign(id: string, formData: FormData) {
     interview_persona: interviewPersona,
     interview_slot_minutes: interviewSlotMinutes, interview_timezone: interviewTimezone,
     interview_booking_horizon_days: interviewBookingHorizonDays,
-    rubrics, slaTimers, availabilityRules
+    rubrics, slaTimers, availabilityRules, screeningQuestions
   } = parseCampaignFormData(formData);
 
   await updateCampaignTx(
@@ -313,6 +374,18 @@ export async function updateCampaign(id: string, formData: FormData) {
     userId
   );
 
+  // Screening questions ride along with the rest of the form now that editing
+  // walks the same wizard as creating — leaving them out was what forced the
+  // old edit page to point at another page instead of holding the section.
+  //
+  // Only when they actually differ. `replaceScreeningQuestions` wipes and
+  // re-inserts, so saving an unrelated field (a location typo) would otherwise
+  // mint new question ids on every save, orphaning the `question_id` snapshots
+  // already recorded on candidates' in-flight responses.
+  if (screeningQuestions) {
+    await replaceScreeningQuestionsIfChanged(id, screeningQuestions);
+  }
+
   // Criteria/rubric may have just been added or changed — score any candidate
   // that doesn't have a resume score yet (the automatic replacement for the old
   // manual "Score Resume" button). Best-effort: a scoring failure must never
@@ -329,6 +402,62 @@ export async function updateCampaign(id: string, formData: FormData) {
   revalidatePath(`/campaigns/${id}`, "layout");
 
   redirect(`/campaigns/${id}`);
+}
+
+// ─── SAVE rubrics only (in place, from the campaign page) ────────────────────
+
+/**
+ * What the recruiter is editing when they press "Edit rubric".
+ *
+ * Deliberately narrow. `updateCampaign` posts the entire campaign — title,
+ * thresholds, timers, availability, screening questions — because the wizard
+ * has all of it on screen. Reaching for that to change one criterion means a
+ * whole campaign's worth of fields is in play for a one-word edit, and the
+ * recruiter has to leave the page showing them the rubric to do it.
+ */
+export async function saveCampaignRubrics(
+  campaignId: string,
+  rubrics: unknown,
+): Promise<void> {
+  const userId = await requireUserId();
+  uuidSchema.parse(campaignId);
+
+  const parsed = z.array(rubricSchema).safeParse(rubrics);
+  if (!parsed.success) {
+    // The editor blocks an unnamed dimension before it gets here; this is the
+    // backstop, and it says which rule was broken rather than printing a Zod
+    // path at a recruiter.
+    throw new Error("Every rubric dimension needs a name before it can be saved.");
+  }
+
+  // Position is the order the recruiter arranged, and for the resume stage it
+  // is load-bearing: extracted evidence comes back index-aligned to this list.
+  // The editor stamps every new row `sort_order: 0`, so it is re-derived here
+  // rather than trusted — a client that cannot get it wrong is better than one
+  // that is asked not to.
+  const ordered = parsed.data.map((rubric) => ({
+    ...rubric,
+    dimensions: rubric.dimensions.map((dimension, index) => ({
+      ...dimension,
+      name: dimension.name.trim(),
+      sort_order: index,
+    })),
+  }));
+
+  await updateCampaignRubricsTx(campaignId, ordered, userId);
+
+  // Same reason `updateCampaign` does it: the criteria a candidate is measured
+  // against may have just appeared. Best-effort — a scoring failure must never
+  // lose the recruiter's rubric edit.
+  try {
+    await scoreUnscoredCampaignCandidates(campaignId, userId);
+  } catch (err) {
+    console.error("Post-rubric-save candidate scoring failed (non-blocking):", err);
+  }
+
+  // "layout", not the page: the stale-rubric badge on every candidate file
+  // beneath this campaign is derived from the active rubric version.
+  revalidatePath(`/campaigns/${campaignId}`, "layout");
 }
 
 // ─── CLONE campaign ──────────────────────────────────────────────────────────

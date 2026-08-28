@@ -51,6 +51,45 @@ export interface EvaluateApplicationResumeArgs {
   rawResumeText?: string | null;
   /** Tag persisted on the audit row (e.g. "apply_form", "rescore"). */
   source: string;
+  /**
+   * The campaign's scoring config and active resume rubric version, when the
+   * caller already holds them.
+   *
+   * Both are keyed on the campaign alone and identical for every application
+   * in it, so a caller scoring a whole campaign was paying four round-trips
+   * per CANDIDATE for four facts about the campaign — `fetchCampaignScoringConfig`
+   * is three queries on its own. Omitted, they are fetched here exactly as
+   * before, so the single-application callers are unchanged.
+   */
+  campaignContext?: CampaignScoringContext;
+}
+
+/** The campaign-level facts every application in one campaign is scored against. */
+export interface CampaignScoringContext {
+  config: CampaignScoringConfig;
+  rubricVersion: number | null;
+}
+
+/**
+ * Load the campaign-level half of a resume evaluation, once.
+ *
+ * Exported so a caller scoring many applications can hoist it out of its loop
+ * and hand it back through {@link EvaluateApplicationResumeArgs.campaignContext}.
+ * Returns null when the campaign has no active resume criteria — the same
+ * "nothing to evaluate against" that makes `evaluateApplicationResume` return
+ * null.
+ */
+export async function loadCampaignScoringContext(
+  campaignId: string,
+  ownerUserId: string,
+  db?: SupabaseDb,
+): Promise<CampaignScoringContext | null> {
+  const [config, rubricVersion] = await Promise.all([
+    fetchCampaignScoringConfig(campaignId, ownerUserId, db),
+    fetchActiveRubricVersion(campaignId, "resume", db),
+  ]);
+  if (!config || config.screening_criteria.length === 0) return null;
+  return { config, rubricVersion };
 }
 
 /**
@@ -73,11 +112,12 @@ export async function evaluateApplicationResume(
 ): Promise<ResumeEvaluationOutcome | null> {
   const { db, applicationId, campaignId, candidateId, ownerUserId, parsedResume, source } = args;
 
-  const config = await fetchCampaignScoringConfig(campaignId, ownerUserId, db);
-  if (!config || config.screening_criteria.length === 0) return null;
+  const context =
+    args.campaignContext ?? (await loadCampaignScoringContext(campaignId, ownerUserId, db));
+  if (!context) return null;
 
+  const { config, rubricVersion } = context;
   const criteria = config.screening_criteria;
-  const rubricVersion = await fetchActiveRubricVersion(campaignId, "resume", db);
 
   // One document, used for the prompt, for quote verification, and for the
   // cache key. See buildNormalizedResumeDocument on why they must be identical.

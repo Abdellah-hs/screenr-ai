@@ -3,6 +3,7 @@ import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 import { MANAGER_REJECTION_CODES } from "@/lib/rules/manager-review";
 import {
   AI_AUDIT_STAGE_VALUES,
+  CALL_LANGUAGES,
   DEFAULT_SCORE_THRESHOLD,
   MAX_POOL_NOTES_LENGTH,
   MAX_POOL_TAGS,
@@ -45,6 +46,15 @@ export const campaignFormSchema = z.object({
 // Standalone status validator for the bulk status changer (a quick status set
 // outside the full edit form). Campaign status is freely settable, so this just
 // guards that the value is a real status.
+/**
+ * The candidate's language choice, as it arrives from their own browser.
+ *
+ * It reaches the interviewer's instructions, so it is parsed as a closed enum
+ * and never as text: a free-string language would let a candidate write their
+ * own directive into the prompt.
+ */
+export const callLanguageSchema = z.enum(CALL_LANGUAGES);
+
 export const campaignStatusSchema = z.enum(campaignStatusValues);
 
 // The 5-option status dropdown value (real statuses + the `active_no_intake` UI
@@ -185,10 +195,17 @@ export function parseCampaignFormData(formData: FormData) {
   // approved into screening"). The draft schema allows an empty set: a
   // recruiter who hasn't written a job description yet can't generate any, and
   // blocking campaign creation on that is worse than the banner.
-  const screeningQuestions = safeParseJsonArray(
-    formData.get("screening_questions_json") as string,
-    screeningQuestionsDraftSchema
-  );
+  // `null`, not `[]`, when the form does not carry the field at all — and the
+  // distinction is load-bearing on the edit path, where an empty array means
+  // "the recruiter removed the last question" and must wipe the set, while an
+  // absent field means "this form does not manage questions" and must leave
+  // them alone. Collapsing the two would let any caller that forgets the field
+  // silently delete a campaign's whole question set.
+  const rawScreeningQuestions = formData.get("screening_questions_json");
+  const screeningQuestions =
+    rawScreeningQuestions === null
+      ? null
+      : safeParseJsonArray(rawScreeningQuestions as string, screeningQuestionsDraftSchema);
 
   return { ...data, rubrics, slaTimers, reviewers, availabilityRules, screeningQuestions };
 }
@@ -206,6 +223,37 @@ function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
 // ─── AI Generation Validation ───────────────────────────────────────────────
 
 export const aiDescriptionSchema = z.string().min(10, "Description too short for AI generation").max(10000, "Description too long");
+
+/**
+ * Rubric dimension names sent up from the wizard to ground question drafting.
+ *
+ * Generation-only and never persisted — these are names the recruiter is still
+ * editing in an unsaved draft, so they arrive from the client rather than from
+ * a row we own. Blank entries are dropped rather than rejected: a half-typed
+ * dimension on screen is a normal state to press "draft questions" in, and
+ * failing the whole call over one empty row would be the wizard blocking itself.
+ */
+export const rubricDimensionSuggestionSchema = z
+  .array(z.string().trim().max(200))
+  .max(50)
+  .transform((names) => names.filter((n) => n.length > 0));
+
+/**
+ * The rubric + questions a coverage check reads.
+ *
+ * Both arrive from the client because the wizard holds them before either is
+ * saved. Nothing here is persisted or scored — it is a configuration check —
+ * so the bounds exist to keep a prompt from being stuffed, not to protect a
+ * write. Blank entries pass through: the service drops them, and the two
+ * empty cases (no rubric, no questions) are answers in their own right rather
+ * than errors.
+ */
+export const screeningCoverageInputSchema = z.object({
+  dimensions: z
+    .array(z.object({ id: z.string().max(100), name: z.string().trim().max(200) }))
+    .max(50),
+  questions: z.array(z.object({ prompt: z.string().trim().max(2000) })).max(50),
+});
 
 // Inputs for the AI job-description assist. All grounding fields are optional
 // except the title; "improve" additionally requires a non-empty current draft.

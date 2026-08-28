@@ -17,6 +17,24 @@ Status: **shipped** (#80–#85). The text screening form was deleted outright in
 >   recording + proctoring" no longer describes what LiveKit is there for.
 >   Proctoring stayed; recording did not.
 >
+> - **Mitigation #2 was broken for as long as instructions rode room metadata,
+>   and was fixed on 2026-08-24.** LiveKit delivers room metadata to every
+>   participant, so "questions never shown in advance" was not true: the
+>   candidate's browser received the whole topic guide on join. The worker now
+>   fetches its instructions from `GET /api/agent/screening/instructions`
+>   (guarded by `AGENT_API_SECRET`) and metadata carries the application id
+>   alone. See CLAUDE.md → "Room metadata is candidate-visible".
+>
+> - **Mitigation #1 now has a budget, and coverage is enforced in code
+>   (2026-08-24).** "1–2 unscripted probes per answer" was written before the
+>   question set was sized from the rubric (3–8 topics), and a probe on every
+>   one of eight topics does not fit the call. The allowance is now counted:
+>   two probes at ≤4 topics, one above, after which the topic is left and the
+>   call moves on. More importantly, whether a topic gets raised at all is no
+>   longer the model's own affair — the app keeps a topic ledger and the
+>   interviewer cannot end the call while anything is unasked. See CLAUDE.md →
+>   "Topic coverage is enforced at runtime".
+>
 > Everything from *Threat model* onward is still the live rationale — it is why
 > the unscripted follow-up exists, and it has not changed.
 > Current behaviour: CLAUDE.md → PRD 3.4.3 and the proctoring section.
@@ -105,5 +123,5 @@ Text screening stays behind a flag as fallback until the voice path passes QA.
 ## New env / ops
 
 - `OPENAI_API_KEY` (exists) — used to mint ephemeral Realtime keys server-side.
-- OpenAI Realtime is billed per minute of audio — keep screening short.
+- OpenAI Realtime is billed per minute of audio — keep screening short. The call length is `screeningCallMinutes(topicCount)` (5-10 min), not a flat five; see CLAUDE.md.
 - No new long-running service (unlike the LiveKit interview backbone).

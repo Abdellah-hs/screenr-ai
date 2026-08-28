@@ -54,6 +54,23 @@ Each stage produces an **independent score**. There is no composite score — ma
 - Criteria examples: required skills, minimum experience, education level, certifications, language proficiency
 
 #### 3.1.3 Evaluation Rubrics
+
+> **Decision (#77, refined 2026-08-19 and 2026-08-22):** **the recruiter never
+> sets a weight or a fail line.** A number you can nudge is a number you will
+> nudge until the rubric agrees with the answer you already wanted, so the
+> editor collects intent and derives the arithmetic:
+>
+> - **Resume** asks for **priority** only — must-have or nice-to-have. Every
+>   must-have is an independent gate; nice-to-haves are averaged, unweighted.
+>   Importance is not an input here and does not affect the score.
+> - **Screening and interview** ask for **importance** only — high/medium/low,
+>   normalised into weights at score time. Neither stage has a must-have gate,
+>   because a spoken answer is noisier evidence than a document; a weak answer
+>   lowers the score and never auto-rejects.
+>
+> "Weight and pass/fail thresholds per stage" below is therefore retired as a
+> recruiter-facing control. Both still exist as derived, stored columns.
+
 - Managers can define **custom evaluation rubrics** per role for each pipeline stage
 - The system can **generate a standard rubric using AI** based on the job description and role type
 - Rubrics define scoring dimensions, weight, and pass/fail thresholds per stage
@@ -63,13 +80,33 @@ Each stage produces an **independent score**. There is no composite score — ma
 ### 3.2 Resume Collection
 
 #### 3.2.1 Intake Channels
-Resumes enter the system from three sources:
 
-| Channel | Description |
-|---|---|
-| **Email** | Dedicated inbox (e.g., jobs@company.com). System monitors the inbox, extracts attachments, and creates candidate records automatically. |
-| **LinkedIn Messages** | Resumes received via LinkedIn direct messages. Manual or semi-automated import into the system. |
-| **LinkedIn Campaigns** | Bulk import from LinkedIn recruiter campaigns. Candidates sourced via LinkedIn outreach are imported with their profile data. |
+> **Decision (2026-08-23):** Resume intake by **monitored email inbox is
+> retired** and will not be built. The requirement below is replaced by the
+> public apply page.
+>
+> Every candidate enters through a campaign's own apply link
+> (`/apply/<slug>`), which is the only intake path in the product. An inbox
+> cannot say which campaign a CV is for, so routing would need a rule the
+> recruiter maintains by hand — a label, an alias, a plus-address — and every
+> such rule is a way for a real applicant to land nowhere. The apply link
+> carries the campaign in the URL, so an application is bound to a campaign by
+> construction rather than by inference, and the candidate gets an immediate
+> confirmation instead of silence.
+>
+> Gmail remains connected, and remains **outbound only**: it sends screening
+> and interview invitations from the recruiter's own address. See CLAUDE.md.
+
+Resumes enter the system from these sources:
+
+| Channel | Description | Status |
+|---|---|---|
+| **Public apply link** | `/apply/<slug>` per campaign. The candidate uploads a CV directly and the application is created against that campaign. | Shipped |
+| **LinkedIn Messages** | Resumes received via LinkedIn direct messages. Manual or semi-automated import into the system. | Not built |
+| **LinkedIn Campaigns** | Bulk import from LinkedIn recruiter campaigns. Candidates sourced via LinkedIn outreach are imported with their profile data. | Not built |
+
+Deduplication (3.2.3) still says "across channels" and still matters: the same
+person can apply to two campaigns, or twice to one.
 
 #### 3.2.2 Resume Parsing
 - Supported formats: **PDF** and **DOCX**
@@ -95,6 +132,38 @@ Resumes enter the system from three sources:
 ### 3.3 AI Resume Screening
 
 #### 3.3.1 Automated Screening
+
+> **Decision (2026-08-19):** **the model never returns a number for a resume,
+> and the four-tier classification is retired at this stage.**
+>
+> The model reads the CV and reports, per criterion, an **evidence level**
+> (`not_present` | `unclear` | `weak` | `partial` | `strong` | `very_strong`)
+> plus verbatim quotes, which are verified against the exact document it was
+> shown. Every number is then derived by a fixed table. Two reasons: "is this a
+> 68 or a 74?" has no stable answer, so the same CV could score differently on
+> consecutive runs — a reading repeats, an arbitration does not; and a weighted
+> total lets a surplus on one criterion pay for a shortfall on another, which
+> turns a must-have into a mostly-have.
+>
+> The tier is **`eligible` | `ineligible`**, not Strong/Potential/Weak/No Match.
+> Ineligible is a hard reject in every automation mode, human-in-the-loop
+> included — a gate is not a review call. The score that survives is the
+> **ranking score**: the mean evidence score across every criterion, computed
+> only for an eligible candidate, and `null` otherwise. A low number there would
+> read as "how close they came" and invite an argument with the gate.
+>
+> **Amended 2026-08-23:** the ranking originally averaged the *nice-to-haves
+> only*, so a must-have contributed nothing beyond passing its gate and two
+> candidates who cleared every requirement were ordered entirely by optional
+> extras. It now averages all criteria. The gate is unchanged and runs first, so
+> a nice-to-have still cannot repair a failed must-have — an ineligible
+> candidate has no ranking for a surplus to inflate. See CLAUDE.md, "The ranking
+> is graded on must-haves too".
+>
+> The factor-level breakdown and the written rationale (3.10.1) are unaffected
+> and are the whole point — the breakdown now shows the evidence level and the
+> quote behind each criterion.
+
 - AI evaluates each parsed resume against the campaign's screening criteria
 - Produces an **independent screening score** (0–100) with a **granular factor-level breakdown** by criterion (see 3.10.1)
 - AI provides a **written rationale** explaining the score
@@ -106,6 +175,30 @@ Resumes enter the system from three sources:
 - When human review is enabled, reviewers see the AI score, rationale, and parsed resume side-by-side
 
 #### 3.3.3 Threshold Configuration
+
+> **Decision (2026-08-21, extended 2026-08-22):** there are **two thresholds,
+> not one**, and only the first of them rejects.
+>
+> `resume_threshold` gates the CV's ranking score: below it is a rejection,
+> at or above it advances to screening. `screening_threshold` gates the voice
+> answers: at or above it the candidate is invited to the interview, and **below
+> it the application rests at `screening_scored` for a person to look at — it is
+> never auto-rejected.**
+>
+> They were one column read by both rules while the UI showed one box, so a
+> recruiter raising the bar to stop weak CVs was silently also raising the bar on
+> candidates who had already answered well. They are not the same kind of number.
+>
+> The screening stage stopped auto-rejecting because the leverage is not there:
+> the must-have gate and `resume_threshold` have already cut the pile before a
+> link is sent, so auto-rejecting after a live call saved a handful of review
+> items at the price of never letting a person look at someone who held a
+> conversation with the product. **The interview stage has no threshold at all**
+> — see 3.5.
+>
+> Note that the must-have gate is *not* a threshold and runs before either: a
+> failed must-have is a hard reject in every automation mode.
+
 - Hiring managers set the **minimum score threshold** for auto-advancement per campaign
 - Candidates below the threshold are auto-rejected (with AI-personalized rejection email — see 3.9.1)
 - Candidates at or above the threshold advance to screening questions
@@ -131,6 +224,29 @@ Resumes enter the system from three sources:
 - The form is branded with the company identity
 
 #### 3.4.3 Response Format
+
+> **Decision (2026-08-23, recording what shipped from #82–#85, #161 and
+> 2026-08-22):** the screening stage is a **live voice call**, not a
+> record-and-upload form. The section below describes a form that was never
+> built and will not be; what actually ships is:
+>
+> - The candidate joins a **LiveKit room** and holds a real conversation with an
+>   OpenAI Realtime agent, which asks the campaign's questions in order and can
+>   ask unscripted follow-ups. There is no record button, no upload, and no
+>   per-question take.
+> - **Audio is not stored.** The durable record is the server-side transcript,
+>   which is what every score is traced to. "Managers can view the recorded
+>   responses" below is therefore not achievable and is retired with the rest.
+> - **Video is an accepted divergence (#48, closed).** Audio is what ships.
+> - The **typed-answer path was retired in #161.** No env flag re-enables it.
+> - **Questions are not individually required or optional** — `is_required` was
+>   dropped 2026-08-21. Every question is asked.
+> - The **practice question** (#140) and **per-question time limits** are still
+>   open. A time limit sat naturally on a recording UI and sits awkwardly on a
+>   conversation; #140 decides its fate rather than assuming it.
+>
+> The scoring unit changed with it — see 3.4.4.
+
 - All screening question responses are **video/audio recordings**
 - The form begins with a **practice question** (not scored) so candidates can:
   - Test their camera and microphone setup
@@ -145,6 +261,26 @@ Resumes enter the system from three sources:
 - Responses are uploaded and stored securely
 
 #### 3.4.4 Answer Scoring
+
+> **Decision (2026-08-22):** **the rubric dimension is the scoring unit, not the
+> question.** The per-question model below is retired.
+>
+> Questions are how the call goes looking; the rubric is what is graded. A
+> candidate who evidences a competency while answering some *other* question has
+> evidenced it, and per-question reading could not see that — it also gave a
+> competency probed by two questions twice the say of one probed by a single
+> question, a weighting nobody chose and phrasing produced.
+>
+> What ships: the model reads the whole transcript and reports an **evidence
+> level plus verbatim candidate quotes per rubric dimension**; quotes are
+> verified against the candidate's half of the transcript; the score is derived
+> deterministically and weighted by the recruiter's importance choice. The model
+> is never shown the weights and never returns a number. A dimension no question
+> probes scores 0, which is why coverage is checked before a campaign goes live.
+>
+> The link from a score to its justifying excerpt (3.10.2) survives — it is now
+> **per dimension** rather than per question.
+
 - AI transcribes the video/audio responses
 - AI evaluates each response against the rubric and produces:
   - Per-question score

@@ -10,10 +10,9 @@ import {
 } from "@/lib/constants";
 import { campaignRunSteps, type RunActor, type RunStep } from "@/lib/campaigns/run-preview";
 import {
-  draftPreflight,
+  dimensionsFor,
   resumeDimensionCount,
   type CampaignDraft,
-  type WizardStepKey,
 } from "@/lib/campaigns/wizard";
 import { DescriptionField } from "./description-field";
 import RubricEditor from "./rubric-editor";
@@ -61,17 +60,11 @@ export function StepRole({ draft, patch }: { draft: CampaignDraft; patch: Patch 
         />
       </div>
 
-      <div>
-        <DescriptionField
-          value={draft.description}
-          onChange={(description) => patch({ description })}
-          rows={7}
-        />
-        <p className={HINT}>
-          AI assist drafts this from a few details. It never invents salary,
-          benefits or visa terms.
-        </p>
-      </div>
+      <DescriptionField
+        value={draft.description}
+        onChange={(description) => patch({ description })}
+        rows={7}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
@@ -135,8 +128,6 @@ function todayLocalYmd(): string {
 }
 
 export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch }) {
-  const autoRejects = draft.automationMode === "fully_auto";
-
   return (
     <div className="flex flex-col gap-4">
       <section className={CARD}>
@@ -167,10 +158,15 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
                   <span className="block text-sm font-semibold text-ink">
                     {mode.label}
                   </span>
+                  {/* Both lines end on what the AI does, because that is the
+                      part the mode does NOT change: it scores, and it moves
+                      nobody, in either mode. What the switch actually decides
+                      is whether a rule may act on the score before a person
+                      has seen it. */}
                   <span className="mt-[3px] block text-[13px] leading-[1.5] text-[#6B7280]">
                     {mode.value === "human_in_loop"
                       ? "A person approves every CV before a screening link is sent. The AI scores and waits."
-                      : "The AI runs the pipeline on its own, within the threshold below."}
+                      : "No one approves: the thresholds below advance or reject each candidate. The AI still only scores."}
                   </span>
                 </span>
               </label>
@@ -179,12 +175,12 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
         </div>
       </section>
 
-      <section className={`${CARD} flex flex-col gap-[18px]`}>
-        {/* Two bars, and they grade different things: a resume ranking orders
-            CVs against the rubric, a screening score grades spoken answers.
-            One box would put both stages on the same fail line, which is the
-            bug the split fixed. */}
-        <div className="grid grid-cols-1 items-start gap-4 sm:[grid-template-columns:200px_minmax(0,1fr)]">
+      {/* Two bars, and they grade different things: a resume ranking orders
+          CVs against the rubric, a screening score grades spoken answers. One
+          box would put both stages on the same fail line, which is the bug the
+          split fixed — so they sit side by side, equal width, as a pair. */}
+      <section className={CARD}>
+        <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
           <div>
             <label htmlFor="resume_threshold" className={LABEL}>
               Resume threshold
@@ -209,8 +205,6 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
             </p>
           </div>
 
-          <div className="sm:col-span-2" />
-
           <div>
             <label htmlFor="screening_threshold" className={LABEL}>
               Screening threshold
@@ -227,122 +221,97 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
               }
               className={`${FIELD} tabular-nums`}
             />
-            <p className={HINT}>Score 0–100</p>
+            <p className={HINT}>Score 0–100 on the spoken screening answers.</p>
           </div>
-
-          {/* Amber only when it is true. In human-in-the-loop the threshold
-              rejects nobody — dressing it as a warning in both modes would
-              teach the recruiter to ignore the warning in the mode that has one. */}
-          {autoRejects ? (
-            <div className="rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-[15px] py-[13px]">
-              <p className="mb-[5px] flex items-center gap-[7px] text-[13px] font-semibold text-[#92400E]">
-                <svg
-                  className="h-4 w-4 shrink-0"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
-                  />
-                </svg>
-                The one setting that rejects without a person
-              </p>
-              <p className="text-xs leading-[1.55] text-[#92400E]">
-                A CV below {draft.screeningThreshold} is auto-rejected — with its
-                score, rationale and the rule that fired kept on the record. Set 0
-                to have a human see everyone.
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-[15px] py-[13px]">
-              <p className="mb-[5px] text-[13px] font-semibold text-ink">
-                Nothing here rejects anyone
-              </p>
-              <p className="text-xs leading-[1.55] text-[#4B5563]">
-                In human-in-the-loop the threshold only sorts your review queue.
-                Switch to Fully Automatic above and it becomes the one setting
-                that rejects a candidate without a person.
-              </p>
-            </div>
-          )}
-        </div>
-
-        <div className="max-w-[400px]">
-          <label htmlFor="interview_persona" className={LABEL}>
-            Interview persona
-          </label>
-          <span className="relative block">
-            <select
-              id="interview_persona"
-              name="interview_persona"
-              value={draft.interviewPersona}
-              onChange={(e) =>
-                patch({ interviewPersona: e.target.value as InterviewPersona })
-              }
-              className={`${FIELD} cursor-pointer appearance-none pr-9`}
-            >
-              {INTERVIEW_PERSONAS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label} — {p.description.toLowerCase()}
-                </option>
-              ))}
-            </select>
-            <SelectChevron />
-          </span>
-          <p className={HINT}>Tone only. It never changes what is scored.</p>
         </div>
       </section>
 
-      <section className={`${CARD} grid grid-cols-1 gap-4 sm:grid-cols-2`}>
-        <div>
-          <label htmlFor="status" className={LABEL}>
-            Status
-          </label>
-          <span className="relative block">
-            <select
-              id="status"
-              name="status"
-              value={draft.status}
-              onChange={(e) =>
-                patch({ status: e.target.value as CampaignStatusSelection })
-              }
-              className={`${FIELD} cursor-pointer appearance-none pr-9`}
-            >
-              {CAMPAIGN_STATUS_SELECTIONS.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-            <SelectChevron />
-          </span>
-          <p className={HINT}>Draft keeps the apply link dark.</p>
+      {/* Its own card, and deliberately not in with the thresholds: the hint
+          below says this one changes nothing that is scored, which is the exact
+          opposite of what the two numbers above it do. */}
+      <section className={CARD}>
+        <label htmlFor="interview_persona" className={LABEL}>
+          Interview persona
+        </label>
+        <span className="relative block">
+          <select
+            id="interview_persona"
+            name="interview_persona"
+            value={draft.interviewPersona}
+            onChange={(e) =>
+              patch({ interviewPersona: e.target.value as InterviewPersona })
+            }
+            className={`${FIELD} cursor-pointer appearance-none pr-9`}
+          >
+            {INTERVIEW_PERSONAS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label} — {p.description.toLowerCase()}
+              </option>
+            ))}
+          </select>
+          <SelectChevron />
+        </span>
+      </section>
+
+      {/* Same shape as the thresholds card above: the pair of fields on one
+          row, then the setting that depends on them full width underneath.
+          Nesting the radios inside the Deadline column squeezed a two-option
+          control into half a card and left the Status column standing empty
+          beside it, so neither column ended where the other did. */}
+      <section className={CARD}>
+        <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="status" className={LABEL}>
+              Status
+            </label>
+            <span className="relative block">
+              <select
+                id="status"
+                name="status"
+                value={draft.status}
+                onChange={(e) =>
+                  patch({ status: e.target.value as CampaignStatusSelection })
+                }
+                className={`${FIELD} cursor-pointer appearance-none pr-9`}
+              >
+                {CAMPAIGN_STATUS_SELECTIONS.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <SelectChevron />
+            </span>
+          </div>
+
+          <div>
+            <label htmlFor="deadline" className={LABEL}>
+              Deadline
+            </label>
+            <input
+              id="deadline"
+              name="deadline"
+              type="date"
+              min={todayLocalYmd()}
+              suppressHydrationWarning
+              value={draft.deadline}
+              onChange={(e) => patch({ deadline: e.target.value })}
+              className={FIELD}
+            />
+            <p className={HINT}>Optional. Leave it empty for no closing date.</p>
+          </div>
         </div>
 
-        <div>
-          <label htmlFor="deadline" className={LABEL}>
-            Deadline
-          </label>
-          <input
-            id="deadline"
-            name="deadline"
-            type="date"
-            min={todayLocalYmd()}
-            suppressHydrationWarning
-            value={draft.deadline}
-            onChange={(e) => patch({ deadline: e.target.value })}
-            className={FIELD}
-          />
-
-          <fieldset className="mt-3 border-0 p-0">
-            <legend className="mb-[7px] p-0 text-xs font-semibold text-[#6B7280]">
-              After the deadline passes
-            </legend>
+        {/* Only once there is a deadline to pass. Asking what should happen
+            after a date that has not been set is a question with no subject,
+            and the answer does nothing anyway — `isCampaignAcceptingApplications`
+            ignores enforcement when `deadline` is null. Unmounting is safe
+            because the answer lives in `draft`, not in these inputs: clear the
+            date and the choice is remembered for when one is set again. */}
+        {draft.deadline && (
+        <fieldset className="mt-[18px] border-0 p-0">
+          <legend className={`${LABEL} p-0`}>After the deadline passes</legend>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             {[
               { enforced: false, label: "Keep accepting", note: "(informational only)" },
               { enforced: true, label: "Stop accepting applications", note: "" },
@@ -350,10 +319,14 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
               <label
                 key={String(option.enforced)}
                 htmlFor={`deadline-${option.enforced}`}
-                className={`mb-2 flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg border border-[#E5E7EB] px-3 transition-colors duration-150 ${
+                // Selected reads as an ink border, exactly as it does on the
+                // automation-mode options above. Two radio groups on one step
+                // that mark their choice differently make the recruiter check
+                // twice which one is set.
+                className={`flex min-h-11 cursor-pointer items-center gap-2.5 rounded-lg border px-3 transition-colors duration-150 ${
                   draft.deadlineEnforced === option.enforced
-                    ? "bg-[#F9FAFB]"
-                    : "bg-white hover:bg-[#F9FAFB]"
+                    ? "border-ink bg-white"
+                    : "border-[#E5E7EB] bg-white hover:bg-[#F9FAFB]"
                 }`}
               >
                 <input
@@ -363,7 +336,7 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
                   value={String(option.enforced)}
                   checked={draft.deadlineEnforced === option.enforced}
                   onChange={() => patch({ deadlineEnforced: option.enforced })}
-                  className="h-4 w-4 cursor-pointer accent-ink"
+                  className="h-4 w-4 shrink-0 cursor-pointer accent-ink"
                 />
                 <span className="text-[13px] text-[#374151]">
                   {option.label}
@@ -373,8 +346,9 @@ export function StepRules({ draft, patch }: { draft: CampaignDraft; patch: Patch
                 </span>
               </label>
             ))}
-          </fieldset>
-        </div>
+          </div>
+        </fieldset>
+        )}
       </section>
     </div>
   );
@@ -398,18 +372,23 @@ export function StepRubric({ draft, patch }: { draft: CampaignDraft; patch: Patc
           moment the campaign does — so collecting them later means a campaign
           that can take applications it cannot act on. Still optional: a
           recruiter without a description yet cannot draft any, and blocking
-          creation on that is worse than the banner on the campaign page. */}
+          creation on that is worse than the banner on the campaign page.
+
+          Below the rubric on purpose, and fed from it: the answers to these
+          questions are scored against the screening rubric above, so a
+          competency no question asks about scores zero by default. */}
       <ScreeningQuestionsEditor
         initialQuestions={[]}
         value={draft.screeningQuestions}
         onChange={(screeningQuestions) => patch({ screeningQuestions })}
         description={draft.description}
+        rubricDimensions={dimensionsFor(draft, "screening_q")}
       />
     </div>
   );
 }
 
-// ─── Step 4 · Team & timing ──────────────────────────────────────────────────
+// ─── Step 4 · Timing (and team reviewers, behind the flag) ───────────────────
 
 export function StepTeam({ draft, patch }: { draft: CampaignDraft; patch: Patch }) {
   return (
@@ -482,13 +461,7 @@ function RunMark({ actor }: { actor: RunActor }) {
   return <ActorMark actor={MARK[actor]} />;
 }
 
-export function StepReview({
-  draft,
-  onGoToStep,
-}: {
-  draft: CampaignDraft;
-  onGoToStep: (key: WizardStepKey) => void;
-}) {
+export function StepReview({ draft }: { draft: CampaignDraft }) {
   const steps: RunStep[] = campaignRunSteps({
     status: draft.status,
     automationMode: draft.automationMode,
@@ -515,76 +488,15 @@ export function StepReview({
                   )}
                 </span>
                 <div className={last ? "" : "pb-4"}>
-                  <p className="mb-0.5 text-sm font-semibold text-ink">{step.title}</p>
-                  <p className="text-[13px] leading-[1.55] text-[#6B7280]">
-                    {step.detail}
+                  {/* min-h matches RunMark's 26px so a one-line title sits on
+                      the centre of its own mark rather than on its top edge. */}
+                  <p className="flex min-h-[26px] items-center text-sm font-semibold text-ink">
+                    {step.title}
                   </p>
                 </div>
               </div>
             );
           })}
-        </div>
-        <p className="border-t border-[#F3F4F6] bg-ai-wash px-6 py-3.5 text-xs leading-[1.55] text-[#4B5563]">
-          Change the automation mode on step 2 to move the line between automatic
-          and human.
-        </p>
-      </section>
-
-      <section className="rounded-xl border border-[#E5E7EB] bg-white px-6 py-5 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
-          Before you create
-        </p>
-        <div className="flex flex-col gap-2.5">
-          {draftPreflight(draft).map((item) => (
-            <p
-              key={item.label}
-              className="flex items-start gap-2.5 text-[13px] leading-[1.5] text-[#374151]"
-            >
-              <svg
-                className={`mt-px h-4 w-4 shrink-0 ${
-                  item.done ? "text-[#059669]" : "text-[#D1D5DB]"
-                }`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d={item.done ? "m5 13 4 4L19 7" : "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"}
-                />
-              </svg>
-              <span className={item.done ? "" : "text-[#6B7280]"}>{item.label}</span>
-              <button
-                type="button"
-                onClick={() => onGoToStep(item.step)}
-                className="ml-auto cursor-pointer text-[13px] font-semibold text-primary hover:underline"
-              >
-                Edit
-              </button>
-            </p>
-          ))}
-
-          <p className="flex items-start gap-2.5 text-[13px] leading-[1.5] text-[#B45309]">
-            <svg
-              className="mt-px h-4 w-4 shrink-0"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M11.25 11.25h1.5v5.25m-.75-8.25h.008v.008h-.008V8.25ZM21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-              />
-            </svg>
-            Screening questions come after you create — nobody can be approved into
-            screening until they exist.
-          </p>
         </div>
       </section>
     </div>

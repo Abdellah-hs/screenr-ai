@@ -1,4 +1,12 @@
-@import "tailwindcss";
+/* `source(none)` + an explicit @source, because Tailwind 4 otherwise
+   auto-detects content from the project root. That swept in everything git
+   tracks that is not ignored — including `agents/interview/models/yolox_tiny.onnx`,
+   a 20MB binary. Tailwind reads such a file looking for class names and finds
+   byte sequences that escape into CSS a parser then rejects, so a stray
+   unignored blob can take the whole stylesheet down, not merely slow it.
+   Every className in this app lives under src/, so that is what we scan. */
+@import "tailwindcss" source(none);
+@source "../";
 
 @plugin "tailwindcss-animate";
 
@@ -203,4 +211,38 @@
   .modal {
     @apply bg-card rounded-2xl p-8 shadow-[0_20px_25px_rgba(0,0,0,0.15)] max-w-[500px] w-full;
   }
+}
+
+/* ── Panels that scroll inside a card ─────────────────────────────────────────
+   The OS scrollbar is ~17px of grey chrome on Windows. Inside a 22px-padded
+   card that reads as a seam down the panel, so every in-card scroller gets a
+   hairline thumb instead — visible enough to say "there is more", quiet enough
+   not to look like a second border. Applied globally to `overflow-y-auto`
+   rather than as an opt-in class, so a scroller added later cannot forget it. */
+.overflow-y-auto,
+.overflow-auto {
+  scrollbar-width: thin;
+  scrollbar-color: #D1D5DB transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb {
+  background-color: #E5E7EB;
+  border-radius: 9999px;
+}
+
+.overflow-y-auto:hover::-webkit-scrollbar-thumb,
+.overflow-auto:hover::-webkit-scrollbar-thumb {
+  background-color: #D1D5DB;
 }

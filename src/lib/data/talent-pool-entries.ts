@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/database.types";
+import { hasScreeningScore } from "@/lib/candidates/pipeline-summary";
 
 type EntryRow = Database["public"]["Tables"]["talent_pool_entries"]["Row"];
 type CandidateRow = Database["public"]["Tables"]["candidates"]["Row"];
@@ -35,7 +36,18 @@ export interface PooledCandidateEvidenceRow {
   campaign_id: string;
   created_at: string;
   resume_score: number | null;
-  screening_q_score: number | null;
+  /**
+   * The screening and interview readings, resolved here from the rows that
+   * hold them so `composeTalentPoolEntries` stays a pure function over flat
+   * numbers.
+   *
+   * They used to be read straight off `applications.screening_q_score` and
+   * `applications.interview_score`, which nothing has ever written — so
+   * `bestScore` was silently the resume score alone, and somebody who scored
+   * 45 on their CV and 88 at interview was excluded from a "80-100" search by
+   * the one filter meant to find them.
+   */
+  screening_score: number | null;
   interview_score: number | null;
   parsed_data: unknown;
   campaigns: { id: string; title: string };
@@ -112,10 +124,10 @@ export async function fetchPooledCandidateEvidence(
       campaign_id,
       created_at,
       resume_score,
-      screening_q_score,
-      interview_score,
       parsed_data,
-      campaigns!inner ( id, title, user_id )
+      campaigns!inner ( id, title, user_id ),
+      screening_question_responses ( overall_score, status ),
+      interview_sessions ( scores )
     `,
     )
     .in("candidate_id", candidateIds)
@@ -127,7 +139,25 @@ export async function fetchPooledCandidateEvidence(
     throw new Error(`Failed to load talent pool evidence: ${error.message}`);
   }
 
-  return (data ?? []) as unknown as PooledCandidateEvidenceRow[];
+  return (
+    (data ?? []) as unknown as Array<
+      Omit<PooledCandidateEvidenceRow, "screening_score" | "interview_score"> & {
+        screening_question_responses: {
+          overall_score: number | null;
+          status: string | null;
+        } | null;
+        interview_sessions: { scores: { overall_score?: number | null } | null } | null;
+      }
+    >
+  ).map(({ screening_question_responses, interview_sessions, ...row }) => ({
+    ...row,
+    // The same predicate the candidate table scores on, so a number cannot
+    // reach the pool's search while that list still calls the response unscored.
+    screening_score: hasScreeningScore(screening_question_responses)
+      ? Number(screening_question_responses.overall_score)
+      : null,
+    interview_score: interview_sessions?.scores?.overall_score ?? null,
+  }));
 }
 
 /** Candidate ids already in this recruiter's pool — drives the "Pooled" badge. */

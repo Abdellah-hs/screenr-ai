@@ -250,6 +250,21 @@ describe("submitApplication", () => {
     expect(sent.text).toContain("https://hire.example.com/apply/backend-engineer");
   });
 
+  it("sends the ordinary receipt when the failure was ours, not their CV", async () => {
+    // They ARE filed — `processing_failed`, with the CV stored and a retry in
+    // the recruiter's hands. Asking them to apply again would be asking a
+    // candidate to fix our outage, and would file them twice.
+    mockIngest.mockResolvedValue({ outcome: "processing_failed", applicationId: "app-1" });
+
+    const result = await submitApplication(form());
+    await flushAfter();
+
+    expect(result).toEqual({ ok: true });
+    const sent = mockSendEmail.mock.calls[0][1];
+    expect(sent.subject.toLowerCase()).toContain("received your application");
+    expect(sent.text).not.toContain("try applying again");
+  });
+
   it("emails a retry notice when the pipeline itself blows up mid-flight", async () => {
     mockIngest.mockRejectedValue(new Error("marker down"));
 

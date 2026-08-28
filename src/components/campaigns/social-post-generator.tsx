@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { generateSocialPosts } from "@/lib/actions/ai-generate";
 import { publishLinkedInPost } from "@/lib/actions/social-publish";
 import { SOCIAL_POST_TONES } from "@/lib/validations";
@@ -141,23 +140,6 @@ export function SocialPostGenerator({
           </p>
         </div>
 
-        {/* Connection state belongs in the header, not on the button: whether
-            you can post at all is a fact about the account, and finding out at
-            the moment of pressing post is finding out too late. */}
-        {linkedInConnected ? (
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#ECFDF5] px-2.5 py-1 text-[11px] font-semibold text-[#047857]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#059669]" aria-hidden="true" />
-            LinkedIn connected
-          </span>
-        ) : (
-          <Link
-            href="/settings"
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-[#F3F4F6] px-2.5 py-1 text-[11px] font-semibold text-[#4B5563] transition-colors duration-150 hover:bg-[#E5E7EB]"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-[#9CA3AF]" aria-hidden="true" />
-            Connect LinkedIn
-          </Link>
-        )}
       </div>
 
       <div className="mb-3.5 flex flex-wrap items-center gap-2">
@@ -186,7 +168,11 @@ export function SocialPostGenerator({
           title={!canGenerate ? "Add a title and description first" : undefined}
           className="ml-auto inline-flex min-h-9 cursor-pointer items-center rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? "Drafting…" : posts ? "Redraft" : "Draft from the role"}
+          {/* "Draft posts", not "Draft from the role": the screening-questions
+              card on the same page has a button by that name which drafts
+              something else entirely. Two identical buttons doing two different
+              things is a coin toss, not a choice. */}
+          {loading ? "Drafting…" : posts ? "Redraft" : "Draft posts"}
         </button>
       </div>
 

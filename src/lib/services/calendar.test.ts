@@ -44,11 +44,16 @@ const {
     };
   });
 
-vi.mock("googleapis", () => ({
-  google: {
-    auth: { OAuth2: mockOAuth2 },
-    calendar: mockCalendarFactory,
-  },
+// Two subpaths now, where the root barrel used to cover both: this module
+// calls the Calendar API, and borrows its OAuth2 client from ./gmail, which
+// imports the Gmail subpath.
+vi.mock("googleapis/build/src/apis/calendar", () => ({
+  calendar: mockCalendarFactory,
+}));
+
+vi.mock("googleapis/build/src/apis/gmail", () => ({
+  gmail: vi.fn(),
+  auth: { OAuth2: mockOAuth2 },
 }));
 
 import {

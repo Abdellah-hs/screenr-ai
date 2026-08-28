@@ -19,6 +19,7 @@ import {
   extractResumeEvidence,
   RESUME_EVIDENCE_SEED,
 } from "./openai";
+import { EVIDENCE_LEVEL_DEFINITIONS } from "@/lib/resume-scoring";
 import type { ResumeCriterion } from "@/lib/resume-scoring";
 
 function parsedResponse(parsed: unknown, refusal: string | null = null) {
@@ -282,6 +283,49 @@ describe("generateRubricDimensions", () => {
     expect(resumeRubric.dimensions[0].id).toMatch(/^dim-/);
   });
 
+  /**
+   * A must-have gate exists on the resume stage and nowhere else, so the model
+   * marking a screening or interview dimension mandatory has to be corrected in
+   * code rather than merely discouraged in the prompt: no editor control renders
+   * the flag for those stages, so a recruiter could never see it to clear it.
+   */
+  it("refuses the model's mandatory flag on the stages that have no gate", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(fullStagesPayload()));
+
+    const [, screeningRubric, interviewRubric] = await generateRubricDimensions(
+      "desc",
+      "campaign-1",
+    );
+
+    // The payload marks "Technical depth" and "Live problem solving" mandatory.
+    expect(screeningRubric.dimensions.every((d) => !d.is_mandatory)).toBe(true);
+    expect(interviewRubric.dimensions.every((d) => !d.is_mandatory)).toBe(true);
+  });
+
+  it("leaves no fail line behind on a stage that cannot enforce one", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(fullStagesPayload()));
+
+    const [, screeningRubric, interviewRubric] = await generateRubricDimensions(
+      "desc",
+      "campaign-1",
+    );
+
+    // min_score is derived from is_mandatory, so clearing the flag has to clear
+    // the number with it or the row still describes a gate.
+    for (const dim of [...screeningRubric.dimensions, ...interviewRubric.dimensions]) {
+      expect(dim.min_score).toBe(0);
+    }
+  });
+
+  it("still honours the mandatory flag on the resume stage, where the gate is real", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(fullStagesPayload()));
+
+    const [resumeRubric] = await generateRubricDimensions("desc", "campaign-1");
+
+    expect(resumeRubric.dimensions[0].is_mandatory).toBe(true);
+    expect(resumeRubric.dimensions[1].is_mandatory).toBe(false);
+  });
+
   it("throws when a stage array is empty", async () => {
     const payload = { ...fullStagesPayload(), interview: [] };
     mockParse.mockResolvedValueOnce(parsedResponse(payload));
@@ -377,7 +421,7 @@ describe("extractResumeEvidence", () => {
       "partial",
     ]);
     expect(extraction.model).toBe("gpt-4o-mini");
-    expect(extraction.promptVersion).toBe("v3_resume_evidence");
+    expect(extraction.promptVersion).toBe("v4_resume_evidence");
     expect(extraction.systemFingerprint).toBe("fp_abc123");
     expect(JSON.parse(extraction.rawOutput)).toEqual(evidencePayload());
   });
@@ -412,6 +456,22 @@ describe("extractResumeEvidence", () => {
     await extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" });
 
     expect(mockParse.mock.calls[0][0].messages[1].content).toContain(RESUME_TEXT);
+  });
+
+  it("puts every evidence-level definition in the system prompt verbatim", async () => {
+    mockParse.mockResolvedValueOnce(parsedResponse(evidencePayload()));
+
+    await extractResumeEvidence({ resumeText: RESUME_TEXT, criteria, jobDescription: "JD" });
+
+    // The definitions ARE the scoring rule at this stage — a level is whatever
+    // the model matched this wording to. Nothing else asserts they reach the
+    // model, so a broken guide would silently leave it guessing what
+    // "very_strong" means while every downstream number carried on as normal.
+    const systemPrompt: string = mockParse.mock.calls[0][0].messages[0].content;
+    for (const [level, definition] of Object.entries(EVIDENCE_LEVEL_DEFINITIONS)) {
+      expect(systemPrompt).toContain(level);
+      expect(systemPrompt).toContain(definition);
+    }
   });
 
   it("forbids the model from returning a score, tier or recommendation", async () => {

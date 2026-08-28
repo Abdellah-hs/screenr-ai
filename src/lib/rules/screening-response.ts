@@ -143,15 +143,41 @@ export interface ScreeningScoringConfig {
  * call, no DB.
  *
  * Always passes through `screening_scored` first so the audit log records
- * the AI scoring event before any downstream advancement. In auto mode it
- * then chains a second transition to either `interview_invited` (pass — the
- * on-demand AI interview, no slot booking; scheduling belongs to the final
- * human interview after manager review) or `rejected` (fail). HITL mode
- * rests at `screening_scored` for the recruiter to advance manually.
+ * the AI scoring event before any downstream advancement.
  *
  *   - human_in_loop:           [screening_scored]
  *   - fully_auto + score ≥ thr: [screening_scored, interview_invited]
- *   - fully_auto + score < thr: [screening_scored, rejected]
+ *   - fully_auto + score < thr: [screening_scored]
+ *
+ * **The threshold advances; it does not reject** (decision 2026-08-22).
+ * Passing it invites the candidate to the on-demand AI interview. Failing it
+ * rests the application at `screening_scored` for a person to decide — the same
+ * state HITL mode uses. `screening_scored` was added to the notification bell's
+ * `AWAITING_DECISION_STATES` in the same change: a queue nobody can see is worse
+ * than the auto-reject it replaced.
+ *
+ * It used to auto-reject below the line. Three reasons it no longer does:
+ *
+ * 1. **The volume is not where the leverage is.** The must-have gate and
+ *    `resume_threshold` cut the pile before a screening link is ever sent, so
+ *    auto-rejecting here saves a handful of review items — at the cost of never
+ *    letting a person look at someone who held a live call with the product.
+ * 2. **It contradicted the interview rule one stage later.** The interview never
+ *    auto-rejects because "rejecting someone who sat a whole interview on the
+ *    strength of one number is the decision most worth keeping human". A voice
+ *    screening is the same thing in a milder form — degree, not kind.
+ * 3. **The screening score is the most fragile number here.** The overall is the
+ *    weighted mean over EVERY rubric dimension, and a dimension no question
+ *    probes scores 0. The coverage check that prevents that is a model's
+ *    reading. With auto-reject, a missed gap became a silent stack of
+ *    rejections; without it, the same mistake becomes a queue somebody notices.
+ *
+ * The counter-argument is real and was weighed: unlike the interview, the
+ * screening transcript IS persisted, so a rejection here is auditable. That
+ * makes an automatic rejection recoverable, not correct, at these volumes.
+ *
+ * The resume stage still auto-rejects in both modes — a must-have is objective
+ * and checkable against a document, and it is where the funnel actually is.
  */
 export function evaluateScreeningScoringOutcome(
   result: { overall_score: number },
@@ -178,15 +204,12 @@ export function evaluateScreeningScoringOutcome(
     ];
   }
 
+  // Below the line rests rather than rejecting. The rationale says so, because
+  // the audit log is where a recruiter finds out why an application stopped.
   return [
-    recordScored,
     {
-      toState: "rejected",
-      rationale: `${scoreLine} — below threshold`,
-      disposition: {
-        code: "LOW_SCORE",
-        description: `Screening scored ${result.overall_score}, threshold ${config.screening_threshold}`,
-      },
+      ...recordScored,
+      rationale: `${scoreLine} — below threshold, awaiting a human decision`,
     },
   ];
 }

@@ -130,9 +130,12 @@ const PROMPTS: Record<ApplicationState, DecisionPrompt> = {
     waitingOnYou: true,
   },
   processing_failed: {
-    headline: "The CV could not be read",
-    detail:
-      "Not scored and not rejected. Retry the parse, or ask the candidate for a text-layer file.",
+    // Not "the CV could not be read": this state is reached when OUR side
+    // failed — an extractor timeout, a model outage, a score that would not
+    // compute. The candidate's file is usually fine and often has not been
+    // opened at all.
+    headline: "Processing failed on our side",
+    detail: "Not scored and not rejected. Open the candidate to try again.",
     waitingOnYou: true,
   },
 };

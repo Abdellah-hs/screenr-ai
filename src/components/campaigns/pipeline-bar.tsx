@@ -50,11 +50,7 @@ export function PipelineBar({
   );
 }
 
-/**
- * The legend, once per table rather than per row. The disclaimer is the point
- * of it: a proportional bar invites reading length as size, and campaigns are
- * not comparable to each other on this page.
- */
+/** The legend, once per table rather than per row. */
 export function PipelineKey() {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-[#E5E7EB] px-5 py-3 text-xs text-[#6B7280]">
@@ -70,9 +66,6 @@ export function PipelineKey() {
             {label}
           </span>
         ))}
-      </span>
-      <span className="ml-auto">
-        The bar is proportion, not ranking. Nobody is compared across campaigns.
       </span>
     </div>
   );

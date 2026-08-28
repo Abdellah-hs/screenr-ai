@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { unstable_rethrow } from "next/navigation";
 import { cloneCampaign } from "@/lib/actions/campaigns";
 
 interface CloneCampaignButtonProps {
@@ -17,6 +18,9 @@ export default function CloneCampaignButton({ campaignId }: CloneCampaignButtonP
       try {
         await cloneCampaign(campaignId);
       } catch (e) {
+        // A successful clone redirects to the copy, and Next signals a redirect
+        // by throwing — so this catch would report the success as a failure.
+        unstable_rethrow(e);
         setError(e instanceof Error ? e.message : "Failed to clone campaign");
       }
     });

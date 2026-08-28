@@ -8,9 +8,13 @@ import {
   screeningQuestionsArraySchema,
 } from "@/lib/validations";
 import { generateQuestionsForRole } from "@/lib/services/screening-questions";
-import { fetchCampaignScoringConfig, verifyCampaignOwnership } from "@/lib/data/campaigns";
-import { runScreeningScoring } from "./score-screening-response";
-import type { gmail_v1 } from "googleapis";
+import {
+  fetchCampaignScoringConfig,
+  fetchScreeningRubricDimensions,
+  verifyCampaignOwnership,
+} from "@/lib/data/campaigns";
+import { runScreeningScoring } from "@/lib/screening/score-response";
+import type { gmail_v1 } from "googleapis/build/src/apis/gmail";
 import { sendEmail } from "@/lib/services/email";
 import { getRecruiterGmailClient } from "./gmail-sender";
 import { buildScreeningQuestionsEmail } from "@/lib/services/email-templates/screening-questions";
@@ -72,10 +76,16 @@ export async function generateScreeningQuestions(
     );
   }
 
+  // The SCREENING rubric, not the resume one. `config.screening_criteria` is
+  // built from the `resume` rubric — passing it here drafted questions against
+  // what the CV was gated on rather than what the call will be graded on.
+  const { dimensions } = await fetchScreeningRubricDimensions(campaignId);
+
+  // No `count`: the set is sized from the rubric, so a dimension is never
+  // left unprobed by an arbitrary fixed number of questions.
   return generateQuestionsForRole({
     jobDescription: config.description,
-    screeningCriteria: config.screening_criteria,
-    count: 5,
+    rubricDimensions: dimensions,
   });
 }
 
@@ -308,7 +318,7 @@ export async function scoreScreeningAnswers(
 
   // The scoring itself (AI evidence + rule-driven transitions) is shared with
   // the candidate-triggered voice auto-score — see `runScreeningScoring`.
-  return runScreeningScoring({
+  const result = await runScreeningScoring({
     applicationId,
     campaignId: app.campaign_id,
     candidateId: app.candidate_id,
@@ -317,6 +327,14 @@ export async function scoreScreeningAnswers(
     automation_mode: config.automation_mode,
     screening_threshold: config.screening_threshold,
   });
+
+  // The action revalidates, not the pipeline: a recruiter triggered this and is
+  // looking at these two pages right now. The candidate-side caller has nobody
+  // watching and deliberately does not.
+  revalidatePath(`/campaigns/${app.campaign_id}/candidates/${applicationId}`);
+  revalidatePath(`/campaigns/${app.campaign_id}`);
+
+  return result;
 }
 
 /**

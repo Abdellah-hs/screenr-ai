@@ -42,3 +42,22 @@ export function slugifyTitle(title: string): string {
 
   return base || "campaign";
 }
+
+/**
+ * A timestamp as the evidence panels render it — "Aug 24, 2026, 3:05 PM".
+ *
+ * Shared because the screening thread and the interview transcript sit one
+ * above the other on the same candidate page, each carrying its own copy of
+ * this. Two copies of one format is how the same moment starts reading two
+ * different ways depending on which panel you look at.
+ */
+export function formatEvidenceTimestamp(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}

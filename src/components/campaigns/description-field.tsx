@@ -163,11 +163,6 @@ export function DescriptionField({
 
       {panelOpen && (
         <div className="mt-2 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
-          <p className="mb-2 text-xs text-[#6B7280]">
-            Draft a description from a few details. AI only writes text — you edit
-            and save. It won&apos;t invent salary, benefits, or visa terms.
-          </p>
-
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <select
               value={seniority}

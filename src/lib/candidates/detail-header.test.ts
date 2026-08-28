@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   interviewAbsence,
+  interviewWasTaken,
   mandatoryDimensionNames,
+  screeningCallWasTaken,
+  screeningWasSent,
   withInterviewScore,
   neighbourNav,
   slaPhrase,
@@ -267,5 +270,75 @@ describe("mandatoryDimensionNames", () => {
 
   it("returns nothing for a stage with no rubric rather than throwing", () => {
     expect(mandatoryDimensionNames(rubrics, "interview")).toEqual([]);
+  });
+});
+
+/**
+ * These decide, on the candidate detail page, between a stage's evidence and a
+ * named absence in its place. They used to be re-derived in the page while each
+ * component ALSO returned null on its own copy — fine while the two agreed, and
+ * silent when they drifted: the page renders the panel, the panel renders
+ * nothing, and the recruiter gets a blank evidence view with no explanation.
+ */
+describe("interviewWasTaken", () => {
+  it("is false for an invitation nobody has opened", () => {
+    // A pending link, not an interview. The pipeline stage already says so, and
+    // a transcript card over it would be an empty white box.
+    expect(interviewWasTaken({ status: "invited", transcript: [] })).toBe(false);
+  });
+
+  it("is true once there is anything on the transcript, invited or not", () => {
+    expect(interviewWasTaken({ status: "invited", transcript: [{}] })).toBe(true);
+  });
+
+  it("is true for a session that moved past invited", () => {
+    expect(interviewWasTaken({ status: "completed", transcript: [] })).toBe(true);
+  });
+
+  it("is false when there is no session at all", () => {
+    expect(interviewWasTaken(null)).toBe(false);
+  });
+});
+
+describe("screeningWasSent", () => {
+  it("is false before anything has gone out", () => {
+    // Sending is automatic on approval, so the pre-send states have nothing
+    // candidate-specific to show.
+    expect(screeningWasSent({ status: "not_sent" })).toBe(false);
+    expect(screeningWasSent({ status: "pending" })).toBe(false);
+  });
+
+  it("is false when there is no response row yet", () => {
+    expect(screeningWasSent(null)).toBe(false);
+    expect(screeningWasSent(undefined)).toBe(false);
+  });
+
+  it("is true from the moment the link is out", () => {
+    expect(screeningWasSent({ status: "sent" })).toBe(true);
+    expect(screeningWasSent({ status: "responded" })).toBe(true);
+    expect(screeningWasSent({ status: "scored" })).toBe(true);
+  });
+});
+
+describe("screeningCallWasTaken", () => {
+  it("is true once a call finished with turns on it", () => {
+    expect(screeningCallWasTaken({ status: "responded", transcript: [{}] })).toBe(true);
+    expect(screeningCallWasTaken({ status: "scored", transcript: [{}] })).toBe(true);
+  });
+
+  it("is false for a link that was sent but never answered", () => {
+    expect(screeningCallWasTaken({ status: "sent", transcript: [] })).toBe(false);
+  });
+
+  /**
+   * A transcript exists mid-call — the worker reports it incrementally — so the
+   * turns alone do not mean the call is over. Both halves are required.
+   */
+  it("is false while the call is still running", () => {
+    expect(screeningCallWasTaken({ status: "sent", transcript: [{}, {}] })).toBe(false);
+  });
+
+  it("is false for a typed response with no call behind it", () => {
+    expect(screeningCallWasTaken({ status: "scored", transcript: [] })).toBe(false);
   });
 });

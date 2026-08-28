@@ -5,6 +5,7 @@ import Link from "next/link";
 import { pipelineDisplayScore } from "@/lib/constants";
 import {
   candidateStageCounts,
+  candidateTableColumns,
   selectCandidates,
   type CandidateSortField,
 } from "@/lib/candidates/table-view";
@@ -12,12 +13,7 @@ import { CandidateBulkActions } from "./candidate-bulk-actions";
 import { StageChanger } from "@/components/candidates/stage-changer";
 import { MENU_ITEM, ScoreAbsent, ScoreInline } from "@/components/ui";
 import { scoreAbsenceLabel } from "@/lib/candidates/score-absence";
-import type {
-  Candidate,
-  CandidateScore,
-  CandidateStage,
-  SlaBreachLevel,
-} from "@/lib/constants";
+import type { CandidateListRow, CandidateStage, SlaBreachLevel } from "@/lib/constants";
 import {
   ALL_FUNNEL_STAGE,
   FUNNEL_STAGES,
@@ -70,22 +66,13 @@ const slaBadgeStyles: Record<SlaBreachLevel, string> = {
   escalation: "text-[#DC2626] bg-[#FEF2F2] border-[#FECACA]",
 };
 
-// Short tags shown next to the score so a number is never mistaken for a stage
-// it didn't come from (the pipeline used to always show the resume score). The
-// stage-selection logic lives in pipelineDisplayScore (constants.ts).
-const scoreStageTag: Record<CandidateScore["stage"], string> = {
-  resume: "Resume",
-  screening: "Screening",
-  interview: "Interview",
-};
-
 export default function CandidateTable({
   candidates,
   campaignId,
   initialFilter = "all",
   initialOverdue = false,
 }: {
-  candidates: Candidate[];
+  candidates: CandidateListRow[];
   campaignId: string;
   /** Seeds the stage pill selection, e.g. from a `?stage=` deep link. */
   initialFilter?: string;
@@ -133,11 +120,13 @@ export default function CandidateTable({
     return stageFilter;
   })();
 
-  // The "All" view is a mixed-stage lookup list, so a single Score column would
-  // be comparing scores across different stages — hide it there. It appears
-  // only when a specific stage (or pending review) is selected, where every
-  // visible row shares the same stage and the scores are comparable.
-  const showScore = effectiveFilter !== "all";
+  // Which columns are worth drawing under this filter — see
+  // `candidateTableColumns`. The short version: once every visible row shares a
+  // stage, the Stage column and a per-score stage tag both just repeat the
+  // filter, and a stage that produces no score of its own needs no Score
+  // column at all.
+  const columns = candidateTableColumns(effectiveFilter);
+  const showScore = columns.scoreHeader !== null;
   const effectiveSort: SortField = (() => {
     if (!showScore && sortBy === "score") return "applied_at";
     // "Longest in stage" is only offered where an SLA exists to make it mean
@@ -459,12 +448,19 @@ export default function CandidateTable({
                   <th scope="col" className="px-6 py-3">
                     Title / Company
                   </th>
-                  <th scope="col" className="px-6 py-3">
-                    Stage
-                  </th>
+                  {columns.stage && (
+                    <th scope="col" className="px-6 py-3">
+                      Stage
+                    </th>
+                  )}
+                  {/* The same boolean the body cell reads, so the header and
+                      the rows can never disagree on the column count. */}
                   {showScore && (
                     <th scope="col" className="px-6 py-3">
-                      Score
+                      {/* Named here rather than tagged onto every number: the
+                          whole column comes from one stage, so it is one fact
+                          about the column, not a fact about each row. */}
+                      {columns.scoreHeader}
                     </th>
                   )}
                   <th scope="col" className="px-6 py-3">
@@ -479,6 +475,10 @@ export default function CandidateTable({
               <tbody className="divide-y divide-[#E5E7EB]">
                 {filtered.map((candidate) => {
                   const stageScore = showScore ? pipelineDisplayScore(candidate) : null;
+                  // Under the "awaiting review" filter the flag is the filter:
+                  // every row carries it, so it says nothing.
+                  const showPendingFlag =
+                    columns.pendingFlag && candidate.awaiting_human_review;
                   return (
                     <tr
                       key={candidate.id}
@@ -509,6 +509,41 @@ export default function CandidateTable({
                             {candidate.email}
                           </p>
                         </Link>
+
+                        {/* The attention flags live on the person, not in the
+                            Stage column. They used to share that cell, which
+                            meant hiding a redundant Stage column would have
+                            taken an SLA breach down with it — and a breach is
+                            the one thing in a row that must never vanish
+                            because of a filter. Outside the Link so the badges
+                            are not part of its hit area. */}
+                        {(showPendingFlag || candidate.sla) && (
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {showPendingFlag && (
+                              <span className="inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]">
+                                Pending review
+                              </span>
+                            )}
+                            {candidate.sla && (
+                              <span
+                                title={`${candidate.sla.hours} hours in this stage — past the ${
+                                  candidate.sla.level === "escalation"
+                                    ? "escalation"
+                                    : "alert"
+                                } threshold`}
+                                className={`inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md ${
+                                  slaBadgeStyles[candidate.sla.level]
+                                }`}
+                              >
+                                {/* The word, not just the colour — colour alone
+                                    is not an indicator. */}
+                                {candidate.sla.level === "escalation"
+                                  ? "Overdue · escalated"
+                                  : "Overdue"}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-3 text-[#4B5563]">
                         {candidate.current_title && candidate.current_company
@@ -517,8 +552,8 @@ export default function CandidateTable({
                             candidate.current_company ||
                             "—"}
                       </td>
-                      <td className="px-6 py-3">
-                        <div className="flex items-center gap-1.5">
+                      {columns.stage && (
+                        <td className="px-6 py-3">
                           {candidate.is_archived ? (
                             <span className="inline-flex px-2.5 py-1 text-xs font-medium border rounded-md text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]">
                               Archived
@@ -532,43 +567,15 @@ export default function CandidateTable({
                               {stageLabels[candidate.stage]}
                             </span>
                           )}
-                          {candidate.awaiting_human_review && (
-                            <span className="inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md text-[#B45309] bg-[#FFFBEB] border-[#FDE68A]">
-                              Pending review
-                            </span>
-                          )}
-                          {candidate.sla && (
-                            <span
-                              title={`${candidate.sla.hours} hours in this stage — past the ${
-                                candidate.sla.level === "escalation"
-                                  ? "escalation"
-                                  : "alert"
-                              } threshold`}
-                              className={`inline-flex px-2 py-0.5 text-[10px] font-medium border rounded-md ${
-                                slaBadgeStyles[candidate.sla.level]
-                              }`}
-                            >
-                              {/* The word, not just the colour — colour alone
-                                  is not an indicator. */}
-                              {candidate.sla.level === "escalation"
-                                ? "Overdue · escalated"
-                                : "Overdue"}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                        </td>
+                      )}
                       {showScore && (
                         <td className="px-6 py-3">
                           {stageScore ? (
-                            <div className="flex items-center gap-2">
-                              <ScoreInline
-                                score={stageScore.overall}
-                                tier={stageScore.tier}
-                              />
-                              <span className="inline-flex rounded-full bg-[#F3F4F6] px-2 py-0.5 text-[10px] font-medium text-[#6B7280]">
-                                {scoreStageTag[stageScore.stage]}
-                              </span>
-                            </div>
+                            <ScoreInline
+                              score={stageScore.overall}
+                              tier={stageScore.tier}
+                            />
                           ) : (
                             /* Never a dash and never a bare "not scored": the
                                reason a row has no number is a fact about the

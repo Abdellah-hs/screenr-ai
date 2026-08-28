@@ -7,7 +7,14 @@ vi.mock("@/lib/data/candidates", () => ({
   createApplicationIfNotExists: vi.fn(),
   logAiAudit: vi.fn(),
 }));
-vi.mock("@/lib/services/marker", () => ({ extractMarkdownWithMarker: vi.fn() }));
+vi.mock("@/lib/services/marker", async () => {
+  // MarkerError and its classifier are real — the pipeline branches on the
+  // failure KIND, so a stubbed classifier would test nothing.
+  const actual = await vi.importActual<typeof import("@/lib/services/marker")>(
+    "@/lib/services/marker",
+  );
+  return { ...actual, extractMarkdownWithMarker: vi.fn() };
+});
 vi.mock("@/lib/services/openai", () => ({ extractResumeData: vi.fn() }));
 // The evaluation pipeline has its own tests; here it is a seam, so this file
 // stays about ingest — classify, upload, upsert, and advance on the decision.
@@ -22,7 +29,7 @@ import {
   createApplicationIfNotExists,
   logAiAudit,
 } from "@/lib/data/candidates";
-import { extractMarkdownWithMarker } from "@/lib/services/marker";
+import { extractMarkdownWithMarker, MarkerError } from "@/lib/services/marker";
 import { extractResumeData } from "@/lib/services/openai";
 import { evaluateApplicationResume } from "@/lib/resume-ingest/score-resume";
 import { evaluateResumeScoringOutcome } from "@/lib/rules/resume-scoring";
@@ -128,13 +135,85 @@ describe("ingestResumeDocument", () => {
   });
 
   it("rejects an unreadable document without uploading or creating anything", async () => {
-    mockExtractMarkdown.mockRejectedValue(new Error("marker down"));
+    mockExtractMarkdown.mockRejectedValue(new MarkerError("conversion_failed", "corrupt pdf"));
 
     const result = await ingestResumeDocument(args());
 
     expect(result).toEqual({ outcome: "rejected", reason: "unreadable" });
     expect(mockUpload).not.toHaveBeenCalled();
     expect(mockCreateApp).not.toHaveBeenCalled();
+  });
+
+  describe("when the failure is ours", () => {
+    // The whole point of this block: an outage of ours must cost the applicant
+    // a delay, not their application. Before this the pipeline threw, nothing
+    // was written, and nobody at the company ever knew they had applied.
+    const APPLICANT = {
+      first_name: "Alice",
+      last_name: "Smith",
+      email: "alice@example.com",
+      linkedin_url: "https://linkedin.com/in/alice",
+      portfolio_url: null,
+    };
+
+    it("files the applicant in processing_failed instead of losing them", async () => {
+      mockExtractMarkdown.mockRejectedValue(new MarkerError("timeout", "Marker timed out"));
+
+      const result = await ingestResumeDocument(args({ applicant: APPLICANT }));
+
+      expect(result).toEqual({ outcome: "processing_failed", applicationId: "app-1" });
+      expect(mockUpload).toHaveBeenCalled();
+      expect(mockCreateApp).toHaveBeenCalled();
+      expect(mockTransition).toHaveBeenCalledWith(
+        "app-1",
+        "processing_failed",
+        expect.stringContaining("Marker timed out"),
+      );
+    });
+
+    it("does the same when the classifier is the thing that broke", async () => {
+      mockExtractData.mockRejectedValue(new Error("OpenAI 503"));
+
+      const result = await ingestResumeDocument(args({ applicant: APPLICANT }));
+
+      expect(result).toEqual({ outcome: "processing_failed", applicationId: "app-1" });
+    });
+
+    it("files what the FORM said, never a guess at what the CV says", async () => {
+      mockExtractMarkdown.mockRejectedValue(new MarkerError("timeout", "Marker timed out"));
+
+      await ingestResumeDocument(args({ applicant: APPLICANT }));
+
+      const filed = mockUpsert.mock.calls[0][0];
+      expect(filed).toMatchObject({
+        first_name: "Alice",
+        last_name: "Smith",
+        email: "alice@example.com",
+        linkedin_url: "https://linkedin.com/in/alice",
+        // Nothing was read, so nothing is claimed.
+        headline: null,
+        phone: null,
+        skills: [],
+        experience: [],
+      });
+    });
+
+    it("never scores a CV nobody has read", async () => {
+      mockExtractMarkdown.mockRejectedValue(new MarkerError("timeout", "Marker timed out"));
+
+      await ingestResumeDocument(args({ applicant: APPLICANT }));
+
+      expect(mockEvaluateResume).not.toHaveBeenCalled();
+    });
+
+    it("rethrows when there is no self-declared identity to file", async () => {
+      // A row with no name and no email is an anonymous CV nobody could act on
+      // or contact — worse than the exception. No live channel hits this.
+      mockExtractMarkdown.mockRejectedValue(new MarkerError("timeout", "Marker timed out"));
+
+      await expect(ingestResumeDocument(args())).rejects.toMatchObject({ kind: "timeout" });
+      expect(mockCreateApp).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects a non-CV document (e.g. a motivation letter)", async () => {
@@ -237,6 +316,68 @@ describe("ingestResumeDocument", () => {
 
     expect(result).toEqual({ outcome: "ingested", applicationId: "app-1" });
     expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it("fills a link the extractor missed from the document it was reading", async () => {
+    mockExtractMarkdown.mockResolvedValue({
+      markdown: "Alice Smith\n\n[LinkedIn](https://www.linkedin.com/in/alice-smith)",
+      pageCount: 1,
+      parseQualityScore: 0.9,
+      costBreakdown: null,
+    });
+
+    await ingestResumeDocument(args());
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ linkedin_url: "https://www.linkedin.com/in/alice-smith" }),
+      DB,
+    );
+  });
+
+  it("keeps the link the candidate typed over the one in the document", async () => {
+    mockExtractMarkdown.mockResolvedValue({
+      markdown: "[LinkedIn](https://www.linkedin.com/in/from-the-cv)",
+      pageCount: 1,
+      parseQualityScore: 0.9,
+      costBreakdown: null,
+    });
+
+    await ingestResumeDocument(
+      args({
+        applicant: {
+          first_name: "Alice",
+          last_name: "Smith",
+          email: "alice@example.com",
+          linkedin_url: "https://www.linkedin.com/in/typed-on-the-form",
+          portfolio_url: null,
+        },
+      }),
+    );
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        linkedin_url: "https://www.linkedin.com/in/typed-on-the-form",
+      }),
+      DB,
+    );
+  });
+
+  it("leaves the audit row holding the raw extraction, links unfilled", async () => {
+    mockExtractMarkdown.mockResolvedValue({
+      markdown: "[LinkedIn](https://www.linkedin.com/in/alice-smith)",
+      pageCount: 1,
+      parseQualityScore: 0.9,
+      costBreakdown: null,
+    });
+
+    await ingestResumeDocument(args());
+
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        structuredData: expect.objectContaining({ linkedin_url: null }),
+      }),
+      DB,
+    );
   });
 
   it("hands the extracted resume text to the evaluator so quotes can be verified", async () => {

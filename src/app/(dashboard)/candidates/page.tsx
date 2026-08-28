@@ -33,11 +33,11 @@ export default async function TalentPoolPage({
 
   return (
     <div className="mx-auto max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-[#111827]">
+      <div className="mb-5">
+        <h1 className="text-2xl font-semibold text-ink">
           {showDirectory ? "All candidates" : "Talent pool"}
         </h1>
-        <p className="mt-1 max-w-2xl text-sm text-[#6B7280]">
+        <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[#6B7280]">
           {showDirectory
             ? "Everyone who has applied to your campaigns, in one place. Each person shows where they came from — remove a campaign and its candidates still live here, with the removed campaign flagged so you can restore it."
             : "People you marked as worth revisiting, with your own tags and notes. Nobody lands here automatically; the pool is only what you put in it."}
@@ -74,14 +74,21 @@ function ViewTab({
       href={href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "inline-flex cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]",
-        active
-          ? "bg-white text-[#111827] shadow-sm"
-          : "text-[#6B7280] hover:text-[#111827]",
+        "inline-flex cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors duration-150 focus-visible:outline-[3px] focus-visible:outline-primary/45 focus-visible:outline-offset-2",
+        active ? "bg-white text-ink shadow-sm" : "text-[#6B7280] hover:text-ink",
       )}
     >
       {label}
-      <span className="text-[#9CA3AF]">{count}</span>
+      {/* The count is a fact about the list, not part of its name — so it sits
+          in its own quiet chip rather than reading as "Talent pool 1". */}
+      <span
+        className={cn(
+          "rounded px-1.5 py-0.5 text-xs font-medium tabular-nums",
+          active ? "bg-[#F3F4F6] text-[#4B5563]" : "text-[#9CA3AF]",
+        )}
+      >
+        {count}
+      </span>
     </Link>
   );
 }

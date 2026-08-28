@@ -20,6 +20,12 @@ const mockFindCandidateByEmail = vi.fn();
 const mockFindCandidateByPhone = vi.fn();
 const mockFlagDuplicateCandidate = vi.fn();
 
+const mockVerifyCampaignOwnership = vi.fn();
+
+vi.mock("@/lib/data/campaigns", () => ({
+  verifyCampaignOwnership: (...args: unknown[]) => mockVerifyCampaignOwnership(...args),
+}));
+
 vi.mock("@/lib/data/duplicate-flags", () => ({
   findCandidateByEmail: (...args: unknown[]) => mockFindCandidateByEmail(...args),
   findCandidateByPhone: (...args: unknown[]) => mockFindCandidateByPhone(...args),
@@ -29,6 +35,7 @@ vi.mock("@/lib/data/duplicate-flags", () => ({
 import {
   upsertCandidate,
   saveResumeScore,
+  fetchCandidatesByCampaignId,
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
 } from "./candidates";
@@ -478,5 +485,61 @@ describe("interview context reads", () => {
 
       expect(ctx?.interview_persona).toBe("socratic");
     });
+  });
+});
+
+
+/**
+ * A dropped connection and an empty campaign are not the same fact, and the
+ * caller cannot tell them apart from an empty array. Swallowing the error here
+ * rendered a funnel of confident zeros over a campaign that had candidates.
+ */
+describe("fetchCandidatesByCampaignId", () => {
+  function stubQuery(result: { data: unknown; error: unknown }) {
+    mockVerifyCampaignOwnership.mockResolvedValue(true);
+    mockFrom.mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({ order: () => Promise.resolve(result) }),
+      }),
+    }));
+  }
+
+  it("throws when the query fails, instead of reporting an empty campaign", async () => {
+    stubQuery({
+      data: null,
+      error: { message: "TypeError: fetch failed", code: "" },
+    });
+
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
+      /could not load candidates/i,
+    );
+  });
+
+  it("carries the underlying message, so the log says what actually broke", async () => {
+    stubQuery({
+      data: null,
+      error: { message: "read ECONNRESET", code: "PGRST301" },
+    });
+
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
+      /ECONNRESET[\s\S]*PGRST301/,
+    );
+  });
+
+  it("still returns an empty list for a campaign that genuinely has nobody", async () => {
+    stubQuery({ data: [], error: null });
+
+    // The distinction the throw exists to preserve: this one is an answer.
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).resolves.toEqual([]);
+  });
+
+  it("refuses a campaign the user does not own before running any query", async () => {
+    mockVerifyCampaignOwnership.mockResolvedValue(false);
+    mockFrom.mockReset();
+
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
+      /access denied/i,
+    );
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 });

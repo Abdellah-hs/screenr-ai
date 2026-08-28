@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Room,
   RoomEvent,
@@ -14,13 +14,16 @@ import {
 import { startCandidateInterview, submitInterview } from "@/lib/actions/interview";
 import { createProctoringCollector } from "@/lib/proctoring/collector";
 import {
+  OVERLAY_NOTICE_LINGER_MS,
   OVERLAY_STALE_AFTER_MS,
   OVERLAY_TOPIC,
   displayLabels,
+  overlayNotice,
   parseOverlayPacket,
   placeBoxes,
   type OverlayBox,
   type OverlayDisplayLabel,
+  type OverlayNotice,
   type VideoGeometry,
 } from "@/lib/proctoring/overlay";
 import {
@@ -32,7 +35,14 @@ import {
 } from "@/lib/realtime/interview-diagnostics";
 import { INTERVIEW_DURATION_MINUTES } from "@/lib/constants";
 import {
+  Assurance,
+  Body,
   CandidateShell,
+  Deadline,
+  formatClock,
+  formatDeadline,
+  Heading,
+  Icon,
   ShellIcon,
   SHELL_PRIMARY,
   SHELL_SECONDARY,
@@ -93,20 +103,35 @@ const TRANSCRIPTION_TOPIC = "lk.transcription";
  */
 const SELF_VIEW_MIRRORED = true;
 
-function formatClock(total: number): string {
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
+/** Heroicons outline video-camera. The mark this whole page is built around,
+ *  on the opening disc and on the button that starts the call. */
+const VIDEO_CAMERA_PATH =
+  "m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 " +
+  "18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 " +
+  "7.5v9a2.25 2.25 0 0 0 2.25 2.25Z";
 
-function formatDeadline(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+/**
+ * What an amber box on the self-view is told to mean, while it is there.
+ *
+ * Every sentence answers the three things a candidate watching one appear
+ * actually wants to know, in the order they want them: nothing has stopped,
+ * nobody has decided anything, and a person — not a score — is what this
+ * eventually reaches. The fallibility is stated first and concretely, because
+ * "detection can be imperfect" reassures nobody standing in a room where a
+ * housemate just walked past.
+ */
+const DETECTION_NOTICE: Record<OverlayNotice, { title: string; body: string }> = {
+  second_face: {
+    title: "A second face is in frame",
+    body:
+      "Nothing stops and nothing is decided. Detection is automated and often wrong — a passing housemate, a reflection, a poster. It's written down as an observation for a person to weigh.",
+  },
+  phone: {
+    title: "A phone is in frame",
+    body:
+      "Nothing stops and nothing is decided. Detection is automated and often wrong — a remote control, a wallet, a dark rectangle on the desk. It's written down as an observation for a person to weigh.",
+  },
+};
 
 const BOX_STYLE: Record<OverlayDisplayLabel, { box: string; chip: string; text: string }> = {
   face: { box: "border-[#22C55E]", chip: "bg-[#22C55E]", text: "Face detected" },
@@ -234,25 +259,6 @@ function computeIsDesktop(): boolean {
  * What the client adds over the voice flow: a camera self-view, a desktop-only
  * gate, and a longer call cap.
  */
-/** One promise, ticked. Used only in the pre-call list. */
-function Assurance({ children }: { children: ReactNode }) {
-  return (
-    <li className="flex gap-[11px] text-sm leading-[1.5] text-[#374151]">
-      <svg
-        className="mt-0.5 h-4 w-4 shrink-0 text-[#059669]"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth={2}
-        aria-hidden="true"
-      >
-        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-      </svg>
-      <span>{children}</span>
-    </li>
-  );
-}
-
 export default function VideoInterview({
   token,
   campaignTitle,
@@ -273,6 +279,10 @@ export default function VideoInterview({
   // sent back, and the proctoring report is built server-side from the worker's
   // own readings regardless of what happens here.
   const [overlayBoxes, setOverlayBoxes] = useState<OverlayBox[]>([]);
+  // The words that go with an amber box. Held in its own state rather than
+  // derived from `overlayBoxes` so it can outlive them — see
+  // OVERLAY_NOTICE_LINGER_MS.
+  const [detectionNotice, setDetectionNotice] = useState<OverlayNotice | null>(null);
   // Starts optimistic (true) so SSR/first paint doesn't flash the block screen;
   // corrected on mount + resize.
   const [isDesktop, setIsDesktop] = useState(true);
@@ -300,6 +310,9 @@ export default function VideoInterview({
   // When the last overlay packet arrived, so stale boxes can be cleared rather
   // than left hanging over a scene they no longer describe.
   const overlayAtRef = useRef(0);
+  // When the last box worth explaining was drawn, so its sentence can be
+  // cleared a few seconds after the scene stops containing one.
+  const noticeAtRef = useRef(0);
 
   const expired = expiresAt ? Date.now() > Date.parse(expiresAt) : false;
 
@@ -327,11 +340,16 @@ export default function VideoInterview({
   useEffect(() => {
     if (status !== "live") {
       setOverlayBoxes([]);
+      setDetectionNotice(null);
       return;
     }
     const sweep = setInterval(() => {
-      if (Date.now() - overlayAtRef.current > OVERLAY_STALE_AFTER_MS) {
+      const now = Date.now();
+      if (now - overlayAtRef.current > OVERLAY_STALE_AFTER_MS) {
         setOverlayBoxes((current) => (current.length === 0 ? current : []));
+      }
+      if (now - noticeAtRef.current > OVERLAY_NOTICE_LINGER_MS) {
+        setDetectionNotice((current) => (current === null ? current : null));
       }
     }, 1_000);
     return () => clearInterval(sweep);
@@ -543,6 +561,15 @@ export default function VideoInterview({
           if (!packet) return;
           overlayAtRef.current = Date.now();
           setOverlayBoxes(packet.boxes);
+
+          // Only ever raises the notice; clearing it is the sweep's job, so a
+          // detector that loses a subject for one packet doesn't blink the
+          // sentence off and straight back on.
+          const seen = overlayNotice(displayLabels(packet.boxes));
+          if (seen) {
+            noticeAtRef.current = Date.now();
+            setDetectionNotice(seen);
+          }
         },
       );
 
@@ -796,7 +823,7 @@ export default function VideoInterview({
       {status === "idle" && (
         <>
           <ShellIcon tone="neutral">
-            <Icon d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+            <Icon d={VIDEO_CAMERA_PATH} />
           </ShellIcon>
 
           <p className="mx-auto mb-5 max-w-[56ch] text-[17px] leading-[1.65] text-[#374151] text-pretty">
@@ -849,10 +876,7 @@ export default function VideoInterview({
           </div>
 
           <button type="button" onClick={start} className={SHELL_PRIMARY}>
-            <Icon
-              className="h-[18px] w-[18px]"
-              d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.985V5.653Z"
-            />
+            <Icon className="h-[18px] w-[18px]" d={VIDEO_CAMERA_PATH} strokeWidth={2} />
             Start interview
           </button>
           <Deadline expiresAt={expiresAt} />
@@ -911,6 +935,30 @@ export default function VideoInterview({
                 interviewer will say hello first.
               </p>
             </>
+          ) : detectionNotice ? (
+            /* The box explained, in the moment it appears and in the place the
+               candidate is already looking. Neutral, not amber: the words say
+               nothing is wrong, and a warning-coloured panel would argue with
+               them. The swatch is the box in miniature, so it is obvious which
+               mark on the video this paragraph is about. `role="status"` because
+               somebody using a screen reader cannot see the box at all — this
+               is the only way they learn it was drawn. */
+            <div
+              role="status"
+              aria-live="polite"
+              className="mb-[18px] rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] px-[15px] py-[13px]"
+            >
+              <p className="mb-1.5 flex items-center gap-2 text-[13px] font-semibold text-ink">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-[3px] border-2 border-[#F59E0B]"
+                  aria-hidden="true"
+                />
+                {DETECTION_NOTICE[detectionNotice].title}
+              </p>
+              <p className="text-[13px] leading-[1.6] text-[#6B7280]">
+                {DETECTION_NOTICE[detectionNotice].body}
+              </p>
+            </div>
           ) : (
             <p className="mb-[18px] text-center text-xs leading-[1.55] text-[#9CA3AF]">
               The box is what the camera sees right now. It&apos;s shown to you
@@ -1014,10 +1062,25 @@ export default function VideoInterview({
               <p className="mx-auto mb-[22px] max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
                 We captured{" "}
                 <strong className="font-semibold text-ink">
-                  {responseCount} {responseCount === 1 ? "response" : "responses"}
+                  {responseCount} spoken{" "}
+                  {responseCount === 1 ? "response" : "responses"}
                 </strong>
-                . Submit when you&apos;re ready, or restart if you&apos;d like to
-                redo the interview — nothing has been sent yet.
+                {/* Someone whose clock ran out is asking one question — is what
+                    I already said still worth anything — so answer that one
+                    first, rather than opening with the offer to start over. */}
+                {timedOut ? (
+                  <>
+                    {" "}
+                    before the timer ended. You can still submit{" "}
+                    {responseCount === 1 ? "it" : "them"}, or restart to redo the
+                    interview — nothing has been sent yet.
+                  </>
+                ) : (
+                  <>
+                    . Submit when you&apos;re ready, or restart if you&apos;d like
+                    to redo the interview — nothing has been sent yet.
+                  </>
+                )}
               </p>
             </>
           ) : (
@@ -1069,57 +1132,5 @@ export default function VideoInterview({
       {/* Interviewer audio sink. */}
       <audio ref={audioRef} autoPlay />
     </CandidateShell>
-  );
-}
-
-/** Centred 19px heading — every terminal state opens with one. */
-function Heading({ children }: { children: ReactNode }) {
-  return (
-    <p className="mb-2 text-center text-[19px] font-semibold text-ink">{children}</p>
-  );
-}
-
-function Body({ children }: { children: ReactNode }) {
-  return (
-    <p className="mx-auto mb-6 max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
-      {children}
-    </p>
-  );
-}
-
-function Deadline({ expiresAt }: { expiresAt?: string }) {
-  if (!expiresAt) return null;
-  return (
-    <p className="mt-3.5 text-center text-[13px] text-[#6B7280]">
-      Please complete by{" "}
-      <strong className="font-semibold text-[#374151]">
-        {formatDeadline(expiresAt)}
-      </strong>
-      .
-    </p>
-  );
-}
-
-/** Heroicons outline, inline. One wrapper so stroke width and caps never drift. */
-function Icon({
-  d,
-  className = "h-8 w-8",
-  strokeWidth = 1.6,
-}: {
-  d: string;
-  className?: string;
-  strokeWidth?: number;
-}) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d={d} />
-    </svg>
   );
 }

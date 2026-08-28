@@ -110,6 +110,11 @@ export async function loadApplyContext(slug: string): Promise<ApplyContext> {
  * confirmation. A rejection (not a CV, no email, unreadable) therefore can't
  * be shown inline anymore: the applicant gets an actionable "apply again"
  * email instead (product decision 2026-07-10).
+ *
+ * A failure of OURS is not a rejection and never asks them to re-apply: the
+ * ingest files them in `processing_failed` and this sends the ordinary
+ * receipt. The only path that still says "try again" is one where nothing
+ * could be written at all.
  */
 export async function submitApplication(formData: FormData): Promise<{ ok: true }> {
   const slug = String(formData.get("slug") ?? "").trim();
@@ -179,6 +184,25 @@ export async function submitApplication(formData: FormData): Promise<{ ok: true 
         applicant,
         source: "apply_form",
       });
+
+      // Our pipeline broke, not their CV. They are filed and a recruiter can
+      // see them, so the honest thing to send is the ordinary receipt — which
+      // promises only that the team will review the application, and that is
+      // exactly what now happens. Telling them to apply again would be asking
+      // a candidate to fix our outage, and would file them twice.
+      if (result.outcome === "processing_failed") {
+        await sendApplicantEmail({
+          db,
+          ownerUserId: campaign.user_id,
+          applicantEmail: applicant.email,
+          email: buildApplicationReceivedEmail({
+            candidateName: `${applicant.first_name} ${applicant.last_name}`,
+            campaignTitle: campaign.title,
+            companyName: COMPANY_NAME,
+          }),
+        });
+        return;
+      }
 
       if (result.outcome === "rejected") {
         await sendApplicantEmail({

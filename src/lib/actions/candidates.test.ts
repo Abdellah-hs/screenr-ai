@@ -15,6 +15,11 @@ const {
   mockAssertCampaignActiveById,
   mockFetchScreeningQuestions,
   mockFetchTalentPoolRows,
+  mockFetchCampaignPipelineRows,
+  mockFetchSlaTimers,
+  mockFetchActiveRubricVersions,
+  mockFetchStateBefore,
+  mockReprocess,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockCheckRateLimit: vi.fn(),
@@ -26,6 +31,11 @@ const {
   mockAssertCampaignActiveById: vi.fn(),
   mockFetchScreeningQuestions: vi.fn(),
   mockFetchTalentPoolRows: vi.fn(),
+  mockFetchCampaignPipelineRows: vi.fn(),
+  mockFetchSlaTimers: vi.fn(),
+  mockFetchActiveRubricVersions: vi.fn(),
+  mockFetchStateBefore: vi.fn(),
+  mockReprocess: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -41,10 +51,13 @@ vi.mock("@/lib/data/candidates", () => ({
   // The action module also imports these, even if decideHitlReview doesn't use
   // them — they must be mocked for the module to load.
   fetchCandidatesByCampaignId: vi.fn(),
+  fetchCampaignPipelineRows: mockFetchCampaignPipelineRows,
   updateApplicationStage: vi.fn(),
   advanceApplicationStatus: vi.fn(),
   getResumeSignedUrl: vi.fn(),
   fetchApplicationCampaignId: vi.fn(),
+  fetchPreArchiveState: vi.fn(),
+  fetchStateBefore: mockFetchStateBefore,
 }));
 
 vi.mock("@/lib/data/transitions", () => ({
@@ -66,7 +79,8 @@ vi.mock("@/lib/data/screening-questions", () => ({
 vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
   fetchCampaignStatus: mockFetchCampaignStatus,
-  fetchActiveRubricVersion: vi.fn(),
+  fetchActiveRubricVersions: mockFetchActiveRubricVersions,
+  fetchSlaTimersByCampaignId: mockFetchSlaTimers,
 }));
 
 vi.mock("@/lib/data/talent-pool", () => ({
@@ -81,6 +95,15 @@ vi.mock("./campaign-guards", () => ({
 
 vi.mock("@/lib/resume-ingest/score-resume", () => ({
   evaluateApplicationResume: vi.fn(),
+  loadCampaignScoringContext: vi.fn(),
+}));
+
+// Mocked rather than exercised: the pipeline has its own tests, and importing
+// it for real constructs an OpenAI client at module load.
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn(() => ({})) }));
+
+vi.mock("@/lib/resume-ingest/reprocess", () => ({
+  reprocessFailedApplication: mockReprocess,
 }));
 
 vi.mock("next/cache", () => ({
@@ -89,14 +112,19 @@ vi.mock("next/cache", () => ({
 
 import {
   decideHitlReview,
+  getCampaignPipelineSummary,
   getCandidateById,
   getCandidatesByCampaignId,
   getTalentPool,
   rescoreCandidateResume,
+  retryResumeProcessing,
   scoreUnscoredCampaignCandidates,
   updateCandidateStage,
 } from "./candidates";
-import { evaluateApplicationResume } from "@/lib/resume-ingest/score-resume";
+import {
+  evaluateApplicationResume,
+  loadCampaignScoringContext,
+} from "@/lib/resume-ingest/score-resume";
 import {
   updateApplicationStage,
   fetchApplicationCampaignId,
@@ -104,6 +132,19 @@ import {
   advanceApplicationStatus,
 } from "@/lib/data/candidates";
 import type { TalentPoolRow } from "@/lib/data/talent-pool";
+
+function pipelineRow(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "new",
+    created_at: "2026-08-22T00:00:00.000Z",
+    updated_at: "2026-08-22T00:00:00.000Z",
+    scored_at: null,
+    resume_score: null,
+    rubric_version: null,
+    screening_question_responses: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   mockRequireUserId.mockReset();
@@ -116,9 +157,18 @@ beforeEach(() => {
   mockAssertCampaignActiveById.mockReset();
   mockFetchScreeningQuestions.mockReset();
   mockFetchTalentPoolRows.mockReset();
+  mockFetchStateBefore.mockReset();
+  mockReprocess.mockReset();
+  mockFetchCampaignPipelineRows.mockReset();
+  mockFetchSlaTimers.mockReset();
+  mockFetchActiveRubricVersions.mockReset();
 
   // Default happy-path setup — individual tests override what they need.
   mockRequireUserId.mockResolvedValue("user-1");
+  // No timers and no active rubric by default: the SLA badge and the stale-score
+  // note are then transparent, and the tests that care override them.
+  mockFetchSlaTimers.mockResolvedValue([]);
+  mockFetchActiveRubricVersions.mockResolvedValue({});
   // Campaigns are Active by default so the freeze gate is transparent; the
   // freeze tests override these.
   mockFetchCampaignStatus.mockResolvedValue("active");
@@ -149,8 +199,6 @@ describe("getTalentPool", () => {
       candidate_id: "cand-1",
       status: "screening_review_pending",
       resume_score: 82,
-      screening_q_score: null,
-      interview_score: null,
       screening_tier: "strong",
       score_rationale: "Strong React background",
       score_factors: [],
@@ -175,6 +223,7 @@ describe("getTalentPool", () => {
         deleted_at: null,
       },
       screening_question_responses: null,
+      interview_sessions: null,
       ...over,
     };
   }
@@ -239,6 +288,53 @@ describe("getTalentPool", () => {
       stage: "resume",
       tier: "strong",
     });
+  });
+
+  // `buildScoresArray` emits only resume and screening, so an interview-stage
+  // application showed a blank score here while the candidate detail page —
+  // reading the same session — showed one.
+  it("shows the interview score for somebody sitting at the interview stage", async () => {
+    mockFetchTalentPoolRows.mockResolvedValue([
+      poolRow({
+        status: "interview_scored",
+        interview_sessions: {
+          scores: {
+            overall_score: 74,
+            overall_rationale: "Solid system design, thin on testing",
+            rubric_version: 2,
+            scored_at: "2026-07-20T00:00:00.000Z",
+          },
+        },
+      }),
+    ]);
+
+    const pool = await getTalentPool();
+
+    expect(pool[0].applications[0].score).toMatchObject({
+      overall: 74,
+      stage: "interview",
+    });
+  });
+
+  // The interview scorer bands nothing, so there is no tier to show.
+  it("puts no tier on an interview score", async () => {
+    mockFetchTalentPoolRows.mockResolvedValue([
+      poolRow({
+        status: "interview_scored",
+        interview_sessions: {
+          scores: {
+            overall_score: 74,
+            overall_rationale: "Solid",
+            rubric_version: null,
+            scored_at: "2026-07-20T00:00:00.000Z",
+          },
+        },
+      }),
+    ]);
+
+    const pool = await getTalentPool();
+
+    expect(pool[0].applications[0].score?.tier).toBeNull();
   });
 });
 
@@ -662,15 +758,41 @@ describe("scoreUnscoredCampaignCandidates", () => {
   beforeEach(() => {
     mockFetchCampaignStatus.mockResolvedValue("active");
     vi.mocked(evaluateApplicationResume).mockResolvedValue(scoredOutcome());
+    vi.mocked(loadCampaignScoringContext).mockResolvedValue({
+      config: {} as never,
+      rubricVersion: 1,
+    });
   });
 
   it("does nothing when the campaign has no criteria", async () => {
-    vi.mocked(evaluateApplicationResume).mockResolvedValue(null as never);
+    vi.mocked(loadCampaignScoringContext).mockResolvedValue(null);
     vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
 
     await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
 
     expect(vi.mocked(advanceApplicationStatus)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The campaign's criteria, rubric and pass mark are the same for every row,
+   * and loading them is four queries. Fetched per candidate, a campaign whose
+   * rubric arrived after its applicants did paid four round-trips per CV.
+   */
+  it("loads the campaign's scoring config once, not once per candidate", async () => {
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([
+      appRow({ id: "app-1" }),
+      appRow({ id: "app-2" }),
+      appRow({ id: "app-3" }),
+    ] as never);
+
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+
+    expect(vi.mocked(loadCampaignScoringContext)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(3);
+    // And every candidate is handed the same one, so none of them re-fetches.
+    for (const [args] of vi.mocked(evaluateApplicationResume).mock.calls) {
+      expect(args.campaignContext).toEqual({ config: {}, rubricVersion: 1 });
+    }
   });
 
   it("does nothing when the campaign isn't Active (freeze rule)", async () => {
@@ -846,10 +968,221 @@ describe("getCandidatesByCampaignId — id guard", () => {
   });
 });
 
+describe("getCampaignPipelineSummary", () => {
+  it("rejects a malformed campaign id before any fetch", async () => {
+    await expect(getCampaignPipelineSummary("undefined")).rejects.toThrow();
+
+    expect(mockFetchCampaignPipelineRows).not.toHaveBeenCalled();
+  });
+
+  it("counts applications into pipeline buckets", async () => {
+    mockFetchCampaignPipelineRows.mockResolvedValue([
+      pipelineRow({ status: "new" }),
+      pipelineRow({ status: "resume_scored" }),
+      pipelineRow({ status: "screening_sent" }),
+    ]);
+
+    const summary = await getCampaignPipelineSummary(VALID_CAMPAIGN_ID);
+
+    expect(summary.total).toBe(3);
+    expect(summary.stageCounts).toEqual({ applied: 2, screening: 1 });
+  });
+
+  /**
+   * The whole point of the function: the board's numbers must not be paid for
+   * with every applicant's parsed CV and resume evaluation.
+   */
+  it("never loads the candidates list to produce its counts", async () => {
+    mockFetchCampaignPipelineRows.mockResolvedValue([pipelineRow()]);
+
+    await getCampaignPipelineSummary(VALID_CAMPAIGN_ID);
+
+    expect(vi.mocked(fetchCandidatesByCampaignId)).not.toHaveBeenCalled();
+  });
+
+  it("flags a score produced against a superseded rubric", async () => {
+    mockFetchActiveRubricVersions.mockResolvedValue({ resume: 2, screening_q: 2 });
+    mockFetchCampaignPipelineRows.mockResolvedValue([
+      pipelineRow({ scored_at: "2026-08-20T00:00:00.000Z", rubric_version: 1 }),
+      pipelineRow({ scored_at: "2026-08-20T00:00:00.000Z", rubric_version: 2 }),
+    ]);
+
+    const summary = await getCampaignPipelineSummary(VALID_CAMPAIGN_ID);
+
+    expect(summary.staleScoreCount).toBe(1);
+  });
+
+  it("reads the screening embed whether it arrives as an object or an array", async () => {
+    mockFetchActiveRubricVersions.mockResolvedValue({ resume: 5, screening_q: 5 });
+    mockFetchCampaignPipelineRows.mockResolvedValue([
+      pipelineRow({
+        screening_question_responses: {
+          status: "scored",
+          overall_score: 70,
+          rubric_version: 1,
+        },
+      }),
+      pipelineRow({
+        screening_question_responses: [
+          { status: "scored", overall_score: 70, rubric_version: 1 },
+        ],
+      }),
+    ]);
+
+    const summary = await getCampaignPipelineSummary(VALID_CAMPAIGN_ID);
+
+    expect(summary.staleScoreCount).toBe(2);
+  });
+});
+
+describe("getCandidatesByCampaignId — payload", () => {
+  /**
+   * The table draws a number, not the reasoning behind it. `evaluation` (every
+   * criterion with its verified quotes) and `factors` used to travel with every
+   * row into a client component that reads neither, so their absence is the
+   * behaviour worth pinning.
+   */
+  it("carries the stage score without the evidence behind it", async () => {
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([
+      {
+        id: VALID_APP_ID,
+        campaign_id: VALID_CAMPAIGN_ID,
+        status: "resume_scored",
+        created_at: "2026-08-20T00:00:00.000Z",
+        updated_at: "2026-08-20T00:00:00.000Z",
+        parsed_data: { experience: [{ title: "Engineer", company: "Matious" }] },
+        resume_score: 82,
+        screening_tier: "eligible",
+        scored_at: "2026-08-20T00:00:00.000Z",
+        candidates: {
+          id: "cand-1",
+          first_name: "Ada",
+          last_name: "Lovelace",
+          email: "ada@example.com",
+        },
+        screening_question_responses: null,
+      },
+    ] as unknown as Awaited<ReturnType<typeof fetchCandidatesByCampaignId>>);
+
+    const [candidate] = await getCandidatesByCampaignId(VALID_CAMPAIGN_ID);
+
+    expect(candidate.scores).toEqual([
+      { stage: "resume", overall: 82, tier: "eligible" },
+    ]);
+    expect(candidate.current_title).toBe("Engineer");
+  });
+});
+
 describe("getCandidateById — id guard", () => {
   it("resolves null for a malformed application id without querying", async () => {
     await expect(getCandidateById("undefined")).resolves.toBeNull();
 
     expect(mockFetchCandidateById).not.toHaveBeenCalled();
+  });
+});
+
+describe("retryResumeProcessing", () => {
+  const FAILED_APP = {
+    id: VALID_APP_ID,
+    campaign_id: VALID_CAMPAIGN_ID,
+    status: "processing_failed",
+    resume_url: "camp/uuid-alice.pdf",
+    candidates: {
+      id: "cand-1",
+      first_name: "Alice",
+      last_name: "Smith",
+      email: "alice@example.com",
+      phone: null,
+      location: null,
+      linkedin_url: null,
+      github_url: null,
+      portfolio_url: null,
+    },
+  };
+
+  beforeEach(() => {
+    mockRequireUserId.mockResolvedValue("user-1");
+    mockFetchCandidateById.mockResolvedValue(FAILED_APP);
+    mockFetchStateBefore.mockResolvedValue("new");
+    mockReprocess.mockResolvedValue({ outcome: "ingested" });
+  });
+
+  it("rejects unauthenticated callers before doing any work", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow("Unauthorized");
+
+    expect(mockReprocess).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid applicationId via Zod (uuid format)", async () => {
+    await expect(retryResumeProcessing("not-a-uuid")).rejects.toThrow();
+
+    expect(mockReprocess).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the CV of an ingest that failed", async () => {
+    await expect(retryResumeProcessing(VALID_APP_ID)).resolves.toEqual({ reprocessed: true });
+
+    expect(mockReprocess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: VALID_APP_ID,
+        campaignId: VALID_CAMPAIGN_ID,
+        candidateId: "cand-1",
+        resumeUrl: "camp/uuid-alice.pdf",
+        applicant: expect.objectContaining({ email: "alice@example.com" }),
+      }),
+    );
+  });
+
+  it("refuses an application that did not fail processing", async () => {
+    mockFetchCandidateById.mockResolvedValueOnce({ ...FAILED_APP, status: "screening_scored" });
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow(/no failed CV to re-read/);
+
+    expect(mockReprocess).not.toHaveBeenCalled();
+  });
+
+  it("refuses a SCORING failure — re-reading the CV would discard a screening they sat", async () => {
+    // Same state, different accident. `processing_failed` is reachable from
+    // `screening_completed` too, and recovering that one to `new` would throw
+    // away a call the candidate actually took.
+    mockFetchStateBefore.mockResolvedValueOnce("screening_completed");
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow(/no failed CV to re-read/);
+
+    expect(mockReprocess).not.toHaveBeenCalled();
+  });
+
+  it("respects the campaign freeze rule", async () => {
+    mockAssertCampaignActiveById.mockRejectedValueOnce(new Error("Campaign is paused"));
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow("Campaign is paused");
+
+    expect(mockReprocess).not.toHaveBeenCalled();
+  });
+
+  it("throws when the application has no stored CV to read", async () => {
+    mockFetchCandidateById.mockResolvedValueOnce({ ...FAILED_APP, resume_url: null });
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow(/no stored CV/);
+
+    expect(mockReprocess).not.toHaveBeenCalled();
+  });
+
+  it("reports a verdict about the document as a readable message", async () => {
+    mockReprocess.mockResolvedValueOnce({ outcome: "rejected", reason: "not_a_cv" });
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow(/doesn't read as a CV/);
+  });
+
+  it("is rate-limited — every attempt costs a conversion and a model call", async () => {
+    mockCheckRateLimit.mockImplementationOnce(() => {
+      throw new Error("Too many requests");
+    });
+
+    await expect(retryResumeProcessing(VALID_APP_ID)).rejects.toThrow("Too many requests");
+
+    expect(mockReprocess).not.toHaveBeenCalled();
   });
 });

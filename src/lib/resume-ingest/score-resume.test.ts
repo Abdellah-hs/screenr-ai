@@ -12,7 +12,7 @@ vi.mock("@/lib/data/resume-evidence-cache", () => ({
 vi.mock("@/lib/services/openai", () => ({
   extractResumeEvidence: vi.fn(),
   RESUME_EVIDENCE_MODEL: "gpt-4o-mini",
-  RESUME_EVIDENCE_PROMPT_VERSION: "v3_resume_evidence",
+  RESUME_EVIDENCE_PROMPT_VERSION: "v4_resume_evidence",
 }));
 
 import { evaluateApplicationResume } from "./score-resume";
@@ -152,10 +152,10 @@ describe("evaluateApplicationResume", () => {
   it("scores deterministically from the extracted evidence", async () => {
     const outcome = await evaluateApplicationResume(args());
 
-    // TypeScript strong (80) clears the must-have gate; Testing weak (25) is
-    // the only nice-to-have, so it alone sets the ranking.
+    // TypeScript strong (80) clears the must-have gate, and its evidence counts
+    // toward the ranking alongside Testing weak (25): (80 + 25) / 2 = 52.5 → 53.
     expect(outcome?.result.eligible).toBe(true);
-    expect(outcome?.result.ranking_score).toBe(25);
+    expect(outcome?.result.ranking_score).toBe(53);
     expect(outcome?.result.tier).toBe("eligible");
   });
 
@@ -273,7 +273,7 @@ describe("evaluateApplicationResume", () => {
     const cached = mockSaveCache.mock.calls[0][0];
     expect(cached.cacheKey).toMatch(/^[0-9a-f]{64}$/);
     expect(cached.campaignId).toBe("camp-1");
-    expect(cached.rulesVersion).toBe("v1_must_have_gate");
+    expect(cached.rulesVersion).toBe("v2_ranking_over_all_criteria");
   });
 
   it("reuses cached evidence instead of calling the model again", async () => {

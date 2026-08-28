@@ -3,6 +3,7 @@ import {
   type CampaignStatus,
   type CandidateStage,
   type SlaTimer,
+  AWAITING_DECISION_STATES,
 } from "@/lib/constants";
 import { applicationSlaStatus } from "@/lib/rules/sla";
 
@@ -33,7 +34,7 @@ function emptyBuckets(): Record<CandidateStage, number> {
 
 /** States where an application is waiting on a person, not on a candidate. */
 const PENDING_REVIEW_STATE = "screening_review_pending";
-const AWAITING_DECISION_STATES = new Set(["interview_scored", "manager_review"]);
+const AWAITING_DECISION = new Set<string>(AWAITING_DECISION_STATES);
 
 /**
  * What a campaign is asking of its owner right now — **one** thing, the most
@@ -113,7 +114,7 @@ export function summariseCampaign(
     buckets[stage] += 1;
 
     if (app.status === PENDING_REVIEW_STATE) pendingReview += 1;
-    if (AWAITING_DECISION_STATES.has(app.status)) awaitingDecision += 1;
+    if (AWAITING_DECISION.has(app.status)) awaitingDecision += 1;
 
     if (slaApplies && applicationSlaStatus(stage, app.updatedAt, slaTimers, now)) {
       overdue += 1;

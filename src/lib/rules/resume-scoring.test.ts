@@ -156,13 +156,14 @@ describe("evaluateResumeScoringOutcome", () => {
     it("approves when the ranking score clears the threshold", () => {
       const result = makeResult([
         { label: "React", priority: "must_have", level: "strong" },
-        { label: "Docker", priority: "nice_to_have", level: "very_strong" }, // ranking 100
+        { label: "Docker", priority: "nice_to_have", level: "very_strong" }, // 100
       ]);
 
       const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
 
+      // (80 + 100) / 2 = 90 — the must-have counts toward the ranking too.
       expect(decision.toState).toBe("screening_approved");
-      expect(decision.rationale).toContain("ranking score 100");
+      expect(decision.rationale).toContain("ranking score 90");
     });
 
     it("rejects an eligible candidate who ranks below the threshold", () => {
@@ -207,7 +208,8 @@ describe("evaluateResumeScoringOutcome", () => {
 
       const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 75 }));
 
-      expect(decision.rationale).toContain("ranking score 55");
+      // React strong (80) + Docker partial (55), averaged over both = 68.
+      expect(decision.rationale).toContain("ranking score 68");
       expect(decision.rationale).toContain("threshold 75");
     });
   });

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { checkScreeningCoverage } from "@/lib/actions/screening-coverage";
+import type { ScreeningCoverageResult } from "@/lib/screening/coverage";
 import { Modal, ModalHeader, ModalFooter } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +36,19 @@ interface ScreeningQuestionsEditorProps {
    * than in the DOM, so it has to be handed in — there is no field to read.
    */
   description?: string;
+  /**
+   * The screening rubric this campaign's answers are scored against.
+   *
+   * Used for two things, both advisory: drafting questions that probe the
+   * rubric, and warning when a dimension has no question. A competency no
+   * question goes looking for scores zero for every candidate, so both are
+   * worth knowing before anyone is interviewed.
+   *
+   * Ids are carried alongside names because the coverage check reports gaps by
+   * id — it is handed a list and must point back into it, rather than returning
+   * a name that may or may not match one.
+   */
+  rubricDimensions?: { id: string; name: string }[];
 }
 
 function clientId() {
@@ -47,6 +62,7 @@ export default function ScreeningQuestionsEditor({
   value,
   onChange,
   description,
+  rubricDimensions,
 }: ScreeningQuestionsEditorProps) {
   const staged = !campaignId;
   const [open, setOpen] = useState(false);
@@ -56,6 +72,13 @@ export default function ScreeningQuestionsEditor({
   const questions = value
     ? value.map((q, i) => ({ ...q, _key: q.id ?? `sq-controlled-${i}` }))
     : internal;
+  /**
+   * The set that is actually in the database, so Cancel can put the card back.
+   *
+   * Only meaningful in live mode. Without it the card can sit there displaying
+   * questions no candidate will ever be asked — see `closeModal`.
+   */
+  const [saved, setSaved] = useState<EditableQuestion[]>(initialQuestions);
 
   function setQuestions(
     update: (prev: (EditableQuestion & { _key: string })[]) => (EditableQuestion & { _key: string })[],
@@ -68,7 +91,51 @@ export default function ScreeningQuestionsEditor({
   const [saving, startSave] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Coverage, as advice rather than a gate.
+   *
+   * After the campaign exists this is a soft warning and nothing more: a
+   * recruiter editing a live campaign has reasons the app cannot see, and
+   * refusing their save over a model's reading would be the app second-guessing
+   * a person. Prevention belongs at creation, where the mistake is made.
+   */
+  const [coverage, setCoverage] = useState<ScreeningCoverageResult | null>(null);
+  const [checkingCoverage, setCheckingCoverage] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
   const hasQuestions = questions.length > 0;
+
+  const uncovered = dismissed ? [] : (coverage?.uncoveredDimensions ?? []);
+
+  /**
+   * Check coverage — deliberately NOT on mount.
+   *
+   * Opening a campaign page is not a change to anything, and firing a model
+   * call for it would spend the recruiter's shared AI budget on a page view:
+   * browsing ten campaigns would leave "Draft from the role" refusing to work
+   * for five minutes, for a reason they never triggered and cannot see. So this
+   * runs after a save, and on request — the two moments the answer can actually
+   * have changed or actually been asked for.
+   *
+   * A failure says nothing rather than "all covered". The score breakdown is
+   * the backstop that shows a dimension which ended with no evidence.
+   */
+  async function refreshCoverage(next: EditableQuestion[]) {
+    if (staged || !rubricDimensions?.length) return;
+    setCheckingCoverage(true);
+    try {
+      const result = await checkScreeningCoverage({
+        dimensions: rubricDimensions.map((d) => ({ id: d.id, name: d.name })),
+        questions: next.map((q) => ({ prompt: q.prompt })),
+      });
+      setCoverage(result);
+      setDismissed(false);
+    } catch {
+      setCoverage(null);
+    } finally {
+      setCheckingCoverage(false);
+    }
+  }
 
   function openModal() {
     setError(null);
@@ -77,6 +144,14 @@ export default function ScreeningQuestionsEditor({
 
   function closeModal() {
     if (generating || saving) return;
+    // Live mode: put the card back to what is stored. The card renders the same
+    // `questions` the modal edits, so abandoning an edit used to leave the page
+    // showing a question set that was never written — indistinguishable, from
+    // the outside, from one that was. Staged mode keeps them: there the wizard
+    // owns the draft and saves it with the campaign.
+    if (!staged) {
+      setInternal(saved.map((q) => ({ ...q, _key: q.id ?? clientId() })));
+    }
     setOpen(false);
   }
 
@@ -108,7 +183,10 @@ export default function ScreeningQuestionsEditor({
     startGenerate(async () => {
       try {
         const generated = staged
-          ? await generateScreeningQuestionsFromDescription((description ?? "").trim())
+          ? await generateScreeningQuestionsFromDescription(
+              (description ?? "").trim(),
+              (rubricDimensions ?? []).map((d) => d.name),
+            )
           : await generateScreeningQuestions(campaignId);
         setQuestions(() =>
           generated.map((q) => ({
@@ -116,6 +194,14 @@ export default function ScreeningQuestionsEditor({
             prompt: q.prompt,
           }))
         );
+        // "Draft from the role" is reachable from the CARD, outside the modal,
+        // and the only Save lives inside it. Drafting therefore used to fill
+        // the card with five questions that were never written to the
+        // database: they looked set up, the "no screening questions" banner
+        // above kept insisting otherwise, and navigating away lost them.
+        // Opening the review step is also the right shape for it — the AI
+        // drafts, the recruiter reads them and commits.
+        if (!staged) setOpen(true);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to generate questions"
@@ -148,7 +234,10 @@ export default function ScreeningQuestionsEditor({
     startSave(async () => {
       try {
         await saveScreeningQuestions(campaignId, cleaned);
+        setSaved(cleaned);
         setOpen(false);
+        // After the save, not before: the warning is about what is now stored.
+        void refreshCoverage(cleaned);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to save questions");
       }
@@ -159,16 +248,30 @@ export default function ScreeningQuestionsEditor({
 
   return (
     <>
-      <section className="rounded-xl border border-[#E5E7EB] bg-white p-[22px] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3.5">
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
-            Screening questions
-            <span className="font-medium normal-case tracking-normal text-[#9CA3AF]">
-              {" "}
-              · asked by the voice AI, in order
-            </span>
-          </h2>
-          <div className="flex gap-2">
+      {/* No inner scroller and no `flex-1`. This card used to split a fixed
+          column with the rubric, which sliced the question list mid-sentence
+          against a straight edge — on the one panel whose entire job is
+          reading what the voice AI will ask. The page scrolls instead. */}
+      <section className="rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+        <div className="flex flex-wrap items-center justify-between gap-3.5 border-b border-[#F3F4F6] px-[22px] py-4">
+          <div className="min-w-0">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+              Screening questions
+              {hasQuestions && (
+                <span className="font-semibold tabular-nums text-[#9CA3AF]">
+                  {" · "}
+                  {questions.length}
+                </span>
+              )}
+            </h2>
+            <p className="mt-1 text-[13px] leading-[1.55] text-[#6B7280]">
+              Asked by the voice AI, in this order.
+            </p>
+          </div>
+          {/* Two buttons, not three. Drafting and editing are what a recruiter
+              came here to do; the coverage check is a diagnostic and sits under
+              the list it reports on. */}
+          <div className="flex shrink-0 gap-2">
             <button
               type="button"
               onClick={handleRegenerate}
@@ -178,43 +281,113 @@ export default function ScreeningQuestionsEditor({
                   ? "Replace all questions with fresh AI suggestions"
                   : "Add a job description to enable AI generation"
               }
-              className="inline-flex min-h-9 items-center gap-[7px] rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] transition-colors duration-150 cursor-pointer hover:bg-[#F9FAFB] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-9 items-center gap-[7px] rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] transition-colors duration-150 cursor-pointer hover:bg-[#F9FAFB] hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
             >
               {generating ? "Drafting…" : "Draft from the role"}
             </button>
             <button
               type="button"
               onClick={openModal}
-              className="inline-flex min-h-9 items-center rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB]"
+              className="inline-flex min-h-9 items-center rounded-lg border border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink"
             >
               {hasQuestions ? "Edit questions" : "Add question"}
             </button>
           </div>
         </div>
 
+        <div className="px-[22px] py-[22px]">
         {hasQuestions ? (
-          <div className="flex flex-col gap-2">
+          // One bordered container with divided rows, not five bordered boxes:
+          // the questions are an ordered set, and five separate cards read as
+          // five unrelated things.
+          <ol className="overflow-hidden rounded-lg border border-[#E5E7EB]">
             {questions.map((q, i) => (
-              <div
+              <li
                 key={q._key}
-                className="flex items-center gap-3 rounded-lg border border-[#E5E7EB] bg-white px-3.5 py-3"
+                className="flex gap-3.5 border-b border-[#F3F4F6] px-3.5 py-3 last:border-b-0"
               >
                 {/* The order is the order they are asked in, so the number is
                     the question's identity, not decoration. */}
-                <span className="w-5 shrink-0 text-xs font-semibold text-[#9CA3AF] tabular-nums">
+                <span className="w-5 shrink-0 pt-px text-xs font-semibold text-[#9CA3AF] tabular-nums">
                   {i + 1}
                 </span>
-                <p className="min-w-0 flex-1 text-[13px] text-ink">{q.prompt}</p>
-              </div>
+                <p className="min-w-0 flex-1 text-[13px] leading-[1.55] text-ink">
+                  {q.prompt}
+                </p>
+              </li>
             ))}
-          </div>
+          </ol>
         ) : (
-          <p className="text-[13px] leading-[1.55] text-[#6B7280]">
+          <p className="rounded-lg border border-dashed border-[#E5E7EB] px-3.5 py-5 text-center text-[13px] leading-[1.55] text-[#6B7280]">
             No questions yet. Nobody can be approved into screening until this
             campaign has some — draft them from the role description, or write your
             own.
           </p>
         )}
+
+        </div>
+
+        {/* The diagnostic, in a footer under the list it reads — and the result
+            directly under the control that asked for it. On request, because a
+            page view is not a question worth paying a model for. */}
+        {!staged &&
+          (rubricDimensions?.length ?? 0) > 0 &&
+          (hasQuestions || uncovered.length > 0) && (
+            <div className="border-t border-[#F3F4F6] px-[22px] py-3.5">
+              {hasQuestions && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void refreshCoverage(questions)}
+                    disabled={checkingCoverage}
+                    className="min-h-8 shrink-0 cursor-pointer text-[13px] font-semibold text-primary transition-colors duration-150 hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {checkingCoverage ? "Checking…" : "Check rubric coverage"}
+                  </button>
+                  <span className="text-xs leading-[1.55] text-[#9CA3AF]">
+                    A rubric dimension no question asks about scores zero for every
+                    candidate.
+                  </span>
+                </div>
+              )}
+
+              {/* Advice, hedged and dismissible. It names the dimensions rather
+                  than saying "some are uncovered", because a warning you have to
+                  go and work out is one you learn to ignore. */}
+              {uncovered.length > 0 && (
+                <div
+                  role="status"
+                  className="mt-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-[15px] py-[13px]"
+                >
+                  <p className="mb-1.5 text-[13px] font-semibold text-[#92400E]">
+                    {uncovered.length === 1
+                      ? "One rubric dimension may have no question"
+                      : `${uncovered.length} rubric dimensions may have no question`}
+                  </p>
+                  <ul className="mb-2 flex list-disc flex-col gap-1 pl-5">
+                    {uncovered.map((d) => (
+                      <li
+                        key={d.dimensionId}
+                        className="text-xs leading-[1.55] text-[#92400E]"
+                      >
+                        <strong>{d.dimensionName}</strong> — {d.reason}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mb-2 text-xs leading-[1.55] text-[#92400E]">
+                    Ask about it, or take it out of the rubric.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setDismissed(true)}
+                    className="min-h-8 cursor-pointer rounded-lg border border-[#FDE68A] bg-white px-2.5 text-xs font-semibold text-[#92400E] transition-colors duration-150 hover:bg-[#FFFBEB]"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
       </section>
 
       <Modal open={open} onClose={closeModal} className="max-w-[720px]">

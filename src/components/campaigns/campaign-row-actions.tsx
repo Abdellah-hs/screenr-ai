@@ -2,6 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { unstable_rethrow } from "next/navigation";
 import { cloneCampaign, deleteCampaign } from "@/lib/actions/campaigns";
 import {
   AnchoredMenu,
@@ -57,6 +58,9 @@ export function CampaignRowActions({
       try {
         await cloneCampaign(campaignId);
       } catch (err) {
+        // A successful clone redirects to the copy, and Next signals a redirect
+        // by throwing — so this catch would report the success as a failure.
+        unstable_rethrow(err);
         setError(err instanceof Error ? err.message : "Failed to clone campaign");
       }
     });

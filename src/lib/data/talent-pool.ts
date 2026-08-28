@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/database.types";
+import type { InterviewScoreLike } from "@/lib/candidates/detail-header";
 
 type ApplicationRow = Database["public"]["Tables"]["applications"]["Row"];
 type CandidateRow = Database["public"]["Tables"]["candidates"]["Row"];
@@ -24,8 +25,6 @@ export type TalentPoolRow = Pick<
   | "candidate_id"
   | "status"
   | "resume_score"
-  | "screening_q_score"
-  | "interview_score"
   | "screening_tier"
   | "score_rationale"
   | "score_factors"
@@ -44,6 +43,14 @@ export type TalentPoolRow = Pick<
     | ScreeningResponseScoreRow
     | ScreeningResponseScoreRow[]
     | null;
+  /**
+   * The interview score, which lives on the session rather than the
+   * application. `buildScoresArray` only ever emits `resume` and `screening`,
+   * so without this the directory showed no number at all for somebody sitting
+   * at the interview stage — the candidate detail page solved the same gap
+   * with `withInterviewScore`.
+   */
+  interview_sessions: { scores: InterviewScoreLike | null } | null;
 };
 
 /**
@@ -72,8 +79,6 @@ export async function fetchTalentPoolRows(userId: string): Promise<TalentPoolRow
       candidate_id,
       status,
       resume_score,
-      screening_q_score,
-      interview_score,
       screening_tier,
       score_rationale,
       score_factors,
@@ -90,6 +95,9 @@ export async function fetchTalentPoolRows(userId: string): Promise<TalentPoolRow
       ),
       screening_question_responses (
         overall_score, overall_rationale, scored_at, rubric_version, status
+      ),
+      interview_sessions (
+        scores
       )
     `,
     )

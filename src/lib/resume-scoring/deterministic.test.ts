@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   EVIDENCE_LEVEL_SCORE,
   buildDeterministicResumeScore,
-  calculateNiceToHaveRanking,
+  calculateRankingScore,
   evaluateEligibility,
   readResumeEvaluation,
   resumeScoreRationale,
@@ -144,9 +144,9 @@ describe("evaluateEligibility", () => {
   });
 });
 
-describe("calculateNiceToHaveRanking", () => {
+describe("calculateRankingScore", () => {
   it("returns no score at all for an ineligible candidate", () => {
-    const ranking = calculateNiceToHaveRanking(
+    const ranking = calculateRankingScore(
       [scored("Testing", "nice_to_have", "very_strong")],
       false,
     );
@@ -154,27 +154,52 @@ describe("calculateNiceToHaveRanking", () => {
     expect(ranking).toEqual({ ranking_score: null, ranked: false });
   });
 
-  it("returns 100 for an eligible candidate with no nice-to-haves", () => {
-    const ranking = calculateNiceToHaveRanking(
-      [scored("TypeScript", "must_have", "strong")],
-      true,
-    );
-
-    expect(ranking).toEqual({ ranking_score: 100, ranked: true });
-  });
-
-  it("averages nice-to-have scores and leaves must-haves out of the mean", () => {
-    const ranking = calculateNiceToHaveRanking(
+  it("averages every criterion, must-haves included", () => {
+    const ranking = calculateRankingScore(
       [
-        scored("TypeScript", "must_have", "strong"), // 80 — must not count
+        scored("TypeScript", "must_have", "strong"), // 80
         scored("Testing", "nice_to_have", "very_strong"), // 100
         scored("Docker", "nice_to_have", "weak"), // 25
       ],
       true,
     );
 
-    // (100 + 25) / 2 = 62.5, rounded to 63. The 80 is absent from the mean.
-    expect(ranking).toEqual({ ranking_score: 63, ranked: true });
+    // (80 + 100 + 25) / 3 = 68.3, rounded to 68.
+    expect(ranking).toEqual({ ranking_score: 68, ranked: true });
+  });
+
+  it("separates two candidates who both cleared every gate", () => {
+    const deep = calculateRankingScore(
+      [
+        scored("TypeScript", "must_have", "very_strong"), // 100
+        scored("Next.js", "must_have", "very_strong"), // 100
+      ],
+      true,
+    );
+    const shallow = calculateRankingScore(
+      [
+        scored("TypeScript", "must_have", "strong"), // 80
+        scored("Next.js", "must_have", "strong"), // 80
+      ],
+      true,
+    );
+
+    // The whole point of the change: passing a gate is no longer the end of
+    // what a must-have says about a candidate.
+    expect(deep.ranking_score).toBeGreaterThan(shallow.ranking_score!);
+  });
+
+  it("ranks an eligible candidate with no nice-to-haves on their must-haves", () => {
+    const ranking = calculateRankingScore(
+      [scored("TypeScript", "must_have", "strong")],
+      true,
+    );
+
+    expect(ranking).toEqual({ ranking_score: 80, ranked: true });
+  });
+
+  it("returns 100 when there are no criteria at all to separate anyone on", () => {
+    expect(calculateRankingScore([], true)).toEqual({ ranking_score: 100, ranked: true });
   });
 });
 
@@ -206,29 +231,52 @@ describe("buildDeterministicResumeScore", () => {
     });
   });
 
-  it("ranks an eligible candidate on nice-to-haves alone", () => {
+  it("ranks an eligible candidate across must-haves and nice-to-haves alike", () => {
     const result = buildDeterministicResumeScore(
       validatedFor([
-        { label: "TypeScript", level: "strong" },
-        { label: "Next.js", level: "strong" },
-        { label: "Testing", level: "very_strong" },
+        { label: "TypeScript", level: "strong" }, // 80
+        { label: "Next.js", level: "strong" }, // 80
+        { label: "Testing", level: "very_strong" }, // 100
       ]),
       criteria,
     );
 
+    // (80 + 80 + 100) / 3 = 86.7 → 87. Under the old rule this was 100: the
+    // two must-haves were dropped and the lone nice-to-have was the whole mean.
     expect(result.eligible).toBe(true);
-    expect(result.ranking_score).toBe(100);
+    expect(result.ranking_score).toBe(87);
     expect(result.tier).toBe("eligible");
     expect(result.failed_must_haves).toEqual([]);
   });
 
-  it("scores an eligible candidate with no nice-to-haves at 100", () => {
+  it("does not let a strong nice-to-have hide a bare-pass must-have", () => {
+    const result = buildDeterministicResumeScore(
+      validatedFor([
+        { label: "TypeScript", level: "strong" }, // 80 — passes, but only just
+        { label: "Next.js", level: "strong" }, // 80
+        { label: "Testing", level: "very_strong" }, // 100
+      ]),
+      criteria,
+    );
+    const deeper = buildDeterministicResumeScore(
+      validatedFor([
+        { label: "TypeScript", level: "very_strong" }, // 100
+        { label: "Next.js", level: "very_strong" }, // 100
+        { label: "Testing", level: "very_strong" }, // 100
+      ]),
+      criteria,
+    );
+
+    expect(deeper.ranking_score).toBeGreaterThan(result.ranking_score!);
+  });
+
+  it("ranks an eligible candidate with no nice-to-haves on their must-have evidence", () => {
     const result = buildDeterministicResumeScore(
       validatedFor([{ label: "TypeScript", level: "strong" }]),
       [criterion("TypeScript", "must_have")],
     );
 
-    expect(result).toMatchObject({ eligible: true, ranking_score: 100, tier: "eligible" });
+    expect(result).toMatchObject({ eligible: true, ranking_score: 80, tier: "eligible" });
   });
 
   it("gives an ineligible candidate with no nice-to-haves a null ranking score", () => {

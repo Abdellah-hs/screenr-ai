@@ -20,18 +20,37 @@ export default async function AuditLogPage() {
   ]);
 
   return (
-    <div className="max-w-7xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-[#111827]">
-          Audit Log{" "}
-          <span className="ml-2 font-normal text-[#6B7280]">({total})</span>
-        </h1>
-        <p className="mt-1 max-w-3xl text-sm text-[#6B7280]">
-          Every AI decision in the pipeline, with the model and prompt version that produced it and
-          the raw output behind it. Append-only: rows can be read and exported, never edited or
-          deleted.
+    <div className="mx-auto max-w-7xl">
+      {/* No count beside the title. The table carries a live one that tracks
+          the filters, and a second figure up here would disagree with it the
+          moment anybody narrowed the trail. */}
+      <header className="mb-6">
+        <h1 className="text-2xl font-semibold text-ink">Audit Log</h1>
+        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[#6B7280]">
+          Every AI decision in the pipeline, with the model and prompt version that produced it
+          and the raw output behind it.
         </p>
-      </div>
+        <p className="mt-3 inline-flex items-center gap-2 rounded-lg border border-[#E5E7EB] bg-white px-3 py-1.5 text-xs text-[#4B5563]">
+          <svg
+            className="h-3.5 w-3.5 shrink-0 text-[#6B7280]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.7}
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
+            />
+          </svg>
+          <span>
+            <strong className="font-semibold text-ink">Append-only.</strong> Rows can be read and
+            exported, never edited or deleted.
+          </span>
+        </p>
+      </header>
 
       <AuditLogTable initialEntries={entries} initialTotal={total} campaigns={campaigns} />
     </div>

@@ -165,9 +165,51 @@ describe("generateScreeningQuestionsFromDescription", () => {
     );
     expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith({
       jobDescription: DESCRIPTION,
-      screeningCriteria: [],
-      count: 5,
+      rubricDimensions: [],
     });
+  });
+
+  /**
+   * The point of the change: the wizard is holding the screening rubric on the
+   * same step, so questions are drafted against what the answers will actually
+   * be scored on rather than against the job description alone.
+   */
+  it("passes the wizard's screening rubric through to the generator", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION, [
+      "Scaling experience",
+      "Debugging method",
+    ]);
+
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith({
+      jobDescription: DESCRIPTION,
+      rubricDimensions: [{ name: "Scaling experience" }, { name: "Debugging method" }],
+    });
+  });
+
+  /**
+   * The action must not pin a count. How many questions to draft is a function
+   * of the rubric, and it is answered in one place — the generator — so the
+   * wizard and the campaign page cannot size a set differently.
+   */
+  it("leaves the question count to the generator rather than fixing it here", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION, ["Scaling experience"]);
+
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith(
+      expect.not.objectContaining({ count: expect.anything() }),
+    );
+  });
+
+  /**
+   * A half-typed dimension is a normal state to press "draft questions" in.
+   * Failing the whole call over one empty row would be the wizard blocking
+   * itself over a field the recruiter is still filling in.
+   */
+  it("drops blank dimension names rather than refusing the request", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION, ["Scaling experience", "  "]);
+
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith(
+      expect.objectContaining({ rubricDimensions: [{ name: "Scaling experience" }] }),
+    );
   });
 
   it("shares the AI generation rate-limit bucket with its siblings", async () => {

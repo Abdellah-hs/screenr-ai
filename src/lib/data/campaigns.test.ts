@@ -21,17 +21,20 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  cloneCampaignTx,
   dimensionsEqual,
   fetchCampaignScoringConfig,
+  fetchScreeningRubricDimensions,
   fetchCampaignStatus,
   fetchCampaignBySlug,
   insertCampaignTx,
   updateCampaignStatusTx,
+  updateCampaignRubricsTx,
   softDeleteCampaignTx,
   restoreCampaignTx,
   mapAvailabilityRows,
 } from "./campaigns";
-import type { DimensionImportance } from "@/lib/constants";
+import type { Campaign, DimensionImportance } from "@/lib/constants";
 import type { Database } from "@/types/database.types";
 import type { SupabaseDb } from "@/lib/supabase/types";
 
@@ -580,5 +583,350 @@ describe("fetchCampaignScoringConfig", () => {
     stubTables(null);
 
     expect(await fetchCampaignScoringConfig("camp-1", "user-1")).toBeNull();
+  });
+});
+
+describe("fetchScreeningRubricDimensions", () => {
+  // The bug this fetcher exists to prevent is silent: a resume rubric and a
+  // screening rubric are the same shape, so reading the wrong stage returns
+  // perfectly valid dimensions and grades a spoken call against the CV's
+  // criteria. These tests read the stage filter, not just the return value.
+  type DimensionRow = {
+    id: string;
+    name: string;
+    weight: number | null;
+    sort_order: number;
+  };
+
+  let rubricStage: string | undefined;
+
+  function stubRubric(
+    rubric: { id: string; version?: number } | null,
+    dimensions: DimensionRow[],
+  ): void {
+    rubricStage = undefined;
+    mockFrom.mockImplementation((table?: string) => {
+      if (table === "evaluation_rubrics") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: (_col: string, value: string) => {
+                rubricStage = value;
+                return {
+                  eq: () => ({ maybeSingle: () => Promise.resolve({ data: rubric }) }),
+                };
+              },
+            }),
+          }),
+        };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            is: () => ({
+              order: () => Promise.resolve({ data: dimensions }),
+            }),
+          }),
+        }),
+      };
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads the screening rubric, not the resume one", async () => {
+    stubRubric({ id: "rub-1" }, []);
+
+    await fetchScreeningRubricDimensions("camp-1");
+
+    expect(rubricStage).toBe("screening_q");
+  });
+
+  it("returns each dimension with the weight the recruiter's importance produced", async () => {
+    stubRubric({ id: "rub-1" }, [
+      { id: "dim-1", name: "Scaling experience", weight: 0.6, sort_order: 0 },
+      { id: "dim-2", name: "Debugging method", weight: 0.4, sort_order: 1 },
+    ]);
+
+    const { dimensions } = await fetchScreeningRubricDimensions("camp-1");
+
+    expect(dimensions).toEqual([
+      { id: "dim-1", name: "Scaling experience", weight: 0.6 },
+      { id: "dim-2", name: "Debugging method", weight: 0.4 },
+    ]);
+  });
+
+  it("carries the rubric version back with the dimensions, off the same row", async () => {
+    // The scorer needs both — the dimensions to grade against, the version to
+    // stamp the score with — and they live on one `evaluation_rubrics` row.
+    // Asking for them separately resolved that row twice per screening score.
+    stubRubric({ id: "rub-1", version: 4 }, [
+      { id: "dim-1", name: "Scaling experience", weight: 1, sort_order: 0 },
+    ]);
+
+    expect((await fetchScreeningRubricDimensions("camp-1")).version).toBe(4);
+  });
+
+  it("returns nothing when the campaign has no screening rubric", async () => {
+    stubRubric(null, []);
+
+    // Not an empty rubric that scores everyone 0 — "no rubric" is a different
+    // fact, and the caller falls back to per-question scoring on it.
+    expect(await fetchScreeningRubricDimensions("camp-1")).toEqual({
+      dimensions: [],
+      version: null,
+    });
+  });
+
+  it("reads a legacy dimension with no weight as zero rather than undefined", async () => {
+    stubRubric({ id: "rub-1" }, [
+      { id: "dim-1", name: "Scaling experience", weight: null, sort_order: 0 },
+    ]);
+
+    // normalizeWeights turns an all-zero rubric into equal shares; undefined
+    // would propagate into the arithmetic as NaN and score everyone 0.
+    expect((await fetchScreeningRubricDimensions("camp-1")).dimensions).toEqual([
+      { id: "dim-1", name: "Scaling experience", weight: 0 },
+    ]);
+  });
+});
+
+/**
+ * A clone is meant to be a campaign you can run. It copied the rubric, the SLA
+ * timers and the availability rules but silently dropped the screening
+ * questions, which live on their own table — so the copy was born unable to
+ * approve anyone into screening, and the recruiter met an "add screening
+ * questions" banner on a campaign they had just finished setting up.
+ */
+describe("cloneCampaignTx", () => {
+  const insertSingle = vi.fn();
+  const campaignInsert = vi.fn((payload: Record<string, unknown>) => {
+    void payload;
+    return { select: () => ({ single: insertSingle }) };
+  });
+  const auditInsert = vi.fn(() => Promise.resolve({ error: null }));
+  const questionInsert = vi.fn(() => Promise.resolve({ error: null }));
+  const questionOrder = vi.fn();
+
+  function sourceCampaign(): Campaign {
+    return {
+      id: "camp-source",
+      title: "Data scientist",
+      description: "Own our forecasting models.",
+      department: "Engineering",
+      positions: 1,
+      status: "active",
+      accepting_applications: true,
+      deadline: null,
+      deadline_enforced: false,
+      location: "Casablanca",
+      timezone: null,
+      public_slug: "data-scientist",
+      automation_mode: "human_in_loop",
+      resume_threshold: 70,
+      screening_threshold: 70,
+      interview_persona: "neutral",
+      rubrics: [],
+      reviewers: [],
+      sla_timers: [],
+      interview_slot_minutes: 45,
+      interview_timezone: null,
+      interview_booking_horizon_days: 14,
+      interview_availability_rules: [],
+      pipeline: [],
+      user_id: "user-1",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      deleted_at: null,
+    };
+  }
+
+  function questionRow(prompt: string, sortOrder: number) {
+    return {
+      id: `q-${sortOrder}`,
+      campaign_id: "camp-source",
+      prompt,
+      sort_order: sortOrder,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    insertSingle.mockResolvedValue({ data: { id: "camp-copy" }, error: null });
+    questionOrder.mockResolvedValue({ data: [], error: null });
+    mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
+      if (table === "campaign_audit_log") return { insert: auditInsert };
+      if (table === "screening_questions") {
+        return {
+          insert: questionInsert,
+          select: () => ({ eq: () => ({ order: questionOrder }) }),
+        };
+      }
+      return { insert: campaignInsert };
+    });
+  });
+
+  it("copies the source campaign's screening questions, in order", async () => {
+    questionOrder.mockResolvedValue({
+      data: [
+        questionRow("Describe a model you put into production.", 0),
+        questionRow("What made you look outside your current role?", 1),
+      ],
+      error: null,
+    });
+
+    await expect(cloneCampaignTx("camp-source", sourceCampaign(), "user-1")).resolves.toBe(
+      "camp-copy",
+    );
+
+    expect(questionInsert).toHaveBeenCalledWith([
+      {
+        campaign_id: "camp-copy",
+        prompt: "Describe a model you put into production.",
+        sort_order: 0,
+      },
+      {
+        campaign_id: "camp-copy",
+        prompt: "What made you look outside your current role?",
+        sort_order: 1,
+      },
+    ]);
+  });
+
+  it("writes nothing when the source campaign had no questions", async () => {
+    await cloneCampaignTx("camp-source", sourceCampaign(), "user-1");
+
+    expect(questionInsert).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A clone used to be inserted with no `public_slug` at all, which produced a
+   * campaign nobody could apply to: there was no apply page, and the card that
+   * would have said so rendered nothing for a null slug.
+   */
+  it("mints its own apply slug rather than inheriting the source's", async () => {
+    await cloneCampaignTx("camp-source", sourceCampaign(), "user-1");
+
+    expect(campaignInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ public_slug: "data-scientist-copy" }),
+    );
+    // The source's slug is unique — two campaigns cannot share the one page
+    // candidates apply through.
+    expect(campaignInsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({ public_slug: "data-scientist" }),
+    );
+  });
+
+  it("retries with a suffix when the copy's slug is already taken", async () => {
+    // Cloning the same campaign twice collides every time — both copies
+    // slugify to "<title>-copy".
+    insertSingle
+      .mockResolvedValueOnce({ data: null, error: { code: "23505" } })
+      .mockResolvedValueOnce({ data: { id: "camp-copy" }, error: null });
+
+    await expect(
+      cloneCampaignTx("camp-source", sourceCampaign(), "user-1"),
+    ).resolves.toBe("camp-copy");
+
+    expect(campaignInsert).toHaveBeenCalledTimes(2);
+    expect(campaignInsert.mock.calls[1][0]).toMatchObject({
+      public_slug: expect.stringMatching(/^data-scientist-copy-[a-z0-9]+$/),
+    });
+  });
+});
+
+describe("updateCampaignRubricsTx", () => {
+  const ownerSingle = vi.fn();
+  const rubricMaybeSingle = vi.fn();
+  const dimensionOrder = vi.fn();
+  const rubricUpdateEq = vi.fn(() => Promise.resolve({ error: null }));
+  const rubricUpdate = vi.fn(() => ({ eq: rubricUpdateEq }));
+  const insertedSingle = vi.fn();
+  const rubricInsert = vi.fn(() => ({ select: () => ({ single: insertedSingle }) }));
+  const dimensionInsert = vi.fn(() => Promise.resolve({ error: null }));
+  const auditInsert = vi.fn(() => Promise.resolve({ error: null }));
+
+  function resumeRubric(dimensions: Intent[]) {
+    return [{ stage: "resume" as const, dimensions }];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ownerSingle.mockResolvedValue({ data: { id: "camp-1" }, error: null });
+    rubricMaybeSingle.mockResolvedValue({ data: null, error: null });
+    dimensionOrder.mockResolvedValue({ data: [], error: null });
+    insertedSingle.mockResolvedValue({ data: { id: "rub-new" }, error: null });
+
+    mockFrom.mockImplementation((table?: string): Record<string, unknown> => {
+      if (table === "campaigns") {
+        return {
+          select: () => ({ eq: () => ({ eq: () => ({ single: ownerSingle }) }) }),
+        };
+      }
+      if (table === "evaluation_rubrics") {
+        return {
+          select: () => ({
+            eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: rubricMaybeSingle }) }) }),
+          }),
+          update: rubricUpdate,
+          insert: rubricInsert,
+        };
+      }
+      if (table === "rubric_dimensions") {
+        return {
+          select: () => ({ eq: () => ({ is: () => ({ order: dimensionOrder }) }) }),
+          insert: dimensionInsert,
+        };
+      }
+      return { insert: auditInsert };
+    });
+  });
+
+  it("refuses a campaign the caller does not own", async () => {
+    ownerSingle.mockResolvedValue({ data: null, error: null });
+
+    await expect(
+      updateCampaignRubricsTx("camp-1", resumeRubric([dim()]), "user-2"),
+    ).rejects.toThrow("Campaign not found or access denied");
+
+    expect(rubricInsert).not.toHaveBeenCalled();
+  });
+
+  it("archives the active version and inserts the next one when a dimension changed", async () => {
+    rubricMaybeSingle.mockResolvedValue({
+      data: { id: "rub-old", version: 3 },
+      error: null,
+    });
+    dimensionOrder.mockResolvedValue({ data: [dim({ name: "React" })], error: null });
+
+    await updateCampaignRubricsTx(
+      "camp-1",
+      resumeRubric([dim({ name: "Kubernetes" })]),
+      "user-1",
+    );
+
+    expect(rubricUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ is_active: false }),
+    );
+    expect(rubricInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ campaign_id: "camp-1", stage: "resume", version: 4 }),
+    );
+  });
+
+  it("does not mint a new version when the dimensions are unchanged", async () => {
+    rubricMaybeSingle.mockResolvedValue({
+      data: { id: "rub-old", version: 3 },
+      error: null,
+    });
+    dimensionOrder.mockResolvedValue({ data: [dim({ name: "React" })], error: null });
+
+    await updateCampaignRubricsTx("camp-1", resumeRubric([dim({ name: "React" })]), "user-1");
+
+    expect(rubricUpdate).not.toHaveBeenCalled();
+    expect(rubricInsert).not.toHaveBeenCalled();
   });
 });

@@ -35,7 +35,7 @@ function evidenceRow(
     campaign_id: "camp-1",
     created_at: "2026-08-01T09:00:00.000Z",
     resume_score: 70,
-    screening_q_score: null,
+    screening_score: null,
     interview_score: null,
     parsed_data: null,
     campaigns: { id: "camp-1", title: "Backend Engineer" },
@@ -77,7 +77,7 @@ describe("composeTalentPoolEntries", () => {
   it("takes the best score across every stage and every application", () => {
     const evidence = [
       evidenceRow({ campaign_id: "camp-2", resume_score: 55, interview_score: 91 }),
-      evidenceRow({ campaign_id: "camp-1", resume_score: 70, screening_q_score: 64 }),
+      evidenceRow({ campaign_id: "camp-1", resume_score: 70, screening_score: 64 }),
     ];
 
     expect(composeTalentPoolEntries([entryRow()], evidence)[0].bestScore).toBe(91);
@@ -87,7 +87,7 @@ describe("composeTalentPoolEntries", () => {
     // Zero would place an unmeasured person at the bottom of a score filter,
     // which reads as "we scored them and they failed".
     const evidence = [
-      evidenceRow({ resume_score: null, screening_q_score: null, interview_score: null }),
+      evidenceRow({ resume_score: null, screening_score: null, interview_score: null }),
     ];
 
     expect(composeTalentPoolEntries([entryRow()], evidence)[0].bestScore).toBeNull();

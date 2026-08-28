@@ -140,3 +140,21 @@ describe("manualStageDisposition", () => {
     }
   });
 });
+
+describe("recovering a processing failure", () => {
+  // The recovery edge exists so a CV can be READ again. Offering it as a
+  // dropdown choice would move the application to "waiting to be scored" with
+  // the identity-only placeholder still in `parsed_data`, and the next scoring
+  // sweep would grade that empty parse — a real number, possibly a rejection,
+  // for a document nobody opened.
+  it("does not offer `new` as a manual override from processing_failed", () => {
+    const options = recruiterStageOptions("processing_failed");
+
+    expect(options).not.toContain("new");
+    expect(options).toEqual(["archived"]);
+  });
+
+  it("blocks a crafted request that tries to set `new` by hand", () => {
+    expect(isRecruiterSettableTarget("new")).toBe(false);
+  });
+});

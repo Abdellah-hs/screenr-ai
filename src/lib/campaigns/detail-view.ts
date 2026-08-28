@@ -1,20 +1,33 @@
-import { formatApplicationState, type ApplicationState } from "@/lib/constants";
+/**
+ * The two jobs a campaign page does, split so each fits a screen.
+ *
+ * **Pipeline** is the daily work — who is where, what is late, what happened.
+ * **Setup** is what was decided once at creation and is rarely touched — the
+ * rubric, the questions, the apply link, the social post. They were stacked in
+ * one column, which made the page long enough that the daily half sat above a
+ * fold of configuration nobody was reading that day.
+ *
+ * The tab lives in the URL rather than in client state, so the page stays a
+ * Server Component, a link can point at a specific tab (the empty-questions
+ * banner does), and Back works.
+ */
+export const CAMPAIGN_DETAIL_TABS = [
+  { key: "pipeline", label: "Pipeline" },
+  { key: "setup", label: "Setup" },
+] as const;
+
+export type CampaignDetailTab = (typeof CAMPAIGN_DETAIL_TABS)[number]["key"];
 
 /**
- * "3d" — whole days an application has sat where it is.
- *
- * Computed on the server, where the campaign page renders once, so the reading
- * is taken from one clock. Doing it in a client component would give a number
- * that disagreed with the one the server sent.
+ * Anything that is not a known tab falls back to Pipeline — a hand-edited or
+ * stale `?tab=` must not render an empty page.
  */
-export function daysInStage(updatedAt: string, now: Date = new Date()): string {
-  const ms = now.getTime() - new Date(updatedAt).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "—";
-  const days = Math.floor(ms / 86_400_000);
-  if (days >= 1) return `${days}d`;
-  const hours = Math.floor(ms / 3_600_000);
-  return hours >= 1 ? `${hours}h` : "<1h";
+export function resolveDetailTab(requested: string | undefined): CampaignDetailTab {
+  const match = CAMPAIGN_DETAIL_TABS.find((t) => t.key === requested);
+  return match ? match.key : "pipeline";
 }
+
+import { formatApplicationState, type ApplicationState } from "@/lib/constants";
 
 /** "2h ago" / "3d ago" — the age half of a last-activity line. */
 export function relativeAge(iso: string, now: Date = new Date()): string {
@@ -55,7 +68,11 @@ const EVENT_LABEL: Partial<Record<ApplicationState, string>> = {
   hired: "Hired",
   rejected: "Rejected",
   archived: "Archived",
-  processing_failed: "CV could not be read",
+  // Not "CV could not be read": this state is reached when OUR side failed —
+  // an extractor timeout, a model outage, a screening or interview score that
+  // could not be computed. Naming the candidate's file as the culprit is the
+  // same lie the ingest path used to tell them by email.
+  processing_failed: "Processing failed",
 };
 
 /**
@@ -65,37 +82,4 @@ const EVENT_LABEL: Partial<Record<ApplicationState, string>> = {
  */
 export function eventLabel(status: ApplicationState): string {
   return EVENT_LABEL[status] ?? formatApplicationState(status);
-}
-
-export function lastActivityLabel(
-  status: ApplicationState,
-  updatedAt: string,
-  now: Date = new Date(),
-): string {
-  const event = eventLabel(status);
-  const age = relativeAge(updatedAt, now);
-  return age ? `${event} · ${age}` : event;
-}
-
-/**
- * The stage the campaign page previews when the recruiter has not picked one.
- *
- * The busiest **active** stage, because that is where the work is. Terminal
- * buckets are excluded even when they are the largest — on a mature campaign
- * Rejected always is, and opening on it would show a page of decisions already
- * made. Falls back to `applied` so the section always has a stage to name.
- */
-const ACTIVE_STAGES = ["screening", "interview", "final_interview", "applied"] as const;
-
-export function defaultPreviewStage(stageCounts: Record<string, number>): string {
-  let best: string | null = null;
-  let bestCount = 0;
-  for (const key of ACTIVE_STAGES) {
-    const count = stageCounts[key] ?? 0;
-    if (count > bestCount) {
-      best = key;
-      bestCount = count;
-    }
-  }
-  return best ?? "applied";
 }

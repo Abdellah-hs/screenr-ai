@@ -8,7 +8,11 @@ import {
   type CampaignStatus,
   type CampaignStatusSelection,
 } from "@/lib/constants";
-import { settableStatusSelections, encodeStatusSelection } from "@/lib/rules/campaign-status";
+import {
+  settableStatusSelections,
+  encodeStatusSelection,
+  type ApplyGateBlocker,
+} from "@/lib/rules/campaign-status";
 import { AnchoredMenu, MENU_ITEM, MENU_LABEL } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -53,12 +57,20 @@ export function CampaignStatusChanger({
   campaignId,
   currentStatus,
   acceptingApplications = true,
+  applyBlocker = null,
 }: {
   campaignId: string;
   currentStatus: CampaignStatus;
-  /** When active + false, the badge reads "not accepting" instead of "Active".
-   *  The intake switch itself is toggled from the campaign form, not here. */
+  /** The stored intake switch. Decides which of the five options is the
+   *  campaign's *current* one, so the menu can leave it out. The intake switch
+   *  itself is toggled from this menu or the campaign form. */
   acceptingApplications?: boolean;
+  /** Which intake gate is shut, computed on the server against one clock.
+   *  Decides what the badge *says*, which is not the same question: a passed
+   *  deadline shuts the apply link without changing either stored field, so a
+   *  badge derived from the status alone reads "Active" over a page telling
+   *  candidates applications are closed. */
+  applyBlocker?: ApplyGateBlocker | null;
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,12 +81,15 @@ export function CampaignStatusChanger({
   const currentSelection = encodeStatusSelection(currentStatus, acceptingApplications);
   const options = settableStatusSelections(currentSelection);
 
-  // An active campaign with intake switched off reads as "not accepting" so the
-  // badge never claims it's open when it isn't.
+  // The badge never claims to be open when it isn't. `not_active` needs no
+  // suffix — "Paused" already says it — but the two gates that shut an *Active*
+  // campaign's link have to be named, or the badge contradicts the apply page.
   const currentLabel =
-    currentStatus === "active" && !acceptingApplications
+    applyBlocker === "intake_closed"
       ? "Active — not accepting"
-      : STATUS_LABEL[currentStatus];
+      : applyBlocker === "deadline_passed"
+        ? "Active — deadline passed"
+        : STATUS_LABEL[currentStatus];
 
   function pick(selection: CampaignStatusSelection) {
     setOpen(false);

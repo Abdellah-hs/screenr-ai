@@ -39,11 +39,22 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: keyof typeof sizes;
 }
 
+/**
+ * `type` defaults to "button", not to HTML's "submit".
+ *
+ * A bare `<button>` inside a `<form>` submits it. That default is right for a
+ * plain HTML page and wrong for a component used mostly for onClick handlers:
+ * every `<Button>` that forgets `type` becomes a submit button, and inside a
+ * long form — the campaign wizard is one `<form>` end to end — that means an
+ * unrelated control can create the record. Callers that DO want to submit say
+ * so explicitly, and `{...props}` lets them.
+ */
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = "primary", size = "md", disabled, ...props }, ref) => {
+  ({ className, variant = "primary", size = "md", disabled, type = "button", ...props }, ref) => {
     return (
       <button
         ref={ref}
+        type={type}
         className={cn(
           "inline-flex items-center justify-center gap-2 font-semibold cursor-pointer",
           // Colour only, at 120ms. The old `transition-all duration-300` with a

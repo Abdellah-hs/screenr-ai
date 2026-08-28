@@ -39,26 +39,35 @@ describe("createScreeningRoomGrant", () => {
     process.env.LIVEKIT_API_SECRET = "secret";
   });
 
-  it("creates a per-attempt room carrying the application id and instructions in metadata", async () => {
-    await createScreeningRoomGrant({
-      applicationId: "app-1",
-      instructions: "Interview the candidate.",
-    });
+  /**
+   * **LiveKit ships metadata to every participant**, so the interviewer's topic
+   * guide that used to ride here was readable by the candidate's own browser
+   * before a question was asked. The worker fetches that over the agent API
+   * instead, and metadata carries only things the candidate already has.
+   *
+   * Asserted as an exact shape rather than a list of forbidden fields: the
+   * failure being guarded against is a NEW field nobody thought to forbid.
+   */
+  it("puts nothing in metadata the candidate did not already have", async () => {
+    await createScreeningRoomGrant({ applicationId: "app-1", language: "french" });
 
     expect(mockCreateRoom).toHaveBeenCalledTimes(1);
     const arg = mockCreateRoom.mock.calls[0][0];
     expect(arg.name).toMatch(/^screening-app-1-/);
-    expect(JSON.parse(arg.metadata)).toEqual({
-      application_id: "app-1",
-      instructions: "Interview the candidate.",
-    });
+    // The id is in their own signed token; the language is the choice they
+    // made on the page a moment earlier. Nothing else may appear here.
+    expect(JSON.parse(arg.metadata)).toEqual({ application_id: "app-1", language: "french" });
+  });
+
+  /** The room is created with the language, so a re-record can pick again. */
+  it("carries the language the candidate picked", async () => {
+    await createScreeningRoomGrant({ applicationId: "app-1", language: "english" });
+
+    expect(JSON.parse(mockCreateRoom.mock.calls[0][0].metadata).language).toBe("english");
   });
 
   it("returns the server url, the room name, and a candidate-scoped join token", async () => {
-    const grant = await createScreeningRoomGrant({
-      applicationId: "app-1",
-      instructions: "x",
-    });
+    const grant = await createScreeningRoomGrant({ applicationId: "app-1", language: "english" });
 
     expect(grant.serverUrl).toBe("wss://demo.livekit.cloud");
     expect(grant.roomName).toMatch(/^screening-app-1-/);
@@ -74,10 +83,7 @@ describe("createScreeningRoomGrant", () => {
   });
 
   it("scopes the token to exactly the created room (no wildcard join)", async () => {
-    const grant = await createScreeningRoomGrant({
-      applicationId: "app-1",
-      instructions: "x",
-    });
+    const grant = await createScreeningRoomGrant({ applicationId: "app-1", language: "english" });
 
     const grantArg = mockAddGrant.mock.calls[0][0];
     expect(grantArg.room).toBe(grant.roomName);
@@ -85,8 +91,8 @@ describe("createScreeningRoomGrant", () => {
   });
 
   it("mints a fresh room per attempt so a re-record never reuses a stale agent", async () => {
-    const a = await createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" });
-    const b = await createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" });
+    const a = await createScreeningRoomGrant({ applicationId: "app-1", language: "english" });
+    const b = await createScreeningRoomGrant({ applicationId: "app-1", language: "english" });
 
     expect(a.roomName).not.toBe(b.roomName);
   });
@@ -95,7 +101,7 @@ describe("createScreeningRoomGrant", () => {
     delete process.env.LIVEKIT_API_SECRET;
 
     await expect(
-      createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" }),
+      createScreeningRoomGrant({ applicationId: "app-1", language: "english" }),
     ).rejects.toThrow(/LIVEKIT/);
     expect(mockCreateRoom).not.toHaveBeenCalled();
   });
@@ -103,7 +109,7 @@ describe("createScreeningRoomGrant", () => {
   // Each flow summons exactly its own worker; a screening room must never pull
   // in the video interviewer.
   it("summons the screening agent by name, not the interview agent", async () => {
-    const grant = await createScreeningRoomGrant({ applicationId: "app-1", instructions: "x" });
+    const grant = await createScreeningRoomGrant({ applicationId: "app-1", language: "english" });
 
     expect(mockCreateDispatch).toHaveBeenCalledWith(grant.roomName, SCREENING_AGENT_NAME);
   });
@@ -118,25 +124,18 @@ describe("createInterviewRoomGrant", () => {
     process.env.LIVEKIT_API_SECRET = "secret";
   });
 
-  it("opens an interview-scoped room carrying the résumé-grounded instructions in metadata", async () => {
-    await createInterviewRoomGrant({
-      applicationId: "app-1",
-      instructions: "Ask about their Stripe ledger work.",
-    });
+  // Same rule as screening, and it bites harder here: the instructions embed
+  // the candidate's résumé and the campaign's interviewing stance.
+  it("puts the application id in metadata and nothing else", async () => {
+    await createInterviewRoomGrant({ applicationId: "app-1" });
 
     const arg = mockCreateRoom.mock.calls[0][0];
     expect(arg.name).toMatch(/^interview-app-1-/);
-    expect(JSON.parse(arg.metadata)).toEqual({
-      application_id: "app-1",
-      instructions: "Ask about their Stripe ledger work.",
-    });
+    expect(JSON.parse(arg.metadata)).toEqual({ application_id: "app-1" });
   });
 
   it("grants the candidate camera + mic publish rights scoped to that room", async () => {
-    const grant = await createInterviewRoomGrant({
-      applicationId: "app-1",
-      instructions: "x",
-    });
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1" });
 
     const grantArg = mockAddGrant.mock.calls[0][0];
     expect(grantArg).toMatchObject({
@@ -149,10 +148,7 @@ describe("createInterviewRoomGrant", () => {
   });
 
   it("returns the server url, room name, and a minted join token", async () => {
-    const grant = await createInterviewRoomGrant({
-      applicationId: "app-1",
-      instructions: "x",
-    });
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1" });
 
     expect(grant.serverUrl).toBe("wss://demo.livekit.cloud");
     expect(grant.roomName).toMatch(/^interview-app-1-/);
@@ -163,7 +159,7 @@ describe("createInterviewRoomGrant", () => {
   // as the screening worker and LiveKit gives interview rooms to whichever it
   // picks — the "the interviewer didn't join" failure.
   it("summons the interview agent by name so the screening worker can't take the job", async () => {
-    const grant = await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1" });
 
     expect(mockCreateDispatch).toHaveBeenCalledWith(grant.roomName, INTERVIEW_AGENT_NAME);
   });
@@ -173,7 +169,7 @@ describe("createInterviewRoomGrant", () => {
   // Measured against a live LiveKit project: dispatch list empty, no agent ever
   // joined. The dispatch must be an explicit call against the created room.
   it("dispatches against the room it just created, not via the join token", async () => {
-    const grant = await createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" });
+    const grant = await createInterviewRoomGrant({ applicationId: "app-1" });
 
     const createdRoom = mockCreateRoom.mock.calls[0][0].name;
     expect(createdRoom).toBe(grant.roomName);
@@ -203,7 +199,7 @@ describe("createInterviewRoomGrant", () => {
     delete process.env.LIVEKIT_API_KEY;
 
     await expect(
-      createInterviewRoomGrant({ applicationId: "app-1", instructions: "x" }),
+      createInterviewRoomGrant({ applicationId: "app-1" }),
     ).rejects.toThrow(/LIVEKIT/);
     expect(mockCreateRoom).not.toHaveBeenCalled();
   });

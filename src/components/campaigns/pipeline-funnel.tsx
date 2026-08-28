@@ -153,6 +153,15 @@ export const FUNNEL_STAGES: FunnelStage[] = [
 ];
 
 /**
+ * The same stages, keyed, so a caller that wants one by name does not have to
+ * `.find()` it and cast the `undefined` away — a cast the type system cannot
+ * check, over a list that is not the domain list.
+ */
+export const FUNNEL_STAGE_BY_KEY: Record<string, FunnelStage> = Object.fromEntries(
+  FUNNEL_STAGES.map((stage) => [stage.key, stage]),
+);
+
+/**
  * Terminal housekeeping bucket. Not part of the forward funnel and only shown
  * where archived applications are split out of Rejected (the candidate list).
  */

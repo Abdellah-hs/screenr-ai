@@ -217,15 +217,62 @@ describe("evaluateScreeningScoringOutcome", () => {
       expect(decisions[1].toState).toBe("interview_invited");
     });
 
-    it("chains screening_scored → rejected when score < threshold", () => {
+    /**
+     * The threshold advances; it does not reject. A candidate who held a live
+     * voice call is never auto-rejected on the strength of one number — the
+     * same rule the interview stage has always had, one stage earlier.
+     */
+    it("rests at screening_scored when score < threshold, rather than rejecting", () => {
       const decisions = evaluateScreeningScoringOutcome(
         { overall_score: 40 },
         makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
       );
 
-      expect(decisions).toHaveLength(2);
-      expect(decisions[1].toState).toBe("rejected");
-      expect(decisions[1].rationale).toContain("below threshold");
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].toState).toBe("screening_scored");
+    });
+
+    it("never auto-rejects at any score, however low", () => {
+      for (const overall_score of [0, 1, 25, 55, 69]) {
+        const decisions = evaluateScreeningScoringOutcome(
+          { overall_score },
+          makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+        );
+
+        expect(decisions.map((d) => d.toState), `score ${overall_score}`).not.toContain(
+          "rejected",
+        );
+      }
+    });
+
+    /**
+     * A rest is not a pass. The audit log is where a recruiter finds out why an
+     * application stopped, so the rationale has to say it fell short — not just
+     * that a score was recorded.
+     */
+    it("says the score fell short, so the rest is not read as a pass", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 40 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions[0].rationale).toContain("below threshold");
+    });
+
+    /**
+     * The point of keeping the threshold at all: a passing candidate is invited
+     * without waiting on anyone. Only the irreversible half became human.
+     */
+    it("still advances a pass without a person, so the mode is still automatic", () => {
+      const decisions = evaluateScreeningScoringOutcome(
+        { overall_score: 71 },
+        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
+      );
+
+      expect(decisions.map((d) => d.toState)).toEqual([
+        "screening_scored",
+        "interview_invited",
+      ]);
     });
   });
 

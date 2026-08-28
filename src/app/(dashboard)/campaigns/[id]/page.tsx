@@ -1,52 +1,54 @@
 import Link from "next/link";
+import { Breadcrumb } from "@/components/ui";
 import { notFound } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getAuthUser } from "@/lib/auth/guards";
 import { getCampaignById } from "@/lib/actions/campaigns";
-import { getCandidatesByCampaignId } from "@/lib/actions/candidates";
+import { getCampaignPipelineSummary } from "@/lib/actions/candidates";
 import { getScreeningQuestions } from "@/lib/actions/screening-questions";
 import { getLinkedInConnectionStatus } from "@/lib/actions/integrations";
 import { fetchCampaignHistory } from "@/lib/data/transitions";
 import RubricDisplay from "@/components/campaigns/rubric-display";
 import ScreeningQuestionsEditor from "@/components/campaigns/screening-questions-editor";
 import CloneCampaignButton from "@/components/campaigns/clone-campaign-button";
-import { PipelineFunnel, FUNNEL_STAGES } from "@/components/campaigns/pipeline-funnel";
+import { PipelineFunnel } from "@/components/campaigns/pipeline-funnel";
 import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
 import { CampaignApplyLink } from "@/components/campaigns/campaign-apply-link";
 import { SocialPostGenerator } from "@/components/campaigns/social-post-generator";
-import { CampaignStagePreview } from "@/components/campaigns/campaign-stage-preview";
 import {
   CampaignHistoryCard,
   CampaignReviewersCard,
-  CampaignRunCard,
   CampaignSlaCard,
 } from "@/components/campaigns/campaign-run-card";
-import { defaultPreviewStage } from "@/lib/campaigns/detail-view";
+import { CAMPAIGN_DETAIL_TABS, resolveDetailTab } from "@/lib/campaigns/detail-view";
 import { SLA_STAGES } from "@/lib/constants";
+import { applyGateBlocker } from "@/lib/rules/campaign-status";
 import { isTeamReviewersEnabled } from "@/lib/flags";
 import { uuidSchema } from "@/lib/validations";
-
-const SEVEN_DAYS_MS = 7 * 86_400_000;
 
 export default async function CampaignDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ stage?: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { id } = await params;
   // A malformed id (e.g. /campaigns/undefined) is a 404 — bail before any of
   // the parallel fetches below run a query against a garbage uuid.
   if (!uuidSchema.safeParse(id).success) notFound();
 
-  const { stage: requestedStage } = await searchParams;
+  const { tab: requestedTab } = await searchParams;
+  const tab = resolveDetailTab(requestedTab);
 
   // Every fetch below is owner-scoped in its own action; `getCampaignById`
   // returning null is what 404s a campaign the viewer does not own.
-  const [campaign, candidates, screeningQuestions, linkedInStatus, history] =
+  const [campaign, pipeline, screeningQuestions, linkedInStatus, history] =
     await Promise.all([
       getCampaignById(id),
-      getCandidatesByCampaignId(id),
+      // Counts, not candidates. This page renders nobody's name, so it asks for
+      // the six numbers it draws rather than every applicant's parsed CV and
+      // resume evaluation.
+      getCampaignPipelineSummary(id),
       getScreeningQuestions(id),
       getLinkedInConnectionStatus(),
       fetchCampaignHistory(id).catch(() => []),
@@ -56,66 +58,44 @@ export default async function CampaignDetailPage({
     notFound();
   }
 
-  const supabase = await createClient();
-  const { data: authUser } = await supabase.auth.getUser();
-  const ownerEmail = authUser.user?.email ?? "You";
+  // Reads the request-scoped memo the fetches above already filled, rather than
+  // opening a Supabase client here: a page is not a data layer, and this was a
+  // second serial round trip to the auth server for an email that only renders
+  // when the team-reviewers flag is on.
+  const ownerEmail = (await getAuthUser())?.email ?? "You";
 
-  // One clock reading for the whole page, so two rows that entered a stage at
-  // the same moment can never disagree about how long they have been there.
+  // The history card's clock. The pipeline counts carry their own reading,
+  // taken inside `getCampaignPipelineSummary` alongside the rows it measured.
   const now = new Date();
 
-  const stageCounts: Record<string, number> = {};
-  for (const c of candidates) {
-    const stageStr = String(c.stage);
-    stageCounts[stageStr] = (stageCounts[stageStr] || 0) + 1;
-  }
+  // Every count on this page comes from one pass in `summarisePipeline`, which
+  // reads the same SLA rule the candidate table badges with — so the funnel,
+  // the overdue banner and that list can never disagree about who is overdue.
+  const {
+    stageCounts,
+    breachesByStage,
+    overdueTotal,
+    staleScoreCount,
+    recentApplications,
+    total: candidateCount,
+  } = pipeline;
 
-  // Breaches per stage, from the same `sla` the candidate table badges — one
-  // definition of overdue, so this page and that list can never disagree.
-  const breachesByStage: Record<string, number> = {};
-  for (const c of candidates) {
-    if (c.sla) breachesByStage[c.stage] = (breachesByStage[c.stage] ?? 0) + 1;
-  }
-  const overdueTotal = Object.values(breachesByStage).reduce((a, b) => a + b, 0);
   const worstStage = SLA_STAGES.find((s) => (breachesByStage[s.key] ?? 0) > 0);
 
-  const previewStage =
-    requestedStage && FUNNEL_STAGES.some((s) => s.key === requestedStage)
-      ? requestedStage
-      : defaultPreviewStage(stageCounts);
-  const previewStageName =
-    FUNNEL_STAGES.find((s) => s.key === previewStage)?.name ?? "this stage";
-  const previewCandidates = candidates
-    .filter((c) => c.stage === previewStage && !c.is_archived)
-    .sort(
-      (a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime(),
-    );
-
-  // Candidates whose visible score predates the campaign's current rubric —
-  // the number the rubric panel reports so an old score is never silently
-  // compared to a new one.
-  const staleScoreCount = candidates.filter((c) =>
-    c.scores.some(
-      (score) =>
-        score.rubric_version != null &&
-        score.current_rubric_version != null &&
-        score.rubric_version !== score.current_rubric_version,
-    ),
-  ).length;
-
-  const recentApplications = candidates.filter(
-    (c) => now.getTime() - new Date(c.applied_at).getTime() <= SEVEN_DAYS_MS,
-  ).length;
-
-  // The pipeline is frozen unless the campaign is Active — the public apply link
-  // stops accepting submissions and screening sends pause. Explain why below.
+  // Two different questions, and conflating them is what let this page tell a
+  // recruiter their link was taking CVs while the apply page turned candidates
+  // away. `isActive` is about PROCESSING: draft/paused/closed freeze scoring
+  // and screening sends. The apply link has two further gates on top of it —
+  // the intake switch and an enforced deadline — so it reads the same rule the
+  // public page reads rather than re-deriving one from the status.
   const isActive = campaign.status === "active";
+  const applyBlocker = applyGateBlocker(campaign, now);
 
   const meta = [
     campaign.department,
     campaign.location,
     `${campaign.positions} ${campaign.positions === 1 ? "position" : "positions"}`,
-    `${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"}`,
+    `${candidateCount} ${candidateCount === 1 ? "candidate" : "candidates"}`,
     campaign.created_at
       ? `created ${new Date(campaign.created_at).toLocaleDateString("en-US", {
           day: "numeric",
@@ -125,57 +105,79 @@ export default async function CampaignDetailPage({
   ].filter(Boolean);
 
   return (
-    <div className="mx-auto max-w-[1280px]">
-      {/* Breadcrumb row carries the page's own actions: the navbar is a bell
-          and nothing else, so Clone and Edit live in the body. */}
-      <div className="mb-[18px] flex flex-wrap items-center gap-2.5">
-        <Link
-          href="/campaigns"
-          className="text-[13px] text-[#6B7280] transition-colors duration-150 hover:text-ink"
-        >
-          Campaigns
-        </Link>
-        <span className="text-[13px] text-[#D1D5DB]">/</span>
-        <span className="text-[13px] text-ink">{campaign.title}</span>
+    // Two tabs, two layouts, because they hold two different kinds of content.
+    //
+    // Pipeline is a dashboard — a funnel and two short cards — so from `lg` up
+    // it claims the viewport and nothing scrolls but its rail.
+    //
+    // Setup is a document. Its panels are a rubric of three tables and a list
+    // of questions, both of which run past any height you could give them, so
+    // locking them to the viewport meant a fixed-height scroller slicing a
+    // criterion (and a question) in half against a straight edge. Setup is
+    // therefore ordinary flow: <main> scrolls, and every panel is whole.
+    <div
+      className={`mx-auto flex max-w-[1280px] flex-col ${
+        tab === "pipeline" ? "lg:h-full" : ""
+      }`}
+    >
+      {/* The trail carries the page's own actions: the navbar is a bell and
+          nothing else, so Clone and Edit live in the body. */}
+      <Breadcrumb
+        className="mb-[18px] shrink-0"
+        items={[
+          { label: "Campaigns", href: "/campaigns" },
+          { label: campaign.title },
+        ]}
+        actions={
+          <>
+            <CloneCampaignButton campaignId={campaign.id} />
+            <Link
+              href={`/campaigns/${campaign.id}/edit`}
+              className="inline-flex min-h-10 items-center rounded-lg border border-[#D1D5DB] bg-white px-3.5 text-[13px] font-semibold text-[#374151] transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink"
+            >
+              Edit
+            </Link>
+          </>
+        }
+      />
 
-        <span className="ml-auto flex items-center gap-2.5">
-          <CloneCampaignButton campaignId={campaign.id} />
-          <Link
-            href={`/campaigns/${campaign.id}/edit`}
-            className="inline-flex min-h-10 items-center rounded-lg border border-[#D1D5DB] bg-white px-3.5 text-[13px] font-semibold text-[#374151] transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink"
-          >
-            Edit
-          </Link>
-        </span>
-      </div>
-
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-6">
-        <div className="min-w-0">
-          <div className="mb-1.5 flex flex-wrap items-center gap-3">
-            <h1 className="font-heading text-[32px] font-semibold tracking-[-0.025em] text-ink">
-              {campaign.title}
-            </h1>
-            <CampaignStatusChanger
-              campaignId={campaign.id}
-              currentStatus={campaign.status ?? "draft"}
-              acceptingApplications={campaign.accepting_applications}
-            />
-          </div>
-          <p className="text-sm text-[#6B7280]">{meta.join(" · ")}</p>
+      <div className="mb-6 min-w-0 shrink-0">
+        <div className="mb-1.5 flex flex-wrap items-center gap-3">
+          <h1 className="font-heading text-[32px] font-semibold tracking-[-0.025em] text-ink">
+            {campaign.title}
+          </h1>
+          <CampaignStatusChanger
+            campaignId={campaign.id}
+            currentStatus={campaign.status ?? "draft"}
+            acceptingApplications={campaign.accepting_applications}
+            applyBlocker={applyBlocker}
+          />
         </div>
-
-        {/* The one ink button on the page: it is where a person goes to act on
-            somebody. Clone and Edit are campaign admin, so they stay outlined. */}
-        <Link
-          href={`/campaigns/${campaign.id}/candidates`}
-          className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg border border-ink bg-ink px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-ink-hover focus-visible:outline-[3px] focus-visible:outline-primary/45 focus-visible:outline-offset-2"
-        >
-          View all candidates
-          <span className="rounded-full bg-white/[0.16] px-[7px] py-px text-xs font-semibold tabular-nums">
-            {candidates.length}
-          </span>
-        </Link>
+        <p className="text-sm text-[#6B7280]">{meta.join(" · ")}</p>
       </div>
+
+      {/* Two jobs, two tabs. The daily half used to sit above a fold of
+          configuration nobody reads that day. Links, not buttons: the tab is a
+          URL, so this page stays a Server Component and Back works. */}
+      <nav aria-label="Campaign sections" className="mb-6 flex shrink-0 items-center gap-1 border-b border-[#E5E7EB]">
+        {CAMPAIGN_DETAIL_TABS.map((t) => {
+          const current = t.key === tab;
+          return (
+            <Link
+              key={t.key}
+              href={`/campaigns/${id}?tab=${t.key}`}
+              aria-current={current ? "page" : undefined}
+              className={`-mb-px border-b-2 px-3.5 pb-2.5 pt-1 text-[13px] font-semibold transition-colors duration-150 ${
+                current
+                  ? "border-ink text-ink"
+                  : "border-transparent text-[#6B7280] hover:text-ink"
+              }`}
+            >
+              {t.label}
+            </Link>
+          );
+        })}
+      </nav>
 
       {/* Screening questions are a hard prerequisite: approving a candidate
           into screening is blocked until the campaign has them. Surface that
@@ -199,12 +201,12 @@ export default async function CampaignDetailPage({
           <p className="text-[13px] leading-[1.55] text-[#92400E]">
             This campaign has no screening questions yet — candidates can&apos;t be
             approved into screening until it does.{" "}
-            <a
-              href="#screening-questions"
+            <Link
+              href={`/campaigns/${id}?tab=setup#screening-questions`}
               className="font-semibold underline hover:text-[#78350F]"
             >
               Set up screening questions
-            </a>
+            </Link>
           </p>
         </div>
       )}
@@ -250,17 +252,24 @@ export default async function CampaignDetailPage({
         </div>
       )}
 
-      <div className="grid items-start gap-6 lg:[grid-template-columns:minmax(0,1.62fr)_minmax(0,1fr)]">
-        {/* ── Main column ── */}
-        <div className="flex flex-col gap-6">
-          <section className="rounded-xl border border-[#E5E7EB] bg-white p-[22px] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+      {tab === "pipeline" && (
+        <div className="grid gap-6 lg:min-h-0 lg:flex-1 lg:[grid-template-columns:minmax(0,1.62fr)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-6 lg:min-h-0">
+          <section className="shrink-0 rounded-xl border border-[#E5E7EB] bg-white p-[22px] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
             <div className="mb-4 flex items-center justify-between gap-3.5">
               <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
                 Pipeline
               </h2>
-              <span className="text-xs text-[#6B7280]">
-                Click a stage to see who is in it
-              </span>
+              {/* The link, not an instruction. "Click a stage to see who is in
+                  it" described the in-page preview that used to sit below; with
+                  that gone a stage click opens the real table, and the header
+                  says where it goes rather than what to do. */}
+              <Link
+                href={`/campaigns/${id}/candidates`}
+                className="text-[13px] font-semibold text-primary hover:underline"
+              >
+                Open the full table →
+              </Link>
             </div>
 
             {!isActive && (
@@ -291,97 +300,134 @@ export default async function CampaignDetailPage({
             <PipelineFunnel
               campaignId={id}
               stageCounts={stageCounts}
-              total={candidates.length}
-              activeStage={previewStage}
-              hrefFor={(key) => `/campaigns/${id}?stage=${key}#candidates`}
+              total={candidateCount}
+              hrefFor={(key) => `/campaigns/${id}/candidates?stage=${key}`}
             />
           </section>
 
-          <CampaignStagePreview
-            campaignId={id}
-            stageKey={previewStage}
-            stageName={previewStageName}
-            candidates={previewCandidates}
-            total={previewCandidates.length}
-            now={now}
-          />
+          </div>
 
-          {/* Evaluation Rubrics (resume rubric drives CV scoring — issue #65) */}
-          {campaign.rubrics.length > 0 && (
+          {/* ── Right rail · Pipeline ── what the campaign is doing now. */}
+          <div className="flex flex-col gap-6 lg:min-h-0 lg:overflow-y-auto">
+            <CampaignSlaCard
+              campaignId={campaign.id}
+              timers={campaign.sla_timers}
+              breachesByStage={breachesByStage}
+            />
+
+            <CampaignHistoryCard campaignId={campaign.id} entries={history} now={now} />
+          </div>
+        </div>
+      )}
+
+      {tab === "setup" && (
+        // A 340px rail, not a 1fr one. The right column carries two small
+        // utility cards; at `1fr` it took 37% of the page and spent most of it
+        // on white space, while the rubric table it was taking the width from
+        // was the thing being squeezed into a scroller. `items-start` so a
+        // short rail simply ends instead of stretching to the tall column.
+        <div className="grid items-start gap-6 lg:[grid-template-columns:minmax(0,1fr)_340px]">
+          <div className="flex min-w-0 flex-col gap-6">
+            {/* Evaluation rubrics (the resume rubric drives CV scoring — #65).
+                Natural height, both of them: whichever is longer is longer,
+                and the page carries it.
+
+                Rendered unconditionally now that the card can be edited in
+                place — a campaign with no rubric is exactly the one that needs
+                the button, and hiding the card hid the button with it. */}
             <RubricDisplay
               rubrics={campaign.rubrics}
               campaignId={campaign.id}
               staleScoreCount={staleScoreCount}
+              description={campaign.description ?? undefined}
             />
-          )}
 
-          {/* Screening Questions — the anchor is the target of the empty-set
-              banner above and of the pointer on the edit page. */}
-          <div id="screening-questions" className="scroll-mt-6">
-            <ScreeningQuestionsEditor
-              campaignId={id}
-              initialQuestions={screeningQuestions.map((q) => ({
-                id: q.id,
-                prompt: q.prompt,
-              }))}
-              canGenerate={(campaign.description?.trim().length ?? 0) >= 10}
-            />
+            {/* Screening Questions — the anchor is the target of the empty-set
+                banner above and of the pointer on the edit page. */}
+            <div id="screening-questions" className="scroll-mt-6">
+              <ScreeningQuestionsEditor
+                campaignId={id}
+                initialQuestions={screeningQuestions.map((q) => ({
+                  id: q.id,
+                  prompt: q.prompt,
+                }))}
+                canGenerate={(campaign.description?.trim().length ?? 0) >= 10}
+                // The screening rubric these answers are scored against — used
+                // to warn when a dimension has no question, and to draft
+                // questions that probe the rubric, not the description alone.
+                rubricDimensions={
+                  campaign.rubrics
+                    .find((r) => r.stage === "screening_q")
+                    ?.dimensions.map((d) => ({ id: d.id, name: d.name })) ?? []
+                }
+              />
+            </div>
           </div>
 
-          {/* AI social-post generator — drafts shareable "we're hiring" copy per
-              channel (review-then-post; nothing publishes on its own). */}
-          <SocialPostGenerator
-            title={campaign.title}
-            description={campaign.description}
-            department={campaign.department}
-            location={campaign.location}
-            slug={campaign.public_slug}
-            linkedInConnected={linkedInStatus.connected}
-          />
-        </div>
+          {/* ── Right rail · Setup ── everything that brings candidates in.
+              One heading over both cards, because "apply link" and "social
+              post" are one job seen twice, and a rail of unrelated boxes is
+              what made this column read as leftovers. */}
+          <div className="flex flex-col gap-4">
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+              Bringing candidates in
+            </h2>
 
-        {/* ── Right rail ── */}
-        <div className="flex flex-col gap-6">
-          {campaign.public_slug && (
-            <CampaignApplyLink
+            {campaign.public_slug ? (
+              <CampaignApplyLink
+                slug={campaign.public_slug}
+                blocker={applyBlocker}
+                recentApplications={recentApplications}
+              />
+            ) : (
+              // Said, not hidden. Rendering nothing left the rail looking
+              // merely empty while the card below it drafted posts with no
+              // link in them — the recruiter's next move depends on knowing
+              // which of the two happened.
+              <div className="rounded-xl border border-[#E5E7EB] bg-white p-[22px] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+                  Public apply link
+                </h3>
+                <p className="text-[13px] leading-[1.55] text-[#6B7280]">
+                  This campaign has no public apply link, so there is no page to
+                  share and a drafted post will not carry one.
+                </p>
+              </div>
+            )}
+
+            {/* AI social-post generator — drafts shareable "we're hiring" copy
+                per channel (review-then-post; nothing publishes on its own). */}
+            <SocialPostGenerator
+              title={campaign.title}
+              description={campaign.description}
+              department={campaign.department}
+              location={campaign.location}
               slug={campaign.public_slug}
-              isActive={isActive}
-              recentApplications={recentApplications}
+              linkedInConnected={linkedInStatus.connected}
             />
-          )}
 
-          <CampaignRunCard
-            campaignId={campaign.id}
-            automationMode={campaign.automation_mode}
-            resumeThreshold={campaign.resume_threshold}
-            screeningThreshold={campaign.screening_threshold}
-            interviewPersona={campaign.interview_persona}
-          />
+            {/* Reviewers are behind the same flag as the editor that creates
+                them: `campaign_reviewers` grants nothing under RLS yet (#132),
+                so listing people here would advertise access they lack.
 
-          <CampaignSlaCard
-            campaignId={campaign.id}
-            timers={campaign.sla_timers}
-            breachesByStage={breachesByStage}
-          />
-
-          {/* Reviewers are behind the same flag as the editor that creates
-              them: `campaign_reviewers` grants nothing under RLS yet (#132), so
-              listing people here would advertise access they do not have. */}
-          {isTeamReviewersEnabled() && (
-            <CampaignReviewersCard
-              ownerEmail={ownerEmail}
-              reviewers={campaign.reviewers.map((r) => ({
-                id: r.id,
-                name: r.name,
-                email: r.email,
-                role: r.role,
-              }))}
-            />
-          )}
-
-          <CampaignHistoryCard campaignId={campaign.id} entries={history} now={now} />
+                Outside the heading above, and spaced away from it: who reviews
+                this campaign is not part of bringing candidates in. */}
+            {isTeamReviewersEnabled() && (
+              <div className="mt-2">
+                <CampaignReviewersCard
+                  ownerEmail={ownerEmail}
+                  reviewers={campaign.reviewers.map((r) => ({
+                    id: r.id,
+                    name: r.name,
+                    email: r.email,
+                    role: r.role,
+                  }))}
+                />
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

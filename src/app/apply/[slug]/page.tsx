@@ -5,6 +5,17 @@ import BrandPanel from "./brand-panel";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The whole resume-ingest pipeline runs in `after()` on `submitApplication`,
+ * and deferred work is billed against the segment that invoked the action —
+ * so this number, not the default 60s, is the real budget for Marker
+ * extraction + OpenAI classification + scoring. The candidate's own response
+ * is unaffected: they get their confirmation screen in milliseconds either
+ * way. Matches the backfill route, which re-reads CVs through the same
+ * extractor.
+ */
+export const maxDuration = 300;
+
 function InfoCard({
   tone,
   title,

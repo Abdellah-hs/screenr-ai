@@ -24,14 +24,18 @@ export function TalentPoolButton({
   candidateName,
   initialState,
   suggestions = [],
-  full = false,
+  size = "inline",
 }: {
   applicationId: string;
   candidateName: string;
   initialState: CandidatePoolState;
   suggestions?: string[];
-  /** Full-width, for the stacked decision rail. */
-  full?: boolean;
+  /**
+   * `inline` — beside body copy. `bar` — the pinned decision bar, where it
+   * must match the height of the actions it sits next to. `full` — stacked
+   * full-width in a rail.
+   */
+  size?: "inline" | "bar" | "full";
 }) {
   const [state, setState] = useState(initialState);
   const [open, setOpen] = useState(false);
@@ -47,9 +51,11 @@ export function TalentPoolButton({
             : "Keep this candidate for a future role"
         }
         className={[
-          full
+          size === "full"
             ? "flex min-h-11 w-full justify-center gap-2 text-[13px] font-semibold"
-            : "inline-flex gap-1.5 px-4 py-2 text-sm font-medium",
+            : size === "bar"
+              ? "inline-flex min-h-11 w-max justify-center gap-2 whitespace-nowrap text-[13px] font-semibold"
+              : "inline-flex gap-1.5 px-4 py-2 text-sm font-medium",
           "cursor-pointer items-center rounded-lg border px-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]",
           state.pooled
             ? "border-[#A7F3D0] bg-[#ECFDF5] text-[#047857] hover:brightness-95"

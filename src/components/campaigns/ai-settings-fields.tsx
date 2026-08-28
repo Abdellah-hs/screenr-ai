@@ -72,7 +72,9 @@ export default function AiSettingsFields({
               <option key={m.value} value={m.value}>{m.label}</option>
             ))}
           </select>
-          <p className="text-xs text-[#6B7280] mt-1">Controls how much AI acts autonomously</p>
+          <p className="text-xs text-[#6B7280] mt-1">
+            Whether the pipeline waits for a person. The AI only ever scores.
+          </p>
         </div>
 
         <div>

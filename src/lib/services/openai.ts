@@ -17,7 +17,12 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-function assertApiKeyConfigured(): void {
+/**
+ * Every OpenAI-backed service fails the same way when the key is missing.
+ * Exported so the message and the check live in one place rather than in six
+ * copies of one string literal.
+ */
+export function assertApiKeyConfigured(): void {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -132,6 +137,7 @@ Rules:
 - "languages" are spoken/written languages (e.g. "English", "French"). Do not put programming languages here.
 - "certifications" are credentialed certifications by name (e.g. "AWS Solutions Architect"). Coursework belongs in education, not here.
 - "linkedin_url", "github_url", and "portfolio_url" are distinct: the LinkedIn profile, the GitHub profile (github.com/...), and a personal website/portfolio respectively. Never put a GitHub link in portfolio_url.
+- "portfolio_url" is a site the candidate owns — their own portfolio, personal site or blog. The website of an employer, client, university or project sponsor is not theirs, even when the resume prints it beside their name. If the resume names no site of their own, return null.
 - For each education entry, fill year_start and year_end as the candidate writes them (e.g. "2021", "2023", "Present", "Présent"). If the resume only gives a graduation year, leave year_start null and put the year in year_end.
 - For experience, summarize responsibilities in one short description.
 - Return only the structured data required by the schema.`,
@@ -287,10 +293,17 @@ Rules:
     is_active: true,
     // The AI returns intent (importance + mandatory); the numeric weight /
     // fail line / scale are derived from it, same as a hand-built rubric.
+    //
+    // Must-have is cleared in CODE for screening and interview, not merely
+    // asked for in the prompt. Neither stage has a gate — nothing rejects on a
+    // failed dimension there — and no editor control renders the flag on them,
+    // so a stray mandatory dimension would be invisible to the recruiter and
+    // impossible for them to clear. Clearing the flag also clears the derived
+    // `min_score`, so the stored row does not describe a fail line either.
     dimensions: deriveDimensionFields(
       parsed[stage].map((d, i) => ({
         importance: d.importance,
-        is_mandatory: d.is_mandatory,
+        is_mandatory: stage === "resume" ? d.is_mandatory : false,
         name: d.name,
         sort_order: i,
       })),
@@ -528,7 +541,20 @@ export async function generateSocialPosts(input: SocialPostInput): Promise<Socia
 // runs. An evidence level is a reading, and readings repeat.
 
 export const RESUME_EVIDENCE_MODEL = "gpt-4o-mini";
-export const RESUME_EVIDENCE_PROMPT_VERSION = "v3_resume_evidence";
+
+/**
+ * Bumped whenever `EVIDENCE_LEVEL_DEFINITIONS` or the rules below change, because
+ * both are pasted into the system prompt verbatim — the version IS the wording.
+ * It sits in the cache key, so a reworded question invalidates every cached
+ * reading rather than serving an answer to the old one, and it is stored on each
+ * audit row so a past score still says which definitions produced it.
+ *
+ * `v4` (2026-08-23) replaced prose definitions with counted, checkable ones:
+ * numbers of examples and duration floors instead of "meaningful" and
+ * "substantial". Two readers should reach the same level from the same CV, and
+ * an adjective is not a test.
+ */
+export const RESUME_EVIDENCE_PROMPT_VERSION = "v4_resume_evidence";
 
 /**
  * Fixed seed so repeated extraction over the same CV is reproducible. With

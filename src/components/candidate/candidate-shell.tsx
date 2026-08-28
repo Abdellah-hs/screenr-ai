@@ -85,9 +85,14 @@ export function CandidateShell({
                     role="timer"
                     className={cn(
                       "inline-flex items-center gap-1.5 rounded-full px-[11px] py-[5px] text-sm font-semibold tabular-nums",
+                      // Blue while there is time, red under a minute. The
+                      // countdown is a fact about the page rather than
+                      // something to act on, so it wears the informational
+                      // family — the same pair as ShellIcon's `info` tone —
+                      // and the single change to red stays the only alarm.
                       status.clockUrgent
                         ? "bg-[#FEF2F2] text-[#DC2626]"
-                        : "bg-[#F3F4F6] text-[#374151]",
+                        : "bg-[#EFF6FF] text-[#1D4ED8]",
                     )}
                   >
                     <svg
@@ -167,3 +172,91 @@ export const SHELL_SECONDARY =
   "rounded-xl border border-[#D1D5DB] bg-white px-4 text-[15px] font-semibold text-[#374151] " +
   "transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary";
+
+/** Centred 19px heading — every terminal state opens with one. */
+export function Heading({ children }: { children: ReactNode }) {
+  return (
+    <p className="mb-2 text-center text-[19px] font-semibold text-ink">{children}</p>
+  );
+}
+
+/** The paragraph under a Heading. */
+export function Body({ children }: { children: ReactNode }) {
+  return (
+    <p className="mx-auto mb-6 max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
+      {children}
+    </p>
+  );
+}
+
+/** One promise, ticked. Used only in the pre-call list. */
+export function Assurance({ children }: { children: ReactNode }) {
+  return (
+    <li className="flex gap-[11px] text-sm leading-[1.5] text-[#374151]">
+      <svg
+        className="mt-0.5 h-4 w-4 shrink-0 text-[#059669]"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+        aria-hidden="true"
+      >
+        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+      </svg>
+      <span>{children}</span>
+    </li>
+  );
+}
+
+export function Deadline({ expiresAt }: { expiresAt?: string }) {
+  if (!expiresAt) return null;
+  return (
+    <p className="mt-3.5 text-center text-[13px] text-[#6B7280]">
+      Please complete by{" "}
+      <strong className="font-semibold text-[#374151]">
+        {formatDeadline(expiresAt)}
+      </strong>
+      .
+    </p>
+  );
+}
+
+/** Heroicons outline, inline. One wrapper so stroke width and caps never drift. */
+export function Icon({
+  d,
+  className = "h-8 w-8",
+  strokeWidth = 1.6,
+}: {
+  d: string;
+  className?: string;
+  strokeWidth?: number;
+}) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d={d} />
+    </svg>
+  );
+}
+
+/** "7:12". The live call clock, in the status bar and in the copy that quotes it. */
+export function formatClock(total: number): string {
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+export function formatDeadline(iso: string): string {
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}

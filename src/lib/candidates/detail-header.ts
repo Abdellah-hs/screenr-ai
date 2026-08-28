@@ -146,6 +146,13 @@ export interface StageScoreRow {
   detail: string;
   /** True once the pipeline has arrived here — drives the indigo vs grey rail. */
   reached: boolean;
+  /**
+   * The stage the pipeline is actually sitting in, as opposed to one it merely
+   * got past. Exactly the rows whose `detail` came from `scoreAbsenceLabel`,
+   * which is what makes "Screening expired" attributable to a stage: every
+   * earlier stage is `reached` too, and a lapse belongs to one of them.
+   */
+  current: boolean;
 }
 
 function shortDate(iso: string): string {
@@ -190,6 +197,7 @@ export function stageScoreRows(
           score.scored_at,
         )}`,
         reached: true,
+        current: rank === reachedRank,
       };
     }
 
@@ -212,9 +220,55 @@ export function stageScoreRows(
       tierLabel: null,
       detail,
       reached: rank <= reachedRank,
+      current: rank === reachedRank,
     };
   });
 }
+
+// ─── What each stage's assessment says about itself ──────────────────────────
+
+export interface StageAssessmentCopy {
+  /** e.g. "Voice screening · AI assessment" */
+  eyebrow: string;
+  /** e.g. "Screening score" */
+  title: string;
+  /** The "an AI wrote this" sentence, which differs by stage. Optional: the
+   *  resume stage dropped its own, and shows only the provenance. */
+  fallibility?: string;
+}
+
+/**
+ * The three fallibility notes, in one place.
+ *
+ * They are near-identical on purpose — a recruiter should meet the same
+ * sentence at every stage — and they differ in exactly one way: the interview
+ * score also admits that it never gates. That single difference is the whole
+ * reason this is a map and not a constant, and it is the first thing that
+ * would drift if each component wrote its own copy. The interview's entry sat
+ * unused on the candidate page for exactly that reason: the interview score
+ * renders from its own component, which had no attribution at all.
+ */
+export const STAGE_ASSESSMENT_COPY: Record<ScoreStage, StageAssessmentCopy> = {
+  resume: {
+    eyebrow: "CV · AI assessment",
+    // Not "CV score". This stage produces a pass/fail gate and a ranking over
+    // the optional criteria — two results, and neither is a grade for the CV.
+    // The old title made the smaller of the two sound like the verdict.
+    title: "CV assessment",
+  },
+  screening: {
+    eyebrow: "Voice screening · AI assessment",
+    title: "Screening score",
+    fallibility:
+      "An AI scored the transcript of a spoken call. It can be wrong, and it moved nobody.",
+  },
+  interview: {
+    eyebrow: "AI interview · AI assessment",
+    title: "Interview score",
+    fallibility:
+      "An AI scored the transcript. It can be wrong, it never gates, and it moved nobody.",
+  },
+};
 
 // ─── Prev / next within the stage ────────────────────────────────────────────
 
@@ -273,8 +327,13 @@ export interface InterviewAbsence {
  * across all of them on purpose: an empty proctoring section means the camera
  * never watched this person, which is *not* the same as a clean run, and that
  * distinction has to survive whichever branch produced the card.
+ *
+ * Exported for the same reason it is a constant: the candidate page's own
+ * "Never monitored" cards make exactly this claim, and had been making it in a
+ * second, differently-worded sentence. One claim, one wording — otherwise the
+ * two drift and a reader has to work out whether they mean the same thing.
  */
-const NEVER_WATCHED =
+export const NEVER_WATCHED =
   "Integrity monitoring has therefore never watched this candidate, which is not the same as a clean run.";
 
 export function interviewAbsence(status: ApplicationState): InterviewAbsence {
@@ -375,6 +434,12 @@ const RUBRIC_STAGE: Record<ScoreStage, "resume" | "screening_q" | "interview"> =
 /**
  * Which criteria the campaign marked must-have, so the score breakdown can say
  * which failures are disqualifying and which are preferences.
+ *
+ * **Resume is the only stage this is true of.** Screening and the interview
+ * have no must-have gate, so a "· must-have" suffix there would name a rule
+ * nothing enforces — the flag survives on old rows only because rubrics are
+ * never rewritten in place. Keyed by stage rather than hard-wired to resume so
+ * a caller has to say which stage it is asking about.
  */
 export function mandatoryDimensionNames(
   rubrics: { stage: string; dimensions: { name: string; is_mandatory: boolean }[] }[],
@@ -386,4 +451,68 @@ export function mandatoryDimensionNames(
       ?.dimensions.filter((d) => d.is_mandatory)
       .map((d) => d.name) ?? []
   );
+}
+
+// ─── Did this stage actually happen? ────────────────────────────────────────
+//
+// What decides, on the candidate detail page, between rendering a stage's
+// evidence and rendering a named absence in its place.
+//
+// These used to live in the page, under a comment reading "mirrors the guards
+// the components apply to themselves" — which is to say, the page re-derived
+// them and each component ALSO returned null on its own copy. That is fine
+// while the two agree and fails silently when they drift: the page renders the
+// panel, the panel renders nothing, and the recruiter gets a blank evidence
+// view with no absence card and no explanation. Untestable there, too, since
+// components are verified by hand.
+//
+// One definition, here, where it can be tested. The components' own early
+// returns become the caller's decision.
+
+/** The half of an interview session these predicates read. */
+export interface InterviewSessionLike {
+  status: string;
+  transcript?: unknown[] | null;
+}
+
+/**
+ * Did the candidate actually sit the interview?
+ *
+ * An `invited` session with an empty transcript is a pending link, not an
+ * interview — the pipeline stage already says so, and a transcript card over it
+ * would be an empty white box.
+ */
+export function interviewWasTaken(session: InterviewSessionLike | null): boolean {
+  if (!session) return false;
+  return !(session.status === "invited" && (session.transcript ?? []).length === 0);
+}
+
+/** The half of a screening response these predicates read. */
+export interface ScreeningResponseLike {
+  status: string;
+  transcript?: unknown[] | null;
+}
+
+/**
+ * Has the screening thread got anything on it yet?
+ *
+ * `not_sent` and `pending` are both "nothing has happened", and the difference
+ * between them is not something the thread can show.
+ */
+export function screeningWasSent(response: ScreeningResponseLike | null | undefined): boolean {
+  const status = response?.status ?? "not_sent";
+  return status !== "not_sent" && status !== "pending";
+}
+
+/**
+ * Did a voice call actually take place?
+ *
+ * A transcript with turns on it is what makes it a call; the status is what
+ * makes it a FINISHED one. Both, because a transcript can exist mid-call.
+ */
+export function screeningCallWasTaken(
+  response: ScreeningResponseLike | null | undefined,
+): boolean {
+  if ((response?.transcript ?? []).length === 0) return false;
+  return response?.status === "responded" || response?.status === "scored";
 }

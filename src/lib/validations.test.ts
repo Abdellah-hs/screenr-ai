@@ -307,10 +307,17 @@ describe('parseCampaignFormData', () => {
     ]);
   });
 
-  it('returns no screening questions when the field is absent', () => {
+  /**
+   * `null`, not `[]`. An edit form that does not carry the field is saying
+   * "I do not manage questions", which must leave the stored set alone; an
+   * empty array is the recruiter having removed the last one. A parser that
+   * returned `[]` for both would let any caller that forgets the field wipe a
+   * campaign's whole question set.
+   */
+  it('reports the screening question field as absent rather than empty', () => {
     const fd = buildFormData();
     const result = parseCampaignFormData(fd);
-    expect(result.screeningQuestions).toEqual([]);
+    expect(result.screeningQuestions).toBeNull();
   });
 
   // An empty set is legal at creation: a recruiter without a job description

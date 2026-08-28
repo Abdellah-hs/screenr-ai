@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { bulkCandidateAction } from "@/lib/actions/bulk-candidates";
 import { PoolCurationFields } from "@/components/candidates/pool-curation-fields";
 import { Modal, ModalFooter, ModalHeader } from "@/components/ui";
-import { formatApplicationState, type Candidate } from "@/lib/constants";
+import { formatApplicationState, type CandidateListRow } from "@/lib/constants";
 import { planBulkAction, type BulkAction, type BulkResult } from "@/lib/rules/bulk-actions";
 
 /** Mirrors the server-side floor in `bulkCandidateActionSchema`. */
@@ -80,7 +80,7 @@ export function CandidateBulkActions({
   selected,
   onDone,
 }: {
-  selected: Candidate[];
+  selected: CandidateListRow[];
   onDone: () => void;
 }) {
   const [action, setAction] = useState<BulkAction | null>(null);

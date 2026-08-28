@@ -63,7 +63,14 @@ export function ScoreInline({
       <span className="w-[3px] shrink-0 bg-ai" aria-hidden="true" />
       <span className="inline-flex items-center gap-2 px-2.5 py-[5px]">
         <span className="text-sm font-semibold tabular-nums text-ink">{score}</span>
-        <span className="text-[11px] text-[#9CA3AF]">/100</span>
+        {/* "/100" claims a grade. An evidence-scored CV's number is a ranking
+            over the criteria — the `eligible` / `ineligible` tiers are the tell,
+            since no other scorer produces them — so it is labelled as one here
+            rather than sitting next to a denominator it does not have.
+            The graded stages keep the denominator, which is true of them. */}
+        <span className="text-[11px] text-[#9CA3AF]">
+          {tier === "eligible" || tier === "ineligible" ? "rank" : "/100"}
+        </span>
         {tier && (
           <span
             className={cn(
@@ -206,6 +213,9 @@ export function ScoreSection({
   fallibility,
   provenance,
   links,
+  lead = "score",
+  scoreLabel,
+  emptyScoreText = "Not scored",
 }: {
   /** e.g. "Voice screening · AI assessment" */
   eyebrow: string;
@@ -218,9 +228,27 @@ export function ScoreSection({
   /** Criterion names the rubric marks must-have, for the "· must-have" suffix. */
   mandatoryNames?: string[];
   /** The "an AI wrote this" sentence, which differs by stage. */
-  fallibility: string;
+  fallibility?: string;
   provenance: string;
   links?: { label: string; href: string }[];
+  /**
+   * Which of the two results is the headline.
+   *
+   * `"score"` for a stage whose number is a graded 0-100 over everything that
+   * was assessed — the screening and interview scores are exactly that, and the
+   * big figure is the right thing to lead with.
+   *
+   * `"verdict"` for the resume stage, where the two results answer different
+   * questions and the number is the *lesser* of them: a ranking that orders the
+   * candidates who already passed. Shown at 4xl beside an "Eligible" pill it
+   * read as a single self-contradicting grade — 13 out of 100, and yet passing.
+   * The gate is the decision; the ranking only sorts its survivors.
+   */
+  lead?: "score" | "verdict";
+  /** The word before the number when it is not the headline, e.g. "Ranking". */
+  scoreLabel?: string;
+  /** Shown in place of a null score — never a bare "/ 100" with nothing in it. */
+  emptyScoreText?: string;
 }) {
   const mandatory = new Set(mandatoryNames);
 
@@ -254,22 +282,68 @@ export function ScoreSection({
               </h3>
             </div>
 
-            <div className="shrink-0 text-right">
-              <div className="flex items-baseline justify-end gap-1.5">
-                <span className="text-4xl font-semibold tracking-[-0.025em] tabular-nums text-ink">
-                  {score}
-                </span>
-                <span className="text-[15px] text-[#9CA3AF]">/ 100</span>
-              </div>
-              {tier && (
-                <span
-                  className={cn(
-                    "mt-1.5 inline-block rounded-full border px-2.5 py-1 text-xs font-semibold",
-                    TIER_PILL_BORDERED[tier],
+            <div className="w-[224px] shrink-0 text-right">
+              {lead === "verdict" && tier ? (
+                <>
+                  {/* The gate first, at the size the decision deserves. */}
+                  <span
+                    className={cn(
+                      "inline-block rounded-full border px-3.5 py-1.5 text-base font-semibold",
+                      TIER_PILL_BORDERED[tier],
+                    )}
+                  >
+                    {TIER_LABELS[tier]}
+                  </span>
+                  <div className="mt-2.5 flex items-baseline justify-end gap-1.5">
+                    {scoreLabel && (
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9CA3AF]">
+                        {scoreLabel}
+                      </span>
+                    )}
+                    {score != null ? (
+                      <>
+                        <span className="text-xl font-semibold tabular-nums text-ink">
+                          {score}
+                        </span>
+                        <span className="text-[13px] text-[#9CA3AF]">/ 100</span>
+                      </>
+                    ) : (
+                      <span className="text-[13px] font-medium text-[#9CA3AF]">
+                        {emptyScoreText}
+                      </span>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-baseline justify-end gap-1.5">
+                    {score != null ? (
+                      <>
+                        <span className="text-4xl font-semibold tracking-[-0.025em] tabular-nums text-ink">
+                          {score}
+                        </span>
+                        <span className="text-[15px] text-[#9CA3AF]">/ 100</span>
+                      </>
+                    ) : (
+                      // A null score used to render "/ 100" with nothing before
+                      // it, which reads as a rendering failure rather than a
+                      // state. Every absence on this page is named.
+                      <span className="text-lg font-medium text-[#9CA3AF]">
+                        {emptyScoreText}
+                      </span>
+                    )}
+                  </div>
+                  {tier && (
+                    <span
+                      className={cn(
+                        "mt-1.5 inline-block rounded-full border px-2.5 py-1 text-xs font-semibold",
+                        TIER_PILL_BORDERED[tier],
+                      )}
+                    >
+                      {TIER_LABELS[tier]}
+                    </span>
                   )}
-                >
-                  {TIER_LABELS[tier]}
-                </span>
+                </>
               )}
             </div>
           </div>

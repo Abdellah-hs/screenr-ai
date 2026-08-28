@@ -36,8 +36,19 @@ import {
  * (`sendTransitionNotification`), the same way the Send button produces
  * `screening_sent`. The evidence-bearing states behind it
  * (`interview_completed` / `interview_scored`) remain system-only.
+ *
+ * `new` joined the list when `processing_failed` gained a recovery edge to it
+ * (the only edge into `new` — an application otherwise ARRIVES there). The
+ * artifact it asserts is a CV that was actually read. A recruiter who sets it
+ * by hand moves the application to "waiting to be scored" while its
+ * `parsed_data` is still the identity-only placeholder the failure path wrote,
+ * and the next scoring sweep grades that empty parse — producing a real number,
+ * and quite possibly a rejection, for a document nobody has opened. Only
+ * `reprocessFailedApplication` may put an application back into `new`, because
+ * only it has a parse to put there.
  */
 export const SYSTEM_PRODUCED_STATES: readonly ApplicationState[] = [
+  "new",
   "screening_sent",
   "screening_completed",
   "screening_scored",

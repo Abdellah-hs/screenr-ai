@@ -3,6 +3,7 @@
 import type { ScreeningCriterion, EvaluationRubric } from "@/lib/constants";
 import {
   aiDescriptionSchema,
+  rubricDimensionSuggestionSchema,
   generateDescriptionSchema,
   socialPostSchema,
   type GenerateDescriptionInput,
@@ -41,26 +42,32 @@ export async function generateRubricDimensions(
 }
 
 /**
- * Draft screening questions from a job description alone — no campaign row
- * needed. This is the create-form counterpart to
- * `generateScreeningQuestions(campaignId)` in `actions/screening-questions.ts`,
- * which reads the description back out of the database and so cannot run before
- * the campaign exists. Advisory only: it returns questions for the recruiter to
- * edit, and `createCampaign` is what persists them.
+ * Draft screening questions before the campaign row exists. This is the
+ * create-wizard counterpart to `generateScreeningQuestions(campaignId)` in
+ * `actions/screening-questions.ts`, which reads its inputs back out of the
+ * database and so cannot run before the campaign is saved. Advisory only: it
+ * returns questions for the recruiter to edit, and `createCampaign` persists
+ * them.
+ *
+ * The rubric comes from the caller because the wizard is *holding* it — the
+ * recruiter fills in the screening rubric on the same step, above this editor,
+ * and it lives in the draft. It used to send an empty list on the grounds that
+ * an unsaved campaign has no rubric to look up, which was true of the database
+ * and false of the screen: the questions were drafted blind against the very
+ * rubric their answers were about to be scored on.
  */
 export async function generateScreeningQuestionsFromDescription(
-  description: string
+  description: string,
+  rubricDimensionNames: string[] = []
 ): Promise<{ prompt: string }[]> {
   const userId = await requireUserId();
   checkRateLimit(userId, AI_GEN_LIMIT);
   const validatedDescription = aiDescriptionSchema.parse(description);
+  const names = rubricDimensionSuggestionSchema.parse(rubricDimensionNames);
+
   return generateQuestionsForRole({
-    // No campaign means no active resume rubric to ground against, so the
-    // description is the whole input — the same trade `generateScreeningCriteria`
-    // already makes on this form.
     jobDescription: validatedDescription,
-    screeningCriteria: [],
-    count: 5,
+    rubricDimensions: names.map((name) => ({ name })),
   });
 }
 

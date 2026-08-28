@@ -48,10 +48,21 @@ function createEmptyDimension(): RubricDimension {
     min_score: 0,
     max_score: 100,
     sort_order: 0,
+    // Scored unless the recruiter says otherwise.
   };
 }
 
-function seedRubrics(
+/**
+ * Every stage gets a rubric object, even an empty one.
+ *
+ * Exported because CONTROLLED mode does not run this — the owner of the state
+ * has to. `setDimensions` maps over the rubrics it was given, so a stage with
+ * no object silently swallows every dimension added to it: the row appears,
+ * the tab looks right, and nothing is stored. The wizard seeds all three in
+ * `emptyDraft`/`draftFromCampaign`; anything else controlling this editor has
+ * to do the same.
+ */
+export function seedRubrics(
   initialRubrics: EvaluationRubric[],
   campaignId: string,
 ): EvaluationRubric[] {
@@ -105,10 +116,11 @@ export default function RubricEditor({
   }
 
   /**
-   * Set a dimension's priority. On the resume stage `importance` is not a
-   * recruiter input, so it is derived here from the same choice — keeping the
-   * saved payload valid for every stage without exposing a control whose value
-   * resume scoring ignores.
+   * Set a dimension's priority. Resume-only — it is the one stage with a
+   * must-have gate, and the only stage that still renders this control.
+   * `importance` is not a recruiter input there, so it is derived from the same
+   * choice: the saved payload stays valid without exposing a second dial whose
+   * value resume scoring ignores.
    */
   function setPriority(dimId: string, isMandatory: boolean) {
     setDimensions(
@@ -117,7 +129,7 @@ export default function RubricEditor({
           ? {
               ...d,
               is_mandatory: isMandatory,
-              importance: isResumeStage ? (isMandatory ? "high" : "medium") : d.importance,
+              importance: isMandatory ? "high" : "medium",
             }
           : d,
       ),
@@ -222,15 +234,29 @@ export default function RubricEditor({
                 className="min-h-10 min-w-[150px] flex-1 rounded-lg border border-[#E5E7EB] bg-white px-3 text-[13px] text-ink outline-none transition-colors duration-150 placeholder:text-[#9CA3AF] focus:border-primary focus:outline-[3px] focus:outline-primary/20"
               />
 
-              <Segmented
-                ariaLabel={`${isResumeStage ? "Priority" : "Type"} for ${dim.name || "dimension"}`}
-                value={dim.is_mandatory ? "must" : "nice"}
-                onChange={(v) => setPriority(dim.id, v === "must")}
-                options={[
-                  { value: "must", label: "Must have" },
-                  { value: "nice", label: "Nice to have" },
-                ]}
-              />
+              {/* Must-Have is a RESUME control and nothing else. A must-have
+                  gate exists on exactly one stage, and only there is it
+                  checkable: a CV either states the qualification or it does
+                  not. Screening lost the control on 2026-08-21 and the
+                  interview loses it here, for the same reason and one more —
+                  `evaluateInterviewScoringOutcome` never rejects at any
+                  threshold, so an interview "Must have" could not knock anyone
+                  out even in principle. A control that labels a rule which
+                  does not exist is worse than no control: a recruiter ticking
+                  it reasonably expects a failure there to cost the candidate
+                  more, and it costs them nothing. Importance below is the real
+                  dial on both graded stages, and it feeds the weighted score. */}
+              {isResumeStage && (
+                <Segmented
+                  ariaLabel={`Priority for ${dim.name || "dimension"}`}
+                  value={dim.is_mandatory ? "must" : "nice"}
+                  onChange={(v) => setPriority(dim.id, v === "must")}
+                  options={[
+                    { value: "must", label: "Must have" },
+                    { value: "nice", label: "Nice to have" },
+                  ]}
+                />
+              )}
 
               {/* Resume screening asks for priority and nothing else.
                   Importance would be a second dial with no effect there —
@@ -266,45 +292,35 @@ export default function RubricEditor({
         </div>
       )}
 
-      {dimensions.length > 0 && (
-        <p className="text-xs text-[#6B7280]">
-          {isResumeStage ? (
-            <>
-              Every <strong>Must have</strong> criterion has to pass on its own — a strong{" "}
-              <strong>Nice to have</strong> can never make up for a missed one. Nice-to-haves
-              only rank the candidates who already passed every must-have.
-            </>
-          ) : (
-            <>
-              Weighting is set automatically from each dimension&apos;s importance. &ldquo;Must
-              have&rdquo; dimensions knock a candidate out if they fail them.
-            </>
-          )}
+      {/* Resume only. The must-have gate is the one rule here that rejects a
+          candidate outright, so it is worth a line; the graded stages just
+          weight and score, which the Importance control says on its own. */}
+      {dimensions.length > 0 && isResumeStage && (
+        <p className="text-xs leading-[1.55] text-[#6B7280]">
+          Miss a <strong className="font-semibold text-ink">Must have</strong> and the
+          candidate is rejected.
         </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-3.5">
-        <button
-          type="button"
-          onClick={() =>
-            setDimensions([
-              ...dimensions,
-              { ...createEmptyDimension(), sort_order: dimensions.length },
-            ])
-          }
-          className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-dashed border-[#D1D5DB] bg-white px-3 text-[13px] font-semibold text-[#374151] transition-colors duration-150 hover:border-[#9CA3AF] hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          Add dimension
-        </button>
-        <p className="min-w-[240px] flex-1 text-xs leading-[1.55] text-[#6B7280]">
-          <strong className="font-semibold text-ink">Must have</strong> dimensions
-          knock a candidate out if they fail them. Weighting is derived from
-          importance — there are no numbers to tune.
-        </p>
-      </div>
+      {/* Full width and the same radius as a dimension row, so it reads as the
+          slot the next row will occupy rather than as a button parked beside
+          the list. Blue on hover because adding an empty row is an affordance,
+          not a decision about a candidate — ink is reserved for the latter. */}
+      <button
+        type="button"
+        onClick={() =>
+          setDimensions([
+            ...dimensions,
+            { ...createEmptyDimension(), sort_order: dimensions.length },
+          ])
+        }
+        className="flex min-h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-[#D1D5DB] bg-white text-[13px] font-semibold text-[#4B5563] transition-colors duration-150 hover:border-primary hover:bg-[#F5F8FF] hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1"
+      >
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+        </svg>
+        Add dimension
+      </button>
 
       {/* The uncontrolled caller (the edit form) posts through this. The wizard
           serialises its own draft and never reads the DOM. */}

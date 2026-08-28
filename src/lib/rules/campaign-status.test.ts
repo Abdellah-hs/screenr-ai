@@ -5,6 +5,7 @@ import {
   isCampaignProcessingActive,
   isDeadlinePassed,
   isCampaignAcceptingApplications,
+  applyGateBlocker,
   decodeStatusSelection,
   encodeStatusSelection,
   settableStatusSelections,
@@ -132,6 +133,73 @@ describe("isCampaignAcceptingApplications", () => {
         now,
       ),
     ).toBe(true);
+  });
+});
+
+describe("applyGateBlocker", () => {
+  const now = new Date("2026-07-26T12:00:00Z"); // a day past the deadline below
+  const pastDeadline = "2026-07-25T00:00:00.000Z";
+
+  function gate(over: Partial<CampaignApplyGate> = {}): CampaignApplyGate {
+    return {
+      status: "active",
+      accepting_applications: true,
+      deadline: null,
+      deadline_enforced: false,
+      ...over,
+    };
+  }
+
+  it("names no blocker when all three gates are open", () => {
+    expect(applyGateBlocker(gate(), now)).toBeNull();
+  });
+
+  it("names not_active for a campaign that is not active", () => {
+    expect(applyGateBlocker(gate({ status: "paused" }), now)).toBe("not_active");
+  });
+
+  it("names intake_closed for an active campaign with intake switched off", () => {
+    expect(applyGateBlocker(gate({ accepting_applications: false }), now)).toBe(
+      "intake_closed",
+    );
+  });
+
+  it("names deadline_passed for an active, open campaign past its enforced deadline", () => {
+    expect(
+      applyGateBlocker(
+        gate({ deadline: pastDeadline, deadline_enforced: true }),
+        now,
+      ),
+    ).toBe("deadline_passed");
+  });
+
+  it("names the first shut gate, not the last — the one to open first", () => {
+    expect(
+      applyGateBlocker(
+        gate({
+          status: "draft",
+          accepting_applications: false,
+          deadline: pastDeadline,
+          deadline_enforced: true,
+        }),
+        now,
+      ),
+    ).toBe("not_active");
+  });
+
+  it("agrees with isCampaignAcceptingApplications on every gate", () => {
+    const cases: Partial<CampaignApplyGate>[] = [
+      {},
+      { status: "closed" },
+      { accepting_applications: false },
+      { deadline: pastDeadline, deadline_enforced: true },
+      { deadline: pastDeadline, deadline_enforced: false },
+    ];
+    for (const over of cases) {
+      expect(applyGateBlocker(gate(over), now) === null).toBe(
+        isCampaignAcceptingApplications(gate(over), now),
+      );
+    }
   });
 });
 

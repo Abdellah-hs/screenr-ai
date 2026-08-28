@@ -43,11 +43,11 @@ const {
   };
 });
 
-vi.mock("googleapis", () => ({
-  google: {
-    auth: { OAuth2: mockOAuth2 },
-    gmail: mockGmailFactory,
-  },
+// Mocks the Gmail subpath, not the `googleapis` root: the service imports the
+// subpath so the root barrel's 323 API surfaces stay out of the compile graph.
+vi.mock("googleapis/build/src/apis/gmail", () => ({
+  gmail: mockGmailFactory,
+  auth: { OAuth2: mockOAuth2 },
 }));
 
 import {

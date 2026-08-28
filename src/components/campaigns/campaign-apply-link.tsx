@@ -1,15 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { ApplyGateBlocker } from "@/lib/rules/campaign-status";
 
 interface CampaignApplyLinkProps {
   slug: string;
-  /** When the campaign isn't Active, the public page won't accept applications. */
-  isActive: boolean;
+  /** Which intake gate is shut, or null when the link is genuinely live.
+   *  Not a boolean and not the status: "Active" covers both a campaign taking
+   *  CVs and one turning them away, so the card has to name the gate the
+   *  recruiter must reopen. */
+  blocker: ApplyGateBlocker | null;
   /** Applications received through this link in the last 7 days — the only
    *  evidence on the page that sharing it did anything. */
   recentApplications?: number;
 }
+
+/**
+ * What a shut gate means and how to reopen it. One sentence each, because the
+ * three are not the same problem: two are a status change and one is a date.
+ */
+const BLOCKER_NOTE: Record<ApplyGateBlocker, string> = {
+  not_active:
+    "This campaign isn't Active, so the link turns candidates away. Set it to “Active — accepting applications” to open it.",
+  intake_closed:
+    "This campaign is Active but closed to new applications, so the link turns candidates away. Switch it to “Active — accepting applications” to reopen it.",
+  deadline_passed:
+    "The deadline has passed and it is enforced, so the link turns candidates away. Extend the deadline, or stop enforcing it, to reopen the link.",
+};
 
 /**
  * Recruiter-facing card that surfaces a campaign's public apply link
@@ -19,7 +36,7 @@ interface CampaignApplyLinkProps {
  */
 export function CampaignApplyLink({
   slug,
-  isActive,
+  blocker,
   recentApplications,
 }: CampaignApplyLinkProps) {
   const path = `/apply/${slug}`;
@@ -52,7 +69,9 @@ export function CampaignApplyLink({
         Public apply link
       </h2>
       <p className="mb-3.5 text-[13px] leading-[1.55] text-[#6B7280]">
-        Applicants flow straight into this campaign&apos;s pipeline.
+        {blocker
+          ? "This link is live but closed — anyone opening it is told applications are closed."
+          : "Applicants flow straight into this campaign’s pipeline."}
       </p>
 
       <div className="flex gap-2">
@@ -79,7 +98,7 @@ export function CampaignApplyLink({
         </button>
       </div>
 
-      {recentApplications !== undefined && isActive && (
+      {recentApplications !== undefined && !blocker && (
         <p className="mt-3 text-xs text-[#6B7280]">
           {recentApplications === 0
             ? "No applications through this link in the last 7 days."
@@ -89,11 +108,8 @@ export function CampaignApplyLink({
         </p>
       )}
 
-      {!isActive && (
-        <p className="mt-3 text-xs text-[#92400E]">
-          This campaign isn&apos;t Active, so the link won&apos;t accept applications
-          until you set it to Active.
-        </p>
+      {blocker && (
+        <p className="mt-3 text-xs text-[#92400E]">{BLOCKER_NOTE[blocker]}</p>
       )}
     </div>
   );

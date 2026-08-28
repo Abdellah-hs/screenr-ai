@@ -9,6 +9,7 @@ import {
   type CampaignBoardSummary,
 } from "@/lib/campaigns/board-view";
 import { CampaignStatusChanger } from "@/components/campaigns/campaign-status-changer";
+import type { ApplyGateBlocker } from "@/lib/rules/campaign-status";
 import { CampaignRowActions } from "@/components/campaigns/campaign-row-actions";
 import { CampaignBulkActions } from "@/components/campaigns/campaign-bulk-actions";
 import { PipelineBar, PipelineKey } from "@/components/campaigns/pipeline-bar";
@@ -44,9 +45,14 @@ const EMPTY_SUMMARY: CampaignBoardSummary = {
 export default function CampaignFilters({
   campaigns,
   summaries,
+  applyBlockers,
 }: {
   campaigns: Campaign[];
   summaries: Record<string, CampaignBoardSummary>;
+  /** Keyed by campaign id. Computed on the server (see `getCampaignBoard`)
+   *  because one of the gates is a deadline and this component is a client
+   *  one — reading its own clock here would be a hydration mismatch. */
+  applyBlockers: Record<string, ApplyGateBlocker | null>;
 }) {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<SortField>("created_at");
@@ -88,12 +94,6 @@ export default function CampaignFilters({
 
   // Selection is always interpreted against the visible rows.
   const selectedInView = filtered.filter((c) => selected.has(c.id));
-  const allChecked = filtered.length > 0 && selectedInView.length === filtered.length;
-  const someChecked = selectedInView.length > 0 && !allChecked;
-
-  function toggleAll() {
-    setSelected(allChecked ? new Set() : new Set(filtered.map((c) => c.id)));
-  }
 
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -116,7 +116,7 @@ export default function CampaignFilters({
   const hiddenByStatus = searchMatches.length - filtered.length;
 
   return (
-    <div className="space-y-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-5">
       <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
         <div className="relative w-full sm:max-w-sm">
           <svg
@@ -173,11 +173,12 @@ export default function CampaignFilters({
           <option value="attention">Sort by work waiting</option>
         </select>
 
-        <p className="text-sm text-[#6B7280] sm:ml-auto">
-          {narrowed
-            ? `Showing ${filtered.length} of ${campaigns.length}`
-            : `Showing all ${campaigns.length}`}
-        </p>
+        {/* Only while filtering: unfiltered, the count restates the list. */}
+        {narrowed && (
+          <p className="text-sm text-[#6B7280] sm:ml-auto">
+            Showing {filtered.length} of {campaigns.length}
+          </p>
+        )}
       </div>
 
       {selectedInView.length > 0 && (
@@ -201,23 +202,19 @@ export default function CampaignFilters({
           onClearFilters={clearFilters}
         />
       ) : (
-        <section className="overflow-hidden rounded-xl border border-[#E5E7EB] bg-white">
-          <div className="overflow-x-auto">
+        <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-[#E5E7EB] bg-white">
+          {/* No `flex-1` on the card: it is its natural height for a short list
+              and only shrinks — scrolling its rows instead — once it would
+              outgrow the viewport. `min-h-0` is what permits that shrink;
+              without it a flex item is floored at its content height and the
+              page grows instead of the rows scrolling. */}
+          <div className="min-h-0 flex-1 overflow-auto">
             <table className="w-full text-left text-sm">
-              <thead className="bg-[#F9FAFB] text-[11px] font-semibold uppercase tracking-[0.06em] text-[#6B7280]">
-                <tr className="border-b border-[#E5E7EB]">
-                  <th scope="col" className="w-10 py-3 pl-5 pr-0">
-                    <input
-                      type="checkbox"
-                      aria-label="Select all campaigns"
-                      checked={allChecked}
-                      ref={(el) => {
-                        if (el) el.indeterminate = someChecked;
-                      }}
-                      onChange={toggleAll}
-                      className="h-[15px] w-[15px] cursor-pointer accent-ink"
-                    />
-                  </th>
+              <thead className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#6B7280] [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-[#F9FAFB] [&_th]:shadow-[inset_0_-1px_0_#E5E7EB]">
+                <tr>
+                  {/* Spacer over the row checkboxes — the column still needs
+                      its width, it just carries no select-all control. */}
+                  <th scope="col" className="w-10 py-3 pl-5 pr-0" />
                   <th scope="col" className="px-3 py-3">
                     Role
                   </th>
@@ -229,9 +226,6 @@ export default function CampaignFilters({
                   </th>
                   <th scope="col" className="px-3 py-3">
                     Needs you
-                  </th>
-                  <th scope="col" className="px-3 py-3 text-right">
-                    Positions
                   </th>
                   <th scope="col" className="px-3 py-3">
                     Created
@@ -262,13 +256,19 @@ export default function CampaignFilters({
                       </td>
 
                       <td className="px-3 py-3.5">
+                        {/* `min-h-0` undoes the global 44px touch floor on
+                            <a>: on a block link it adds 24px of dead space
+                            below the title rather than a bigger target, and
+                            that gap is what pushed the subtitle away from the
+                            role it belongs to. The row itself stays the
+                            comfortable click area. */}
                         <Link
                           href={`/campaigns/${campaign.id}`}
-                          className="block font-semibold text-ink transition-colors duration-150 hover:text-primary"
+                          className="block min-h-0 font-semibold text-ink transition-colors duration-150 hover:text-primary"
                         >
                           {campaign.title}
                         </Link>
-                        <span className="mt-0.5 block text-xs text-[#6B7280]">
+                        <span className="mt-0.5 block text-xs leading-snug text-[#6B7280]">
                           {[campaign.department, campaign.location]
                             .filter(Boolean)
                             .join(" · ") || "No department or location set"}
@@ -280,6 +280,7 @@ export default function CampaignFilters({
                           campaignId={campaign.id}
                           currentStatus={status}
                           acceptingApplications={campaign.accepting_applications}
+                          applyBlocker={applyBlockers[campaign.id] ?? null}
                         />
                       </td>
 
@@ -305,10 +306,6 @@ export default function CampaignFilters({
 
                       <td className="px-3 py-3.5">
                         <NeedsYou attention={summary.attention} campaignId={campaign.id} />
-                      </td>
-
-                      <td className="px-3 py-3.5 text-right tabular-nums text-[#4B5563]">
-                        {summary.buckets.hired} of {campaign.positions}
                       </td>
 
                       <td className="px-3 py-3.5 text-[#4B5563]">

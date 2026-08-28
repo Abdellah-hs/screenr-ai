@@ -159,7 +159,6 @@ export type Database = {
           candidate_id: string
           created_at: string
           id: string
-          interview_score: number | null
           parsed_data: Json | null
           rejection_reason: string | null
           resume_eligible: boolean | null
@@ -170,7 +169,6 @@ export type Database = {
           score_factors: Json | null
           score_rationale: string | null
           scored_at: string | null
-          screening_q_score: number | null
           screening_tier:
             | Database["public"]["Enums"]["screening_tier_enum"]
             | null
@@ -182,7 +180,6 @@ export type Database = {
           candidate_id: string
           created_at?: string
           id?: string
-          interview_score?: number | null
           parsed_data?: Json | null
           rejection_reason?: string | null
           resume_eligible?: boolean | null
@@ -193,7 +190,6 @@ export type Database = {
           score_factors?: Json | null
           score_rationale?: string | null
           scored_at?: string | null
-          screening_q_score?: number | null
           screening_tier?:
             | Database["public"]["Enums"]["screening_tier_enum"]
             | null
@@ -205,7 +201,6 @@ export type Database = {
           candidate_id?: string
           created_at?: string
           id?: string
-          interview_score?: number | null
           parsed_data?: Json | null
           rejection_reason?: string | null
           resume_eligible?: boolean | null
@@ -216,7 +211,6 @@ export type Database = {
           score_factors?: Json | null
           score_rationale?: string | null
           scored_at?: string | null
-          screening_q_score?: number | null
           screening_tier?:
             | Database["public"]["Enums"]["screening_tier_enum"]
             | null
@@ -442,6 +436,7 @@ export type Database = {
           deleted_at: string | null
           email: string
           first_name: string
+          github_url: string | null
           id: string
           last_name: string
           linkedin_url: string | null
@@ -455,6 +450,7 @@ export type Database = {
           deleted_at?: string | null
           email: string
           first_name: string
+          github_url?: string | null
           id?: string
           last_name: string
           linkedin_url?: string | null
@@ -468,6 +464,7 @@ export type Database = {
           deleted_at?: string | null
           email?: string
           first_name?: string
+          github_url?: string | null
           id?: string
           last_name?: string
           linkedin_url?: string | null
@@ -814,6 +811,7 @@ export type Database = {
         Row: {
           created_at: string
           deleted_at: string | null
+          excluded_from_scoring: boolean
           id: string
           importance: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory: boolean
@@ -828,6 +826,7 @@ export type Database = {
         Insert: {
           created_at?: string
           deleted_at?: string | null
+          excluded_from_scoring?: boolean
           id?: string
           importance?: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory?: boolean
@@ -842,6 +841,7 @@ export type Database = {
         Update: {
           created_at?: string
           deleted_at?: string | null
+          excluded_from_scoring?: boolean
           id?: string
           importance?: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory?: boolean
@@ -869,6 +869,7 @@ export type Database = {
           application_id: string
           audio_url: string | null
           created_at: string
+          dimension_scores: Json | null
           expires_at: string | null
           id: string
           overall_rationale: string | null
@@ -879,6 +880,7 @@ export type Database = {
           scored_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["screening_response_status_enum"]
+          topic_state: Json | null
           transcript: Json
           updated_at: string
         }
@@ -887,6 +889,7 @@ export type Database = {
           application_id: string
           audio_url?: string | null
           created_at?: string
+          dimension_scores?: Json | null
           expires_at?: string | null
           id?: string
           overall_rationale?: string | null
@@ -897,6 +900,7 @@ export type Database = {
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
+          topic_state?: Json | null
           transcript?: Json
           updated_at?: string
         }
@@ -905,6 +909,7 @@ export type Database = {
           application_id?: string
           audio_url?: string | null
           created_at?: string
+          dimension_scores?: Json | null
           expires_at?: string | null
           id?: string
           overall_rationale?: string | null
@@ -915,6 +920,7 @@ export type Database = {
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
+          topic_state?: Json | null
           transcript?: Json
           updated_at?: string
         }

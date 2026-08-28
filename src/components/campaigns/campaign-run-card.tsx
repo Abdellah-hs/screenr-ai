@@ -1,11 +1,7 @@
 import Link from "next/link";
 import {
-  AUTOMATION_MODES,
-  INTERVIEW_PERSONAS,
   SLA_STAGES,
   formatApplicationState,
-  type AutomationMode,
-  type InterviewPersona,
   type SlaTimer,
 } from "@/lib/constants";
 import type { CampaignHistoryEntry } from "@/lib/data/transitions";
@@ -19,115 +15,6 @@ const PANEL =
 
 const EYEBROW =
   "text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]";
-
-/**
- * What each automation mode does to a candidate, in the terms the recruiter
- * will be held to. The constants' own descriptions say who is nominally in
- * charge; this says what happens to the person waiting.
- */
-const MODE_CONSEQUENCE: Record<AutomationMode, string> = {
-  human_in_loop:
-    "A person approves every CV before a screening link is sent. The AI scores and waits.",
-  fully_auto:
-    "CVs above the threshold are sent a screening link with nobody approving it. Below it, they are rejected.",
-};
-
-/**
- * How this campaign runs — the settings that decide what happens to a candidate
- * when nobody is looking.
- *
- * The mode sits in an indigo-railed box because it is a claim about what the AI
- * is permitted to do, and the four rows under it are the facts that follow from
- * it. Recording says "Never · transcript only" because that is a property of
- * the product, not a setting: there is no switch that turns it on.
- */
-export function CampaignRunCard({
-  campaignId,
-  automationMode,
-  resumeThreshold,
-  screeningThreshold,
-  interviewPersona,
-}: {
-  campaignId: string;
-  automationMode: AutomationMode;
-  resumeThreshold: number;
-  screeningThreshold: number;
-  interviewPersona: InterviewPersona;
-}) {
-  const mode = AUTOMATION_MODES.find((m) => m.value === automationMode);
-  const persona = INTERVIEW_PERSONAS.find((p) => p.value === interviewPersona);
-
-  return (
-    <section className={PANEL}>
-      <h2 className={`${EYEBROW} mb-4`}>How this campaign runs</h2>
-
-      <div className="mb-4 rounded-lg border border-ai-line bg-ai-wash p-3.5">
-        <p className="mb-1.5 flex items-center gap-[7px] text-[13px] font-semibold text-ai-deep">
-          <svg
-            className="h-3.5 w-3.5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-            />
-          </svg>
-          {mode?.label ?? automationMode}
-        </p>
-        <p className="text-xs leading-[1.55] text-[#4B5563]">
-          {MODE_CONSEQUENCE[automationMode]}
-        </p>
-      </div>
-
-      <dl className="flex flex-col gap-3.5">
-        {/* Two bars, and they are named for what they grade. One row called
-            "Threshold" would recreate the single number the split removed. */}
-        <RunRow term="Resume threshold">
-          <span className="font-semibold tabular-nums text-ink">
-            {resumeThreshold}
-          </span>
-        </RunRow>
-        <RunRow term="Screening threshold">
-          <span className="font-semibold tabular-nums text-ink">
-            {screeningThreshold}
-          </span>
-        </RunRow>
-        <RunRow term="Interview persona">
-          <span className="font-semibold text-ink">
-            {persona?.label ?? interviewPersona}
-          </span>
-        </RunRow>
-        <RunRow term="Integrity monitoring">
-          <span className="font-semibold text-ink">On · disclosed up front</span>
-        </RunRow>
-        <RunRow term="Interview recording">
-          <span className="font-semibold text-ink">Never · transcript only</span>
-        </RunRow>
-      </dl>
-
-      <Link
-        href={`/campaigns/${campaignId}/edit`}
-        className="mt-[18px] flex min-h-10 w-full items-center justify-center rounded-lg border border-[#D1D5DB] bg-white text-[13px] font-semibold text-[#374151] transition-colors duration-150 hover:bg-[#F9FAFB]"
-      >
-        Change automation
-      </Link>
-    </section>
-  );
-}
-
-function RunRow({ term, children }: { term: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-[13px] text-[#6B7280]">{term}</dt>
-      <dd className="text-right text-[13px]">{children}</dd>
-    </div>
-  );
-}
 
 const SLA_STAGE_LABEL: Record<string, string> = {
   applied: "Review a new CV",

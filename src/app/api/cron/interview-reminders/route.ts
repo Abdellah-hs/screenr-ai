@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sweepInterviewReminders } from "@/lib/scheduling/reminder-sweep";
+import { requireBearerSecret } from "@/lib/auth/guards";
 
 // Service-role writes + a live timestamp: must run per-request on the server.
 export const dynamic = "force-dynamic";
@@ -27,16 +28,8 @@ export const runtime = "nodejs";
  * oversight — see `dueInterviewReminders`.
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    // Fail closed: an unset secret must never leave the endpoint open.
-    console.error("CRON_SECRET is not configured; refusing to run the sweep.");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  }
-
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearerSecret(request, "CRON_SECRET", "the sweep");
+  if (denied) return denied;
 
   const result = await sweepInterviewReminders();
   return NextResponse.json({ ok: true, ...result });

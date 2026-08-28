@@ -9,6 +9,11 @@ const {
   mockSoftDeleteCampaignTx,
   mockRestoreCampaignTx,
   mockRevalidatePath,
+  mockUpdateCampaignTx,
+  mockFetchScreeningQuestions,
+  mockReplaceScreeningQuestions,
+  mockUpdateCampaignRubricsTx,
+  mockRedirect,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockInsertCampaignTx: vi.fn(),
@@ -18,6 +23,11 @@ const {
   mockSoftDeleteCampaignTx: vi.fn(),
   mockRestoreCampaignTx: vi.fn(),
   mockRevalidatePath: vi.fn(),
+  mockUpdateCampaignTx: vi.fn(),
+  mockFetchScreeningQuestions: vi.fn(),
+  mockReplaceScreeningQuestions: vi.fn(),
+  mockUpdateCampaignRubricsTx: vi.fn(),
+  mockRedirect: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -28,7 +38,8 @@ vi.mock("@/lib/data/campaigns", () => ({
   fetchAllCampaigns: vi.fn(),
   fetchCampaignById: vi.fn(),
   insertCampaignTx: mockInsertCampaignTx,
-  updateCampaignTx: vi.fn(),
+  updateCampaignTx: mockUpdateCampaignTx,
+  updateCampaignRubricsTx: mockUpdateCampaignRubricsTx,
   cloneCampaignTx: vi.fn(),
   fetchCampaignScoringConfig: mockFetchCampaignScoringConfig,
   fetchCampaignStatus: mockFetchCampaignStatus,
@@ -37,8 +48,13 @@ vi.mock("@/lib/data/campaigns", () => ({
   restoreCampaignTx: mockRestoreCampaignTx,
 }));
 
+vi.mock("@/lib/data/screening-questions", () => ({
+  fetchScreeningQuestionsByCampaignId: mockFetchScreeningQuestions,
+  replaceScreeningQuestions: mockReplaceScreeningQuestions,
+}));
+
 vi.mock("next/navigation", () => ({
-  redirect: vi.fn(),
+  redirect: mockRedirect,
 }));
 
 vi.mock("next/cache", () => ({
@@ -54,8 +70,10 @@ vi.mock("./candidates", () => ({
 
 import {
   createCampaign,
+  saveCampaignRubrics,
   getCampaignById,
   getResumeCriteriaCount,
+  updateCampaign,
   updateCampaignStatus,
   deleteCampaign,
   deleteCampaigns,
@@ -70,6 +88,7 @@ const VALID_CAMPAIGN_ID_2 = "770e8400-e29b-41d4-a716-446655440002";
 beforeEach(() => {
   vi.clearAllMocks();
   mockRequireUserId.mockResolvedValue("user-1");
+  mockFetchScreeningQuestions.mockResolvedValue([]);
 });
 
 describe("getCampaignById", () => {
@@ -448,5 +467,223 @@ describe("createCampaign — screening questions", () => {
     expect(mockInsertCampaignTx.mock.calls[0][0]).toMatchObject({
       title: "Senior Engineer",
     });
+  });
+});
+
+/**
+ * Screening questions ride along with the edit form now that editing walks the
+ * same wizard as creating. The rule that matters is the *only if changed* one:
+ * `replaceScreeningQuestions` wipes and re-inserts, so a save that touches an
+ * unrelated field must not mint new question ids under candidates whose
+ * in-flight responses already snapshotted the old ones.
+ */
+describe("updateCampaign — screening questions", () => {
+  function editForm(questions: { prompt: string }[]): FormData {
+    const fd = new FormData();
+    fd.set("title", "Senior Backend Engineer");
+    fd.set("description", "Own our payments platform end to end.");
+    fd.set("positions", "1");
+    fd.set("status", "active");
+    fd.set("screening_questions_json", JSON.stringify(questions));
+    return fd;
+  }
+
+  const ASKED = [
+    { prompt: "Describe a system you scaled past its first design." },
+    { prompt: "What made you look outside your current role?" },
+  ];
+
+  function storedRows(prompts: string[]) {
+    return prompts.map((prompt, i) => ({
+      id: `q-${i}`,
+      campaign_id: VALID_CAMPAIGN_ID,
+      prompt,
+      sort_order: i,
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+    }));
+  }
+
+  it("leaves the stored questions alone when the form posts the same set", async () => {
+    mockFetchScreeningQuestions.mockResolvedValue(storedRows(ASKED.map((q) => q.prompt)));
+
+    await updateCampaign(VALID_CAMPAIGN_ID, editForm(ASKED));
+
+    expect(mockReplaceScreeningQuestions).not.toHaveBeenCalled();
+  });
+
+  it("writes the new set when a question was edited", async () => {
+    mockFetchScreeningQuestions.mockResolvedValue(storedRows(ASKED.map((q) => q.prompt)));
+
+    const edited = [ASKED[0], { prompt: "Why are you leaving your current role?" }];
+    await updateCampaign(VALID_CAMPAIGN_ID, editForm(edited));
+
+    expect(mockReplaceScreeningQuestions).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, edited);
+  });
+
+  /** Reordering is a real edit: the order is the order they are asked in. */
+  it("writes the new set when only the order changed", async () => {
+    mockFetchScreeningQuestions.mockResolvedValue(storedRows(ASKED.map((q) => q.prompt)));
+
+    await updateCampaign(VALID_CAMPAIGN_ID, editForm([ASKED[1], ASKED[0]]));
+
+    expect(mockReplaceScreeningQuestions).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, [
+      ASKED[1],
+      ASKED[0],
+    ]);
+  });
+
+  it("clears them when the recruiter removed the last one", async () => {
+    mockFetchScreeningQuestions.mockResolvedValue(storedRows([ASKED[0].prompt]));
+
+    await updateCampaign(VALID_CAMPAIGN_ID, editForm([]));
+
+    expect(mockReplaceScreeningQuestions).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, []);
+  });
+
+  it("adds a first set to a campaign that never had any", async () => {
+    mockFetchScreeningQuestions.mockResolvedValue([]);
+
+    await updateCampaign(VALID_CAMPAIGN_ID, editForm(ASKED));
+
+    expect(mockReplaceScreeningQuestions).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, ASKED);
+  });
+});
+
+/**
+ * The other half of the "absent vs empty" rule, at the action. A form that
+ * never carried the field must not be able to delete a campaign's questions.
+ */
+describe("updateCampaign — a form with no question field", () => {
+  it("leaves the stored questions alone", async () => {
+    mockFetchScreeningQuestions.mockResolvedValue([
+      {
+        id: "q-0",
+        campaign_id: VALID_CAMPAIGN_ID,
+        prompt: "Describe a system you scaled past its first design.",
+        sort_order: 0,
+        created_at: "2026-08-01T00:00:00Z",
+        updated_at: "2026-08-01T00:00:00Z",
+      },
+    ]);
+
+    const fd = new FormData();
+    fd.set("title", "Senior Backend Engineer");
+    fd.set("description", "Own our payments platform end to end.");
+    fd.set("positions", "1");
+    fd.set("status", "active");
+
+    await updateCampaign(VALID_CAMPAIGN_ID, fd);
+
+    expect(mockReplaceScreeningQuestions).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Where finishing the wizard lands, and why it is a parameter rather than a
+ * constant. The apply link does not exist until the row does, so the share
+ * stage can only follow a successful create — but "Save draft" is a recruiter
+ * saying they will come back, and must not be answered by a page urging them
+ * to publish.
+ */
+describe("createCampaign — where it lands", () => {
+  beforeEach(() => {
+    mockInsertCampaignTx.mockResolvedValue(VALID_CAMPAIGN_ID);
+  });
+
+  function minimalForm(): FormData {
+    const form = new FormData();
+    form.set("title", "Senior Engineer");
+    form.set("status", "draft");
+    return form;
+  }
+
+  it("goes to the share stage when the wizard was finished", async () => {
+    await createCampaign(minimalForm(), "share");
+
+    expect(mockRedirect).toHaveBeenCalledWith(`/campaigns/${VALID_CAMPAIGN_ID}/share`);
+  });
+
+  it("goes to the campaign itself by default, which is what Save draft wants", async () => {
+    await createCampaign(minimalForm());
+
+    expect(mockRedirect).toHaveBeenCalledWith(`/campaigns/${VALID_CAMPAIGN_ID}`);
+  });
+});
+
+describe("saveCampaignRubrics", () => {
+  function dimension(overrides: Record<string, unknown> = {}) {
+    return {
+      name: "Kubernetes",
+      importance: "high",
+      is_mandatory: true,
+      sort_order: 0,
+      ...overrides,
+    };
+  }
+
+  it("rejects an unauthenticated caller before touching the data layer", async () => {
+    mockRequireUserId.mockRejectedValue(new Error("Unauthorized"));
+
+    await expect(
+      saveCampaignRubrics(VALID_CAMPAIGN_ID, [
+        { stage: "resume", dimensions: [dimension()] },
+      ]),
+    ).rejects.toThrow("Unauthorized");
+
+    expect(mockUpdateCampaignRubricsTx).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed campaign id", async () => {
+    await expect(saveCampaignRubrics("not-a-uuid", [])).rejects.toThrow();
+
+    expect(mockUpdateCampaignRubricsTx).not.toHaveBeenCalled();
+  });
+
+  it("refuses a dimension with no name rather than silently dropping it", async () => {
+    await expect(
+      saveCampaignRubrics(VALID_CAMPAIGN_ID, [
+        { stage: "resume", dimensions: [dimension({ name: "" })] },
+      ]),
+    ).rejects.toThrow("Every rubric dimension needs a name");
+
+    expect(mockUpdateCampaignRubricsTx).not.toHaveBeenCalled();
+  });
+
+  it("re-derives sort_order from position, because the editor stamps every row 0", async () => {
+    await saveCampaignRubrics(VALID_CAMPAIGN_ID, [
+      {
+        stage: "resume",
+        dimensions: [
+          dimension({ name: "Kubernetes" }),
+          dimension({ name: "Terraform" }),
+          dimension({ name: "Go" }),
+        ],
+      },
+    ]);
+
+    expect(mockUpdateCampaignRubricsTx.mock.calls[0][1]).toEqual([
+      {
+        stage: "resume",
+        dimensions: [
+          expect.objectContaining({ name: "Kubernetes", sort_order: 0 }),
+          expect.objectContaining({ name: "Terraform", sort_order: 1 }),
+          expect.objectContaining({ name: "Go", sort_order: 2 }),
+        ],
+      },
+    ]);
+  });
+
+  it("revalidates the whole campaign subtree, not just the page", async () => {
+    await saveCampaignRubrics(VALID_CAMPAIGN_ID, [
+      { stage: "resume", dimensions: [dimension()] },
+    ]);
+
+    // The stale-rubric badge on every candidate file below this campaign is
+    // derived from the active rubric version, so the page alone is not enough.
+    expect(mockRevalidatePath).toHaveBeenCalledWith(
+      `/campaigns/${VALID_CAMPAIGN_ID}`,
+      "layout",
+    );
   });
 });

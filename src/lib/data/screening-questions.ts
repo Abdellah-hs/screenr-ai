@@ -2,9 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type { EvidenceLevel } from "@/lib/scoring/evidence-levels";
+import type { ScoredScreeningDimension } from "@/lib/screening-scoring";
 import type { ApplicationState } from "@/lib/constants";
 import type { Json } from "@/types/database.types";
 import type { ProctoringReport } from "@/lib/proctoring/incidents";
+import type { ScreeningTopicLedger } from "@/lib/screening/topic-ledger";
 
 export interface ApplicationForScreeningSend {
   application_id: string;
@@ -227,8 +229,28 @@ export interface ScreeningResponseRow {
   audio_url: string | null;
   /** Browser proctoring report for the voice call; null when none was captured. */
   proctoring: ProctoringReport | null;
+  /**
+   * Per-rubric-dimension scores, and the evidence behind each.
+   *
+   * `null` means this response was scored per question — every response taken
+   * before 2026-08-22, and anything scored down the legacy typed-answer path.
+   * Those render from `answers[].score` instead. The distinction is kept rather
+   * than back-filled: a score should show the unit it was actually graded in,
+   * not the unit the product uses today.
+   */
+  dimension_scores: ScoredScreeningDimension[] | null;
   overall_score: number | null;
   overall_rationale: string | null;
+  /**
+   * The runtime coverage ledger for the call — what was actually asked, and
+   * what the call failed to capture.
+   *
+   * `null` for every response taken before runtime topic coverage existed, and
+   * for a campaign with nothing to control. Read here for one field only:
+   * `unheardAnswers`, which is what lets the recruiter's screen tell a 0 the
+   * candidate earned from a 0 our transcription lost.
+   */
+  topic_state: ScreeningTopicLedger | null;
   sent_at: string | null;
   responded_at: string | null;
   scored_at: string | null;
@@ -481,6 +503,106 @@ export async function saveVoiceTranscriptDraft(
 }
 
 /**
+ * Read the runtime topic ledger for an in-progress call.
+ *
+ * `null` means either no call has started yet or the response predates runtime
+ * topic coverage — the caller builds a fresh ledger in both cases, so the two
+ * do not need telling apart.
+ */
+export async function fetchScreeningTopicState(
+  applicationId: string,
+  db: SupabaseDb
+): Promise<{ topicState: Json | null; status: string } | null> {
+  const { data, error } = await db
+    .from("screening_question_responses")
+    .select("topic_state, status")
+    .eq("application_id", applicationId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Failed to fetch screening topic state: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+  if (!data) return null;
+
+  return { topicState: data.topic_state ?? null, status: data.status };
+}
+
+/**
+ * Write the topic ledger, but only if nobody else has moved it since we read.
+ *
+ * Optimistic concurrency on the `version` inside the document: the interviewer
+ * can produce two control events close enough together to overlap (a finalized
+ * turn and a tool call land on separate requests), and a last-write-wins update
+ * would silently drop whichever transition finished second — a spent follow-up
+ * refunded, or a topic un-asked. Returns false when the write did not land so
+ * the caller can re-read rather than guess.
+ *
+ * Guarded to `sent` for the same reason `saveVoiceTranscriptDraft` is: a late
+ * control event must never touch a response the candidate has already
+ * finalized.
+ */
+/**
+ * Discard the topic ledger so a fresh attempt starts a fresh call.
+ *
+ * A candidate who re-records gets a new room and their draft transcript is
+ * overwritten — but `topic_state` used to survive, so the second attempt
+ * resumed a ledger describing the FIRST one. Topics stayed marked covered by a
+ * transcript that had just been thrown away, the interviewer skipped straight
+ * to whatever was left (or closed immediately, with `unasked=0`), and the
+ * candidate was scored on evidence that no longer existed.
+ *
+ * Scoped to `sent` for the same reason every other write here is: once a
+ * response has been submitted or scored, its coverage record is history and
+ * must not be rewritten by anyone reopening a stale link.
+ */
+export async function clearScreeningTopicState(
+  applicationId: string,
+  db: SupabaseDb
+): Promise<void> {
+  const { error } = await db
+    .from("screening_question_responses")
+    .update({ topic_state: null })
+    .eq("application_id", applicationId)
+    .eq("status", "sent");
+
+  if (error) {
+    throw new Error(
+      `Failed to clear screening topic state: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+}
+
+export async function saveScreeningTopicState(
+  applicationId: string,
+  topicState: Json,
+  expectedVersion: number | null,
+  db: SupabaseDb
+): Promise<boolean> {
+  let query = db
+    .from("screening_question_responses")
+    .update({ topic_state: topicState })
+    .eq("application_id", applicationId)
+    .eq("status", "sent");
+
+  query =
+    expectedVersion === null
+      ? query.is("topic_state", null)
+      : query.filter("topic_state->>version", "eq", String(expectedVersion));
+
+  const { data, error } = await query.select("id");
+
+  if (error) {
+    throw new Error(
+      `Failed to save screening topic state: ${error.message ?? JSON.stringify(error)}`
+    );
+  }
+
+  return (data?.length ?? 0) > 0;
+}
+
+/**
  * Mark a screening response as `expired` (#83): the candidate never completed
  * the voice call before the deadline. The matching application transition to
  * `screening_expired` is the action's job — this only flips the response row.
@@ -585,14 +707,26 @@ export async function saveAnswerScores(args: {
   campaignId: string;
   candidateId: string;
   overall: { score: number; rationale: string };
-  perAnswer: {
-    question_id: string;
-    score: number;
-    rationale: string;
-    evidence_quote?: string;
-    evidence_turn_index?: number | null;
-    evidence_level?: EvidenceLevel;
-  }[];
+  /**
+   * Per-question scores — the legacy typed-answer path only. Null on the voice
+   * path, which grades rubric dimensions instead; see `perDimension`.
+   */
+  perAnswer:
+    | {
+        question_id: string;
+        score: number;
+        rationale: string;
+        evidence_quote?: string;
+        evidence_turn_index?: number | null;
+        evidence_level?: EvidenceLevel;
+      }[]
+    | null;
+  /**
+   * Per-rubric-dimension scores — the voice path. Written to its own column
+   * rather than merged into `answers`: a competency is not a property of a
+   * question, and one dimension is routinely evidenced across several answers.
+   */
+  perDimension: ScoredScreeningDimension[] | null;
   rubricVersion: number | null;
   audit: ScreeningScoreAuditFields;
   /**
@@ -611,7 +745,7 @@ export async function saveAnswerScores(args: {
   );
   if (!existing) throw new Error("Screening response not found");
 
-  const scoreById = new Map(args.perAnswer.map((a) => [a.question_id, a]));
+  const scoreById = new Map((args.perAnswer ?? []).map((a) => [a.question_id, a]));
   const mergedAnswers = existing.answers.map((a) => {
     const s = scoreById.get(a.question_id);
     if (!s) return a;
@@ -643,6 +777,11 @@ export async function saveAnswerScores(args: {
       overall_score: args.overall.score,
       overall_rationale: args.overall.rationale,
       answers: mergedAnswers,
+      // Only written when the run actually produced dimension scores. A
+      // re-score down the legacy text path must not blank a column it has
+      // nothing to say about — leaving the previous run's evidence in place is
+      // better than replacing it with a null that reads as "never scored".
+      ...(args.perDimension ? { dimension_scores: args.perDimension } : {}),
       rubric_version: args.rubricVersion,
       scored_at: new Date().toISOString(),
     })

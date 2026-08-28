@@ -10,6 +10,7 @@ import {
   DECISION_QUEUE_STATES,
   type DecisionRow,
 } from "@/lib/overview/decision-queue";
+import { hasScreeningScore } from "@/lib/candidates/pipeline-summary";
 
 // ─── Active campaigns (lite) ─────────────────────────────────────────────────
 
@@ -43,6 +44,19 @@ export interface PipelineStageCounts {
   buckets: Record<CandidateStage, number>;
   /** Every application across the owner's Active campaigns (all buckets). */
   total: number;
+  /**
+   * The `rejected` bucket, split by whether anybody actually decided.
+   *
+   * `toCandidateStage` folds `screening_expired`, `interview_expired`,
+   * `interview_no_show`, `processing_failed` and `archived` into `rejected`,
+   * so a row labelled "Rejected" was counting people nobody turned down. On
+   * this page that contradicted the decision queue outright: the queue names
+   * those same people under "Ended without a decision · nobody was rejected"
+   * while the rail called them rejected, on one screen. The two numbers always
+   * sum back to `buckets.rejected`.
+   */
+  rejectedOutright: number;
+  closedOut: number;
 }
 
 function emptyBuckets(): Record<CandidateStage, number> {
@@ -55,6 +69,13 @@ function emptyBuckets(): Record<CandidateStage, number> {
     rejected: 0,
   };
 }
+
+const EMPTY_COUNTS: PipelineStageCounts = {
+  buckets: emptyBuckets(),
+  total: 0,
+  rejectedOutright: 0,
+  closedOut: 0,
+};
 
 /**
  * Applications across the owner's **Active** campaigns, collapsed into the six
@@ -71,32 +92,22 @@ export async function fetchPipelineStageCounts(userId: string): Promise<Pipeline
     .eq("campaigns.status", "active")
     .is("campaigns.deleted_at", null);
 
-  if (error || !data) return { buckets: emptyBuckets(), total: 0 };
+  if (error || !data) return { ...EMPTY_COUNTS, buckets: emptyBuckets() };
 
   const buckets = emptyBuckets();
+  let rejectedOutright = 0;
+
   for (const row of data as unknown as Array<{ status: string }>) {
     buckets[toCandidateStage(row.status)] += 1;
+    if (row.status === "rejected") rejectedOutright += 1;
   }
-  return { buckets, total: data.length };
-}
 
-// ─── Hired count ─────────────────────────────────────────────────────────────
-
-/**
- * All-time hires across the owner's non-deleted campaigns (includes campaigns
- * that have since been closed — a hire still counts). KPI tile. SELECT-only.
- */
-export async function fetchHiredCount(userId: string): Promise<number> {
-  const supabase = await createClient();
-  const { count, error } = await supabase
-    .from("applications")
-    .select("id, campaigns!inner(user_id, deleted_at)", { count: "exact", head: true })
-    .eq("status", "hired")
-    .eq("campaigns.user_id", userId)
-    .is("campaigns.deleted_at", null);
-
-  if (error) return 0;
-  return count ?? 0;
+  return {
+    buckets,
+    total: data.length,
+    rejectedOutright,
+    closedOut: buckets.rejected - rejectedOutright,
+  };
 }
 
 // ─── Expiring screening links ────────────────────────────────────────────────
@@ -223,15 +234,47 @@ export async function fetchRecentOutcomes(
  * candidates awaiting review" tells a recruiter there is work but not whether
  * it is the work to do first. `campaigns.status` comes back because SLA does
  * not run on a frozen campaign, and the SLA timers are resolved by the caller
- * (they are already loaded per campaign). SELECT-only.
+ * (they are already loaded per campaign).
+ *
+ * The two later stage scores are read from the rows that hold them, not from
+ * `applications`. `applications.screening_q_score` and
+ * `applications.interview_score` are declared in the original pipeline
+ * migration and **written by nothing** — the screening score lands on
+ * `screening_question_responses.overall_score` and the interview score inside
+ * `interview_sessions.scores`. Selecting the dead columns meant every row of
+ * the group headed "Scored" arrived with a null score. Both embeds are
+ * `UNIQUE(application_id)`, so PostgREST returns one object or null rather than
+ * an array. SELECT-only.
  */
 export async function fetchDecisionQueueRows(userId: string): Promise<DecisionRow[]> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("applications")
-    .select(
-      "id, campaign_id, status, updated_at, resume_score, screening_q_score, interview_score, screening_tier, candidates!inner(first_name, last_name), campaigns!inner(title, status, user_id, deleted_at)",
-    )
+    .select(`
+      id,
+      campaign_id,
+      status,
+      updated_at,
+      resume_score,
+      screening_tier,
+      candidates!inner (
+        first_name,
+        last_name
+      ),
+      campaigns!inner (
+        title,
+        status,
+        user_id,
+        deleted_at
+      ),
+      screening_question_responses (
+        overall_score,
+        status
+      ),
+      interview_sessions (
+        scores
+      )
+    `)
     .in("status", [...DECISION_QUEUE_STATES])
     .eq("campaigns.user_id", userId)
     .is("campaigns.deleted_at", null);
@@ -245,27 +288,37 @@ export async function fetchDecisionQueueRows(userId: string): Promise<DecisionRo
       status: ApplicationState;
       updated_at: string | null;
       resume_score: number | null;
-      screening_q_score: number | null;
-      interview_score: number | null;
       screening_tier: ScreeningTier | null;
       candidates: { first_name: string | null; last_name: string | null };
       campaigns: { title: string; status: string };
+      screening_question_responses: {
+        overall_score: number | null;
+        status: string | null;
+      } | null;
+      interview_sessions: { scores: { overall_score?: number | null } | null } | null;
     }>
-  ).map((row) => ({
-    applicationId: row.id,
-    campaignId: row.campaign_id,
-    campaignTitle: row.campaigns.title,
-    campaignStatus: row.campaigns.status,
-    candidateName:
-      `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
-      "Unnamed candidate",
-    status: row.status,
-    updatedAt: row.updated_at ?? new Date().toISOString(),
-    resumeScore: row.resume_score,
-    screeningScore: row.screening_q_score,
-    interviewScore: row.interview_score,
-    tier: row.screening_tier,
-  }));
+  ).map((row) => {
+    const screening = row.screening_question_responses;
+    const interviewScore = row.interview_sessions?.scores?.overall_score;
+
+    return {
+      applicationId: row.id,
+      campaignId: row.campaign_id,
+      campaignTitle: row.campaigns.title,
+      campaignStatus: row.campaigns.status,
+      candidateName:
+        `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
+        "Unnamed candidate",
+      status: row.status,
+      updatedAt: row.updated_at ?? new Date().toISOString(),
+      resumeScore: row.resume_score,
+      resumeTier: row.screening_tier,
+      // The same predicate the candidate table scores on, so a number cannot
+      // appear here while that list still calls the response unscored.
+      screeningScore: hasScreeningScore(screening) ? Number(screening.overall_score) : null,
+      interviewScore: interviewScore ?? null,
+    };
+  });
 }
 
 /**

@@ -122,6 +122,10 @@ describe("saveAnswerScores", () => {
       { question_id: "q-1", score: 80, rationale: "Specific" },
       { question_id: "q-2", score: 64, rationale: "Generic" },
     ],
+    // The legacy typed-answer shape: scores per question, no rubric dimensions.
+    // Both fields are required so a caller has to say which unit produced the
+    // score — the two are not interchangeable and a default would hide that.
+    perDimension: null,
     rubricVersion: 3,
     audit: {
       model: "gpt-4o-mini",
