@@ -16,7 +16,7 @@ over anything in `docs/`.
 ```
 Public apply link → Resume scoring → Voice screening (AI, live call) →
 Screening scoring → AI interview invitation (on-demand) → AI interview →
-Interview scoring → Reference check (optional, not built) → Manager review →
+Interview scoring → Manager review →
 Final human interview (calendar-booked)
 ```
 
@@ -55,14 +55,18 @@ code:
 - **Talent pool** — an automatic directory plus a curated, opt-in pool with tags,
   notes and search.
 - **Compliance** — every AI call persists its raw output, model, prompt version,
-  rubric version and rationale; there is an audit log view and a bias auditor.
+  rubric version and rationale; there is an audit log view. There is **no**
+  bias auditor — PRD 3.14 was retired on 2026-08-30, and nothing in the
+  product monitors adverse impact today.
 - **Integrations** — Gmail (outbound candidate email only) and LinkedIn (social
   post publishing).
 
 Deferred, tracked on the issue board rather than described here as though they
-ship: reference checks, live skill simulations, multi-language interviews,
-adaptive difficulty, skill fingerprinting, candidate coaching mode, and
-predictive analytics.
+ship: live skill simulations, multi-language interviews and adaptive
+difficulty. Reference checks, skill fingerprinting, candidate coaching mode,
+predictive analytics, team-fit prediction and candidate-experience scoring
+were **retired** on 2026-08-30 rather than deferred — see "3.13–3.19 —
+Retired" in docs/prd.md.
 
 ## Tech Stack
 

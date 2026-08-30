@@ -24,9 +24,19 @@ The system follows a sequential pipeline. Each candidate progresses through thes
 ```
 Resume Collection → AI Screening → Filtering → Screening Questions →
 Answer Scoring → AI Interview Invitation → AI Interview →
-Interview Scoring → AI Reference Check (optional) → Manager Review →
+Interview Scoring → Manager Review →
 Final Interview Scheduling
 ```
+
+> **Amended 2026-08-30:** *AI Reference Check* is **removed from the
+> pipeline**, not merely unbuilt. 3.19 is retired, and `reference_check` has
+> been dropped from the application state enum in both the code and the
+> database (`20260830120000_drop_reference_check_state.sql`). There is no
+> longer a stage between interview scoring and manager review.
+>
+> Checking references by phone remains a perfectly reasonable thing for a
+> hiring manager to do while an application sits in `manager_review`. It is
+> simply not a stage this system tracks.
 
 Each stage produces an **independent score**. There is no composite score — managers view per-stage scores independently.
 
@@ -463,6 +473,21 @@ Beyond traditional Q&A, the AI interviewer can drop candidates into **realistic 
 - Activity log tracks all actions taken on a candidate
 
 #### 3.6.4 Interview Intelligence Replay with AI Commentary
+
+> **Decision (2026-08-30): retired.** This section is dead by construction. It
+> describes an AI-annotated review experience built over the interview
+> **recording** — a highlight reel, timestamp markers, a side-by-side
+> video-plus-transcript view — and the interview has not been recorded since
+> 2026-08-04 (3.5.5). There is no footage to annotate, replay, or cut down, and
+> restoring a recording was ruled out on privacy grounds rather than for want
+> of effort.
+>
+> What survives is the part that never needed video: the transcript is stored,
+> and every score dimension already links to the verbatim quotes behind it
+> (3.10.2). A manager reads the evidence instead of watching for it. Searchable
+> transcript is the one item below still worth having, and it needs none of the
+> rest of this section.
+
 For recorded interviews, managers get an **AI-annotated review experience**:
 
 - **AI commentary track** — overlaid annotations while watching the recording: "Strong answer — candidate demonstrated distributed systems knowledge", "Missed opportunity — didn't address failure handling", "Red flag — contradicted earlier statement about experience"
@@ -730,7 +755,51 @@ When a candidate does not complete their AI interview before the invitation dead
 
 ---
 
+## 3.13–3.19 — Retired (2026-08-30)
+
+> **Decision (2026-08-30): sections 3.13 through 3.19 are retired and will not
+> be built.** They are kept below, unedited, because the reasoning is worth
+> keeping — but **nothing in them is a requirement any more.** Read them as a
+> record of what was considered and set aside, never as outstanding work.
+>
+> They were written as one block and they share one defect: each proposes to
+> infer something the evidence cannot carry, or to serve a user this product
+> does not have.
+>
+> | Section | Why it is retired |
+> | --- | --- |
+> | **3.13 Skill Fingerprint** | "Learning velocity", "problem-solving pattern" and a depth-vs-breadth radar are traits inferred from a ten-minute call. Producing them would contradict the rule every scored stage now runs under — the model reports evidence and never an arbitration (3.3.1, 3.4.4, and CLAUDE.md, "The interview is scored the same way as screening"). |
+> | **3.14 AI Bias Auditor** | Retired as a **product feature**, with a caveat that is *not* retired — see below. |
+> | **3.15 Candidate Experience Score** | Micro-surveys plus an experience dashboard. §9 already excludes analytics dashboards, and the signal is thin at internal-hiring volume. |
+> | **3.16 Team Fit Prediction** | The same defect as 3.13, one step worse: "candidate prefers high-autonomy work" is a guess about a person, handed to a decision-maker as insight, with nothing behind it. It is a bias vector wearing a rubric. |
+> | **3.17 Candidate Coaching Mode** | A second, public-facing product with its own funnel — for an internal ATS whose §9 rules out multi-company / SaaS mode. |
+> | **3.18 Predictive Hiring Analytics** | Every output needs historical volume that does not exist. A time-to-fill estimate computed over zero completed campaigns is a fabricated number presented as a forecast. |
+> | **3.19 Automated AI Reference Checks** | A whole second conversational-AI product — a collection form, reference-facing calls, consistency analysis, its own consent regime — for a stage this PRD itself marks *optional*. See the state-machine note below. |
+>
+> **3.14 is retired as a feature, not as an obligation.** The EU AI Act
+> classifies AI in recruitment as high-risk and places duties on the *deployer*,
+> not only on the vendor. Nothing in this product monitors adverse impact today.
+> If MatiousCorp hires into the EU that is a legal exposure to be answered
+> deliberately — by counsel, by a manual periodic review, or by building some
+> narrow part of 3.14 later. It is written down here so that retiring the
+> section cannot be mistaken for having decided the question.
+>
+> **3.19's state was removed from the code the same day.** `reference_check`
+> was a real value in `ApplicationState` and in `STATUS_TRANSITIONS`, reachable
+> from `interview_scored` — so the stage dropdown would move an application
+> into a stage with no screen, no action and no rule to move it on, where it
+> would sit until somebody noticed by hand. Retiring the requirement alone
+> would not have fixed that, so the value is gone from `src/lib/constants.ts`,
+> from the Zod enum, and from `candidate_stage_enum` in the database
+> (`20260830120000_drop_reference_check_state.sql`, which rebuilds the type —
+> Postgres cannot drop an enum value in place). Any application found in the
+> state was remapped to `manager_review`, which is where it was headed.
+
+---
+
 ### 3.13 Candidate Skill Fingerprint
+
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
 
 After each pipeline stage, the system builds a **multi-dimensional skill profile** per candidate — not just scores, but a structured representation of how the candidate thinks and performs.
 
@@ -755,6 +824,8 @@ The skill fingerprint captures:
 ---
 
 ### 3.14 AI Bias Auditor
+
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
 
 A dedicated module that continuously monitors for bias across the entire hiring pipeline. With the EU AI Act classifying AI in recruitment as **high-risk**, this feature provides a built-in compliance and fairness layer.
 
@@ -788,6 +859,8 @@ The system analyzes scoring patterns across the pipeline to detect potential bia
 
 ### 3.15 Candidate Experience Score
 
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
+
 Measure and optimize the candidate experience across the entire pipeline.
 
 #### 3.15.1 Micro-Surveys
@@ -818,6 +891,8 @@ The system passively collects experience signals:
 
 ### 3.16 Team Fit Prediction
 
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
+
 Go beyond individual candidate scoring — predict how a candidate would complement or conflict with the existing team.
 
 #### 3.16.1 Team Profile Input
@@ -846,6 +921,8 @@ Based on the candidate's skill fingerprint (3.13) and interview data, the system
 
 ### 3.17 Candidate Coaching Mode (Public)
 
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
+
 A **free, public-facing practice interview** tool that serves as both a candidate preparation resource and a top-of-funnel marketing engine.
 
 #### 3.17.1 Practice Interviews
@@ -872,6 +949,8 @@ A **free, public-facing practice interview** tool that serves as both a candidat
 
 ### 3.18 Predictive Hiring Analytics
 
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
+
 Use historical pipeline data to surface actionable predictions and recommendations for hiring managers.
 
 #### 3.18.1 Campaign Predictions
@@ -896,6 +975,8 @@ When a campaign is created or in progress, the system provides:
 ---
 
 ### 3.19 Automated AI Reference Checks
+
+> **Retired 2026-08-30 — not a requirement.** See "3.13–3.19 — Retired" above.
 
 After the AI interview and before the final human interview, the system can automate reference checks using conversational AI.
 
@@ -946,8 +1027,8 @@ The system sends automated emails at key pipeline stages:
 | Interview confirmation | Candidate | Confirmed date/time + interview link + preparation guide link (see 3.9.2) |
 | Interview reminders | Candidate | 24h and 1h before interview + preparation guide link |
 | Final interview invitation | Candidate | Available time slots for manager interview |
-| Reference request | Candidate | Request for reference contacts (after AI interview, before final) |
-| Reference check invitation | Reference contact | Unique link to AI-conducted reference check |
+| ~~Reference request~~ | Candidate | Request for reference contacts — **retired 2026-08-30 (3.19)** |
+| ~~Reference check invitation~~ | Reference contact | Unique link to AI-conducted reference check — **retired 2026-08-30 (3.19)** |
 | Final interview confirmation | Candidate + Manager | Confirmed date/time + meeting link |
 
 ### 4.2 Email Configuration
@@ -966,10 +1047,10 @@ The system sends automated emails at key pipeline stages:
 - Proctoring violation alert
 - Candidate no-show for scheduled interview
 - Final interview scheduled confirmation
-- Bias audit alert — adverse impact ratio exceeds configured threshold
-- Reference check completed — report ready for review
-- Pipeline bottleneck alert — candidates stalling at a stage beyond expected SLA
-- Candidate experience alert — experience score drops below configured threshold
+- ~~Bias audit alert — adverse impact ratio exceeds configured threshold~~ *(retired 2026-08-30 — 3.14)*
+- ~~Reference check completed — report ready for review~~ *(retired 2026-08-30 — 3.19)*
+- ~~Pipeline bottleneck alert — candidates stalling at a stage beyond expected SLA~~ *(retired 2026-08-30 — 3.18)*
+- ~~Candidate experience alert — experience score drops below configured threshold~~ *(retired 2026-08-30 — 3.15)*
 
 Notifications are delivered via the **in-app dashboard**. Email notifications to managers are a future enhancement.
 
@@ -1005,14 +1086,14 @@ Notifications are delivered via the **in-app dashboard**. Email notifications to
 | **User** | Admin / hiring manager account |
 | **Interviewer Persona** | Per-campaign AI interviewer configuration — mode (pressure, collaborative, socratic, neutral) and behavioral parameters |
 | **Difficulty Log** | Per-question record of difficulty level selected during AI interview, adaptation reason, and candidate performance at that level |
-| **Skill Fingerprint** | Multi-dimensional candidate profile — technical depth/breadth, communication, problem-solving pattern, learning velocity, collaboration style, domain map |
-| **Bias Audit Report** | Per-campaign and org-wide bias analysis — score distributions, adverse impact ratios, criteria correlations, and recommendations |
-| **Candidate Experience Survey** | Post-stage micro-survey responses (rating, fairness, NPS) and behavioral engagement signals |
-| **Team Profile** | Per-team configuration for fit prediction — members, working style, skill gaps, cultural values |
-| **Team Fit Analysis** | AI-generated team fit prediction per candidate — complementary strengths, friction points, gap coverage |
-| **Practice Session** | Anonymous mock interview session from the public coaching tool — questions, responses, feedback (no PII unless opted in) |
-| **Pipeline Prediction** | AI-generated campaign predictions — time-to-fill estimate, bottleneck alerts, criteria sensitivity analysis |
-| **Reference Check** | Reference contact records, AI conversation transcripts, summarized reference report, and consistency analysis |
+| ~~**Skill Fingerprint**~~ | Multi-dimensional candidate profile — technical depth/breadth, communication, problem-solving pattern, learning velocity, collaboration style, domain map — **retired 2026-08-30** |
+| ~~**Bias Audit Report**~~ | Per-campaign and org-wide bias analysis — score distributions, adverse impact ratios, criteria correlations, and recommendations — **retired 2026-08-30** |
+| ~~**Candidate Experience Survey**~~ | Post-stage micro-survey responses (rating, fairness, NPS) and behavioral engagement signals — **retired 2026-08-30** |
+| ~~**Team Profile**~~ | Per-team configuration for fit prediction — members, working style, skill gaps, cultural values — **retired 2026-08-30** |
+| ~~**Team Fit Analysis**~~ | AI-generated team fit prediction per candidate — complementary strengths, friction points, gap coverage — **retired 2026-08-30** |
+| ~~**Practice Session**~~ | Anonymous mock interview session from the public coaching tool — questions, responses, feedback (no PII unless opted in) — **retired 2026-08-30** |
+| ~~**Pipeline Prediction**~~ | AI-generated campaign predictions — time-to-fill estimate, bottleneck alerts, criteria sensitivity analysis — **retired 2026-08-30** |
+| ~~**Reference Check**~~ | Reference contact records, AI conversation transcripts, summarized reference report, and consistency analysis — **retired 2026-08-30** |
 | **Simulation Session** | Live skill simulation data — scenario type, candidate actions, AI responses, and simulation-specific scoring |
 
 ---

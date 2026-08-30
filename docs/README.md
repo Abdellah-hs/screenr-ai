@@ -23,10 +23,11 @@ saying so; this page is the index.
 
 | File | What it is |
 | --- | --- |
-| [prd.md](prd.md) | The product requirements. **Amended in place** as decisions land, with dated entries (2026-06-23 on-demand interviews, 2026-08-04 no recording). That convention works — keep it. |
+| [prd.md](prd.md) | The product requirements. **Amended in place** as decisions land, with dated entries (2026-06-23 on-demand interviews, 2026-08-04 no recording, 2026-08-30 sections 3.13–3.19 and 3.6.4 retired). That convention works — keep it. Retired sections keep their text under a banner rather than being deleted, so the reasoning survives; a section carrying a *Retired* banner is **not** outstanding work. |
 | [architecture.md](architecture.md) | The layer map and reading order. Refreshed 2026-08-20: six layers, the current directory map, the agent workers as a trust boundary. |
 | [onboarding.md](onboarding.md) | Intern onboarding — tech stack, workflow, conventions. Reviewed 2026-08-20: the pipeline overview, the tech-stack table (five rows were wrong or still said "TBD"), the AI/real-time learning sections and the access list are all corrected. The setup and workflow walkthroughs have not been re-verified step by step. |
 | [voice-screening.md](voice-screening.md) | The screening threat model — why the unscripted follow-up exists. **Shipped**, but two transport decisions in it were later reversed; the file says which, inline. |
+| [decisions/voice-screening-worker.md](decisions/voice-screening-worker.md) | The screening worker's decision record, extracted from CLAUDE.md on 2026-08-30 (it was ~1,800 of that file's 3,216 lines, nested under `## Environment Variables`). Verbatim and in original order. **Most of it describes the pull protocol, replaced on 2026-08-27** — it opens with a table of the nine named mechanisms that no longer exist. Read it for the reasoning; CLAUDE.md's "Voice Screening" section is the contract. |
 
 ## Historical — kept for the reasoning, not the facts
 

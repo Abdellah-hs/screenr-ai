@@ -18,7 +18,7 @@ Screenr AI is an internal **Applicant Tracking System (ATS) & AI-Powered Intervi
 ```
 Resume Collection → AI Screening → Filtering → Voice Screening Questions →
 Answer Scoring → AI Interview Invitation → AI Interview →
-Interview Scoring → AI Reference Check (optional) → Manager Review →
+Interview Scoring → Manager Review →
 Final Interview Scheduling (human, calendar-booked)
 ```
 
