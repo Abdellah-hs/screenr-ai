@@ -1118,6 +1118,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      campaign_role: { Args: { p_campaign_id: string }; Returns: string }
+      can_decide_campaign: { Args: { p_campaign_id: string }; Returns: boolean }
+      can_manage_campaign: { Args: { p_campaign_id: string }; Returns: boolean }
+      can_view_campaign: { Args: { p_campaign_id: string }; Returns: boolean }
       transition_application: {
         Args: {
           p_actor: string

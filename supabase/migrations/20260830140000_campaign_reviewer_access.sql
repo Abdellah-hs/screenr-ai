@@ -36,6 +36,21 @@ BEGIN;
 -- `SET search_path = public` pins resolution so a caller cannot shadow
 -- `campaigns` with a temp table and lie to the function.
 
+-- **`deleted_at` is deliberately NOT checked here**, and getting that wrong
+-- would have been a silent data-loss bug rather than a permissions one.
+--
+-- The policy this replaces was a bare `auth.uid() = user_id`, with no soft
+-- delete condition, and things depend on that. `fetchTalentPoolRows` selects
+-- `campaigns.deleted_at` precisely so it can FLAG a removed campaign while
+-- still listing the person — "a person whose only campaign has been
+-- soft-removed must still" appear in the directory. Adding the filter here
+-- would have made `can_view_campaign` false for that campaign, hiding its
+-- applications, hiding the candidates scoped through them, and quietly
+-- emptying the talent pool of everyone whose only campaign had been removed.
+--
+-- Soft-deleted campaigns are filtered by the QUERIES that should not show them,
+-- which is where that decision has always lived. RLS answers "is this yours",
+-- not "is this current".
 CREATE OR REPLACE FUNCTION public.campaign_role(p_campaign_id UUID)
 RETURNS TEXT
 LANGUAGE sql

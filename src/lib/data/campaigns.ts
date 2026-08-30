@@ -309,12 +309,23 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
  * The user's role on a campaign, or null when they have none (issue #132).
  *
  * `owner` when they created it; otherwise their `campaign_reviewers` row, if
- * any. Deleted campaigns return null for everyone — a soft-deleted campaign is
- * nobody's, and the ownership check has always treated it that way.
+ * any.
  *
- * Mirrors `campaign_role()` in SQL. Two queries rather than the RPC so this
- * stays typed against the generated schema and testable with the ordinary
- * Supabase mock; the database remains the real boundary either way.
+ * **Soft-deleted campaigns are not filtered here**, mirroring `campaign_role()`
+ * in SQL exactly — the two must agree about what a role means or the guard and
+ * the policy disagree about the same user. RLS answers "is this yours", never
+ * "is this current": the talent-pool directory deliberately reads applications
+ * belonging to removed campaigns so it can flag the removal rather than drop
+ * the person, and a `deleted_at` condition down here would empty it.
+ *
+ * Callers that must refuse a removed campaign should filter `deleted_at` in
+ * their own query, which is where that decision has always lived. Note this is
+ * one respect in which it differs from `verifyCampaignOwnership`, which does
+ * bundle the check.
+ *
+ * Two queries rather than the SQL function so this stays typed against the
+ * generated schema and testable with the ordinary Supabase mock; the database
+ * remains the real boundary either way.
  */
 export async function fetchCampaignRole(
   campaignId: string,
@@ -327,21 +338,9 @@ export async function fetchCampaignRole(
     .select("id")
     .eq("id", campaignId)
     .eq("user_id", userId)
-    .is("deleted_at", null)
     .maybeSingle();
 
   if (owned) return "owner";
-
-  // Not the owner. A reviewer row only counts while the campaign is live, so
-  // the existence check runs first rather than trusting the join.
-  const { data: live } = await supabase
-    .from("campaigns")
-    .select("id")
-    .eq("id", campaignId)
-    .is("deleted_at", null)
-    .maybeSingle();
-
-  if (!live) return null;
 
   const { data: reviewer } = await supabase
     .from("campaign_reviewers")
