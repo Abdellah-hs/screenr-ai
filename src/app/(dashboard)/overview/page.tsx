@@ -153,10 +153,15 @@ export default async function OverviewPage() {
               "hired" that disagreed — and the one a work queue can act on is
               already in the funnel. */}
           <RailCard title="Recent decisions">
+            {/* The list is capped and scrolls, like the queue groups, so the
+                rail ends at a predictable height rather than running on past
+                whatever the queue beside it happens to be showing. The fetch
+                already asks for 6, so this is a short scroll by construction —
+                the cap is about the column's height, not about hiding a list. */}
             {outcomes.length === 0 ? (
               <EmptyHint>No hires or rejections yet.</EmptyHint>
             ) : (
-              <ul className="space-y-3">
+              <ul className="max-h-[14rem] space-y-3 overflow-y-auto pr-1">
                 {outcomes.map((o, i) => (
                   <OutcomeRow key={`${o.campaignId}-${i}`} outcome={o} />
                 ))}

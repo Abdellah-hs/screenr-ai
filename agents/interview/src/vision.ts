@@ -3,8 +3,10 @@
  *
  * The candidate publishes a camera track, but the interviewer itself is
  * speech-to-speech and never looks at it. This module is the only thing that
- * does: it samples one frame every ~10s, runs a local object detector over it
- * (`detector.ts`), and hands the readings back for reporting to the app.
+ * does: it samples frames off the live track, runs a local object detector over
+ * them (`detector.ts`), and hands the readings back for reporting to the app.
+ * Two cadences, documented on the constants below: a fast one for the overlay
+ * drawn on the candidate's own self-view, a slower one for what is recorded.
  *
  * Three boundaries are deliberate and load-bearing:
  *
@@ -77,8 +79,8 @@ const OVERLAY_ENABLED = (process.env.VISION_OVERLAY ?? "1") !== "0";
 /**
  * How often frames are scored while the overlay is on.
  *
- * The overlay is why this exists: at the report's 10s cadence a drawn box is up
- * to ten seconds stale, so it sits over where the candidate *used to be* and
+ * The overlay is why this exists: at the report's own cadence a drawn box is up
+ * to five seconds stale, so it sits over where the candidate *used to be* and
  * reads as broken. ~1s tracks a person well enough to look live. The cost is
  * real — ~75ms of CPU per frame, so roughly 7% of a core per concurrent
  * interview instead of 0.7%.

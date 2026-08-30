@@ -20,7 +20,7 @@ describe("auditStageTone", () => {
   });
 
   it("falls back to a neutral tone for a stage it has never seen", () => {
-    expect(auditStageTone("reference_check_scoring")).toBe("other");
+    expect(auditStageTone("take_home_scoring")).toBe("other");
   });
 });
 
@@ -30,7 +30,7 @@ describe("auditStageLabel", () => {
   });
 
   it("title-cases an unknown stage rather than blanking the cell", () => {
-    expect(auditStageLabel("reference_check_scoring")).toBe("Reference Check Scoring");
+    expect(auditStageLabel("take_home_scoring")).toBe("Take Home Scoring");
   });
 });
 

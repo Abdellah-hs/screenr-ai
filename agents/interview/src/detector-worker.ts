@@ -23,8 +23,9 @@ import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import type * as OrtTypes from "onnxruntime-node";
 import {
-  DECODE_MIN_SCORE,
-  DETECTION_FLOORS,
+  decodeFloor,
+  diagnosticDecodeFloor,
+  effectiveFloors,
   INPUT_SIZE,
   countKept,
   decodeYoloxOutput,
@@ -34,6 +35,7 @@ import {
   selectSignals,
   toOverlayBoxes,
   type Detection,
+  type SignalThresholds,
   type OverlayBox,
 } from "./postprocess.js";
 import { preprocess } from "./preprocess.js";
@@ -52,27 +54,34 @@ import { preprocess } from "./preprocess.js";
  */
 const DEBUG_SCORES = process.env.VISION_DEBUG_SCORES === "1";
 
-/** Deliberately under every real floor, so a REJECTED signal still shows up. */
-const DEBUG_DECODE_FLOOR = 0.05;
-
+/**
+ * `thresholds` is the same object handed to `selectSignals`, so the floors
+ * printed are the ones actually applied — including the override and its
+ * one-way clamp. Printing the compiled-in defaults would name a floor the
+ * pipeline is not using, in exactly the configuration someone sets this flag
+ * to investigate.
+ */
 function logCandidates(
   detections: Detection[],
   frame: { width: number; height: number },
+  thresholds: SignalThresholds,
 ): void {
   const candidates = describeCandidates(detections, frame);
-  const phones = candidates.filter((c) => c.label === "phone");
-
   // A frame with nothing in it is the common case and would drown the log.
   if (candidates.length === 0) return;
 
-  const render = (c: { label: string; score: number; areaRatio: number }) =>
-    `${c.label} score=${c.score.toFixed(3)} area=${(c.areaRatio * 100).toFixed(2)}%`;
+  const floors = effectiveFloors(thresholds);
+  const hasPhone = candidates.some((c) => c.label === "phone");
+  const seen = candidates
+    .slice(0, 6)
+    .map((c) => `${c.label} score=${c.score.toFixed(3)} area=${(c.areaRatio * 100).toFixed(2)}%`)
+    .join(" | ");
 
   console.log(
-    `vision.debug: ${candidates.slice(0, 6).map(render).join(" | ")}` +
-      ` || floors: person>=${DETECTION_FLOORS.person} extra-person>=${DETECTION_FLOORS.additionalPerson}` +
-      ` phone>=${DETECTION_FLOORS.phone} phone-area>=${(DETECTION_FLOORS.phoneArea * 100).toFixed(2)}%` +
-      (phones.length === 0 ? " || NO PHONE CANDIDATE AT ALL" : ""),
+    `vision.debug: ${seen}` +
+      ` || floors: person>=${floors.person} extra-person>=${floors.additionalPerson}` +
+      ` phone>=${floors.phone} phone-area>=${(floors.phoneArea * 100).toFixed(2)}%` +
+      (hasPhone ? "" : " || NO PHONE CANDIDATE AT ALL"),
   );
 }
 
@@ -154,36 +163,33 @@ async function detect(request: DetectRequest): Promise<DetectReading | null> {
 
   const { ratio } = prepared;
   const frame = { width, height };
-  const thresholds = {
+  const thresholds: SignalThresholds = {
     personMinScore: minScore,
     additionalPersonMinScore: minScore,
     phoneMinScore: minScore,
   };
 
-  // The override has to reach the DECODE floor too. That floor runs in front of
-  // every class threshold, so lowering a class floor without lowering it just
-  // moved a filter nobody could see: the anchor was already gone, and the knob
-  // silently did nothing below 0.2 — exactly the range you reach for when a
-  // real camera is under-detecting.
-  const decodeMinScore =
-    minScore === undefined ? undefined : Math.min(minScore, DECODE_MIN_SCORE);
+  const decodeMinScore = decodeFloor(minScore);
+
+  // The diagnostic decodes the SAME tensor a second time, at a floor under every
+  // real one, so the log can show a signal that was scored and REJECTED rather
+  // than only one that was never produced. A second pass rather than a lowered
+  // floor plus a compensating filter: that shape made the production reading
+  // depend on `minScore` having no effect other than a score cut, which nothing
+  // pins. This way the production decode below is the same line it was before
+  // the flag existed, and the diagnostic floor cannot reach it.
+  // A decode is ~1ms against a ~50ms inference, and only when debugging.
+  if (DEBUG_SCORES) {
+    logCandidates(
+      decodeYoloxOutput(raw, { ratio, minScore: diagnosticDecodeFloor(minScore) }),
+      frame,
+      thresholds,
+    );
+  }
 
   // Select once; count from that exact array. The overlay and the report can
   // therefore never disagree about what the frame contained.
-  // While diagnosing, decode far below any floor so the log can show a signal
-  // that was scored and REJECTED, not just one that was never produced. The
-  // real pipeline is filtered back up to its own floor immediately after, so
-  // the reading this returns is identical either way.
-  const floor = decodeMinScore ?? DECODE_MIN_SCORE;
-  const decodedAll = decodeYoloxOutput(raw, {
-    ratio,
-    minScore: DEBUG_SCORES ? Math.min(DEBUG_DECODE_FLOOR, floor) : decodeMinScore,
-  });
-  if (DEBUG_SCORES) logCandidates(decodedAll, frame);
-  const decoded = DEBUG_SCORES
-    ? decodedAll.filter((d) => d.score >= floor)
-    : decodedAll;
-
+  const decoded = decodeYoloxOutput(raw, { ratio, minScore: decodeMinScore });
   const kept = selectSignals(nms(decoded), frame, thresholds);
   const signals = countKept(kept);
 

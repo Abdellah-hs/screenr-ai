@@ -97,7 +97,29 @@ export function createTranscript(options: {
   send?: (applicationId: string, turns: TranscriptTurn[]) => Promise<void>;
   now?: () => Date;
 }): Transcript {
-  const { applicationId, send = reportTranscript, now = () => new Date() } = options;
+  const { applicationId, send: rawSend = reportTranscript, now = () => new Date() } = options;
+
+  // Every report is best-effort, stated ONCE here so no call site can forget
+  // and none has to restate it. Two different things go wrong without it, and
+  // neither is belt-and-braces:
+  //
+  // - `reporting` is the chain every later report queues behind, and `.then`
+  //   skips its handler on an already-rejected promise. ONE rejected send would
+  //   mean no further turn is ever reported for the rest of the call. A lost
+  //   report costs one turn, which the next report carries anyway; a poisoned
+  //   lane costs the record the score is read from.
+  // - `windDown` flushes and THEN publishes `screening.finished`, the packet
+  //   the browser submits on, both inside one try block. A throwing flush skips
+  //   the publish, so the candidate is never told to submit and sits on a
+  //   finished call at `screening_sent` until the expiry sweep rejects them for
+  //   an interview they actually sat. An incomplete transcript is worth
+  //   submitting; a complete one nobody submits is not.
+  //
+  // `reportTranscript` swallows its own errors, so today this holds by way of a
+  // distant function; keeping it here means an injected `send` cannot break it,
+  // which is the same guarantee `speech.ts` keeps local to its own lane.
+  const send = (id: string, snapshot: TranscriptTurn[]) =>
+    rawSend(id, snapshot).catch(() => undefined);
 
   const turns: TranscriptTurn[] = [];
   const seenItemIds = new Set<string>();
@@ -132,6 +154,10 @@ export function createTranscript(options: {
 
     async flush() {
       await reporting;
+      // Deliberately re-sends what the last queued report already carried. That
+      // looks redundant and is the point: `send` swallows rejections, so a
+      // report that failed mid-call left the app holding a stale draft and
+      // nothing else would ever correct it. This is the one retry.
       await send(applicationId, [...turns]);
     },
   };

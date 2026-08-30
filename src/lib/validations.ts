@@ -318,7 +318,6 @@ const applicationStateValues = [
   "interview_scheduled",
   "interview_completed",
   "interview_scored",
-  "reference_check",
   "manager_review",
   "final_interview_scheduling",
   "screening_expired",

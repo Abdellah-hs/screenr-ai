@@ -4,7 +4,10 @@ import {
   INPUT_SIZE,
   PERSON_CLASS_ID,
   describeCandidates,
-  DETECTION_FLOORS,
+  DIAGNOSTIC_DECODE_FLOOR,
+  decodeFloor,
+  diagnosticDecodeFloor,
+  effectiveFloors,
   countKept,
   countSignals,
   decodeYoloxOutput,
@@ -586,15 +589,15 @@ describe("describeCandidates", () => {
   it("reports the score and frame share of every person and phone", () => {
     const result = describeCandidates(
       [
-        { classId: PERSON_CLASS_ID, score: 0.9, box: [0, 0, 500, 500] },
-        { classId: 67, score: 0.31, box: [0, 0, 100, 100] },
+        detection(PERSON_CLASS_ID, 0.9, [0, 0, 500, 500]),
+        detection(CELL_PHONE, 0.8, [0, 0, 100, 100]),
       ],
       frame,
     );
 
     expect(result).toEqual([
       { label: "person", score: 0.9, areaRatio: 0.25 },
-      { label: "phone", score: 0.31, areaRatio: 0.01 },
+      { label: "phone", score: 0.8, areaRatio: 0.01 },
     ]);
   });
 
@@ -602,17 +605,17 @@ describe("describeCandidates", () => {
     // 0.31 is below PHONE_MIN_SCORE (0.45). If this were filtered, the log
     // could never distinguish "scored too low" from "never seen".
     const result = describeCandidates(
-      [{ classId: 67, score: 0.31, box: [0, 0, 100, 100] }],
+      [detection(CELL_PHONE, 0.31, [0, 0, 100, 100])],
       frame,
     );
 
     expect(result).toHaveLength(1);
-    expect(result[0].score).toBeLessThan(DETECTION_FLOORS.phone);
+    expect(result[0].score).toBeLessThan(effectiveFloors().phone);
   });
 
   it("counts a remote as a phone, like the counting path does", () => {
     const result = describeCandidates(
-      [{ classId: 65, score: 0.5, box: [0, 0, 100, 100] }],
+      [detection(REMOTE, 0.5, [0, 0, 100, 100])],
       frame,
     );
 
@@ -620,22 +623,110 @@ describe("describeCandidates", () => {
   });
 
   it("ignores classes the product does not report on", () => {
-    // 63 is `laptop` — deliberately not a finding, so it must not appear here
-    // either and imply the detector saw something it will act on.
+    // A laptop is deliberately not a finding, so it must not appear here either
+    // and imply the detector saw something it will act on.
     expect(
-      describeCandidates([{ classId: 63, score: 0.99, box: [0, 0, 100, 100] }], frame),
+      describeCandidates([detection(LAPTOP, 0.99, [0, 0, 100, 100])], frame),
     ).toEqual([]);
   });
 
   it("orders strongest first, so the log's first entry is the best evidence", () => {
     const result = describeCandidates(
       [
-        { classId: 67, score: 0.2, box: [0, 0, 100, 100] },
-        { classId: PERSON_CLASS_ID, score: 0.8, box: [0, 0, 100, 100] },
+        detection(CELL_PHONE, 0.2, [0, 0, 100, 100]),
+        detection(PERSON_CLASS_ID, 0.8, [0, 0, 100, 100]),
       ],
       frame,
     );
 
     expect(result.map((c) => c.score)).toEqual([0.8, 0.2]);
+  });
+});
+
+/**
+ * The floors the diagnostic prints and the counting path applies are one
+ * derivation, so the log can never name a floor that is not in force. These pin
+ * the clamp, which is the part an override can get wrong in the dangerous
+ * direction.
+ */
+describe("effectiveFloors", () => {
+  it("applies the override to the person and phone floors", () => {
+    const floors = effectiveFloors({ personMinScore: 0.25, phoneMinScore: 0.25 });
+
+    expect(floors.person).toBe(0.25);
+    expect(floors.phone).toBe(0.25);
+  });
+
+  it("refuses to lower the extra-person floor, however low the override", () => {
+    // The asymmetry `selectSignals` exists to hold: "detect more" means find
+    // the candidate more easily, never accuse more easily.
+    const floors = effectiveFloors({
+      personMinScore: 0.1,
+      additionalPersonMinScore: 0.1,
+    });
+
+    expect(floors.additionalPerson).toBe(0.6);
+  });
+
+  it("raises the extra-person floor to match a stricter first-person floor", () => {
+    const floors = effectiveFloors({ personMinScore: 0.8 });
+
+    expect(floors.additionalPerson).toBe(0.8);
+  });
+
+  it("reports the compiled-in defaults when nothing is overridden", () => {
+    expect(effectiveFloors()).toEqual({
+      person: 0.35,
+      additionalPerson: 0.6,
+      phone: 0.45,
+      personArea: 0.015,
+      phoneArea: 0.003,
+    });
+  });
+});
+
+/**
+ * The two decode floors, which used to live inline in the worker — the file
+ * with no test of its own. The production one has already been a bug once (an
+ * override below 0.2 silently did nothing, because this floor runs in front of
+ * every class threshold), which is why it is pinned here.
+ */
+describe("decodeFloor", () => {
+  it("passes undefined through, so no override means the decoder's own default", () => {
+    expect(decodeFloor(undefined)).toBeUndefined();
+  });
+
+  it("lowers the decode floor to match an override below it", () => {
+    // The bug this exists to prevent: at 0.2 the anchor was already gone, so
+    // lowering only a class floor moved a filter nobody could see.
+    expect(decodeFloor(0.05)).toBe(0.05);
+  });
+
+  it("keeps the decode floor where it is when the override is above it", () => {
+    expect(decodeFloor(0.8)).toBe(DECODE_MIN_SCORE);
+  });
+});
+
+describe("diagnosticDecodeFloor", () => {
+  /**
+   * The invariant the diagnostic depends on. Above the production floor it
+   * would report "never produced at all" about a candidate the pipeline
+   * actually decoded — the one reading that sends you tuning the wrong knob,
+   * and exactly the confusion the flag exists to resolve.
+   */
+  it("never sits above the production floor, at any override", () => {
+    for (const override of [undefined, 0.01, 0.05, 0.1, 0.2, 0.35, 0.6, 0.99]) {
+      expect(diagnosticDecodeFloor(override)).toBeLessThanOrEqual(
+        decodeFloor(override) ?? DECODE_MIN_SCORE,
+      );
+    }
+  });
+
+  it("follows an override below its own default down", () => {
+    expect(diagnosticDecodeFloor(0.01)).toBe(0.01);
+  });
+
+  it("stays at its own floor when nothing is overridden", () => {
+    expect(diagnosticDecodeFloor(undefined)).toBe(DIAGNOSTIC_DECODE_FLOOR);
   });
 });

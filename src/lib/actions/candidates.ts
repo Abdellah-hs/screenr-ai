@@ -613,11 +613,22 @@ async function scoreApplicationResume(
  * Best-effort per candidate: one candidate's failure is logged and never blocks
  * the rest — or the caller (the campaign save). Already-scored candidates are
  * left untouched (we never overwrite an existing score).
+ *
+ * **The owner is derived here and never passed in.** This module is
+ * `"use server"`, so every export is a callable RPC endpoint whether or not a
+ * client component imports it — the same hazard `actions/interview-scoring.ts`
+ * avoids by refusing to be a `"use server"` module at all. Taking the campaign
+ * owner as an argument made that endpoint one that spends OpenAI budget,
+ * transitions applications and emails candidates on a campaign the caller
+ * merely names: every ownership check below is scoped by the id it was handed,
+ * so supplying somebody else's satisfies all of them. The two internal callers
+ * already hold the same value from `requireUserId()`, and `getAuthUser` is
+ * request-cached, so deriving it costs nothing and cannot be forged.
  */
-export async function scoreUnscoredCampaignCandidates(
-  campaignId: string,
-  userId: string,
-): Promise<void> {
+export async function scoreUnscoredCampaignCandidates(campaignId: string): Promise<void> {
+  uuidSchema.parse(campaignId);
+  const userId = await requireUserId();
+
   const status = await fetchCampaignStatus(campaignId, userId);
   if (!status || !isCampaignProcessingActive(status)) return; // freeze rule
 

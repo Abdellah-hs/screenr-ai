@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { normalizedIncludes } from "@/lib/resume-scoring/validate";
+import { normalizedIncludes } from "./quotes";
 import { EvidenceLevelSchema, type EvidenceLevel } from "./evidence-levels";
 
 /**

@@ -249,3 +249,70 @@ describe("interviewerTurnSince", () => {
     expect(interviewerTurnSince(redelivered, 2)).toBe("Take care, and thanks again.");
   });
 });
+
+/**
+ * What happens to the record when reporting it fails.
+ *
+ * `reportTranscript` swallows its own errors today, so these guard an
+ * invariant that currently holds by accident — it lives in a distant function
+ * rather than in the queue. `speech.ts` keeps the same guarantee local to its
+ * own lane (`lane.catch`, plus a try/finally around every turn); this is the
+ * matching pair for the transcript's.
+ */
+describe("createTranscript when a report fails", () => {
+  /**
+   * A rejected send must not poison the lane every later report queues behind.
+   * `.then` skips its handler on an already-rejected promise, so ONE failure
+   * would mean no further turn is ever reported for the rest of the call —
+   * and the transcript is what the score is read from.
+   */
+  it("keeps reporting after a send fails", async () => {
+    const sent: string[][] = [];
+    const transcript = createTranscript({
+      applicationId: "app-1",
+      send: async (_id, turns) => {
+        sent.push(turns.map((turn) => turn.text));
+        if (sent.length === 1) throw new Error("network down");
+      },
+    });
+
+    transcript.add("agent", "one", "i1");
+    transcript.add("candidate", "two", "i2");
+    await transcript.drain();
+
+    expect(sent).toEqual([["one"], ["one", "two"]]);
+  });
+
+  /** A poisoned lane must not surface as a throw at the shutdown callback. */
+  it("drains without throwing after a send fails", async () => {
+    const transcript = createTranscript({
+      applicationId: "app-1",
+      send: async () => {
+        throw new Error("network down");
+      },
+    });
+    transcript.add("candidate", "an answer", "i1");
+
+    await expect(transcript.drain()).resolves.toBeUndefined();
+  });
+
+  /**
+   * `windDown` flushes and THEN publishes `screening.finished` — the packet the
+   * browser submits on — inside one try block. A throwing flush skips the
+   * publish, so the candidate is never told to submit: they sit on a finished
+   * call at `screening_sent` until the expiry sweep rejects them for an
+   * interview they actually sat. An incomplete transcript is worth submitting;
+   * a complete one nobody submits is not.
+   */
+  it("does not throw out of flush when the report fails", async () => {
+    const transcript = createTranscript({
+      applicationId: "app-1",
+      send: async () => {
+        throw new Error("network down");
+      },
+    });
+    transcript.add("candidate", "the last thing they said", "i1");
+
+    await expect(transcript.flush()).resolves.toBeUndefined();
+  });
+});

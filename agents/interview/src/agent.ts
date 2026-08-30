@@ -17,9 +17,10 @@
  * id alone.
  *
  * The candidate publishes camera + mic. This worker drives the spoken
- * conversation off the audio track; the camera feed is present in the room for
- * recording + proctoring, which are handled in later phases (frame sampling +
- * vision analysis) rather than here.
+ * conversation off the audio track; the camera feed is sampled for proctoring by
+ * `vision.ts`, kept strictly out of the Realtime session. The interview is NOT
+ * recorded — frames are scored in memory and dropped, and the only images that
+ * ever persist are the annotated stills behind a confirmed proctoring finding.
  *
  * Env (see .env.example): LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
  * (read by the agents CLI), OPENAI_API_KEY (Realtime), SCREENR_APP_ORIGIN +
@@ -260,7 +261,87 @@ export default defineAgent({
       llm: new openai.realtime.RealtimeModel({
         model: REALTIME_MODEL,
         voice: REALTIME_VOICE,
+        turnDetection: {
+          // The plugin's own defaults, restated so the one changed line below
+          // reads as a change rather than as a whole configuration arriving at
+          // once. Keep them in step with DEFAULT_TURN_DETECTION if the plugin
+          // moves.
+          type: "semantic_vad",
+          eagerness: "medium",
+          // TRUE here, unlike screening. This interviewer improvises its own
+          // questions from the candidate's CV, so nothing else is going to
+          // speak for it — the app pushes the screening conversation, and
+          // there is no equivalent to push this one.
+          create_response: true,
+          // **The interviewer is never cut off mid-question.**
+          //
+          // A candidate talking over a question is far more often a cough, a
+          // backchannel, or somebody else in the room than an answer — and
+          // with auto-reply on, reading one of those as a turn costs the
+          // question outright. The response is CANCELLED partway through, the
+          // cough is committed as user input, and OpenAI then generates a
+          // reply to IT. The interviewer abandons what it was asking and
+          // answers a cough. Against a budget of about five questions in ten
+          // minutes, that is a fifth of the interview, and the rubric
+          // dimension the lost question would have evidenced is graded on
+          // whatever else happened to come up.
+          //
+          // Screening reaches the same setting from a different failure (a
+          // stamped topic scored on a cough) and a re-drivable conversation.
+          // Nothing re-drives this one: a question lost here is simply lost.
+          //
+          // **It has to be done HERE, on OpenAI's own turn detection.** The
+          // framework's `allowInterruptions` OPTION is silently forced back to
+          // `true` for a RealtimeModel with server-side turn detection
+          // (agents/voice/agent_activity.ts), so passing it reads as a
+          // guarantee and provides none. See the handle setter below for the
+          // other half.
+          interrupt_response: false,
+        },
       }),
+    });
+
+    /**
+     * Claim every turn as uninterruptible — whoever created it.
+     *
+     * `interrupt_response: false` above is necessary and not sufficient: it
+     * stops OPENAI cancelling its own response, and does nothing about the
+     * FRAMEWORK, which runs its own interruption on top. `onInputSpeechStarted`
+     * calls `activity.interrupt()` unconditionally on every
+     * `input_speech_started`, and the only thing that stops it is
+     * `currentSpeech.interrupt(false)` THROWING, which that caller wraps in a
+     * try/catch. The framework anticipates it — its own comment there reads
+     * "this is going to raise when allow_interruptions is False".
+     *
+     * The screening worker sets this on the handle `generateReply` hands back,
+     * which it can because it speaks only when the app tells it to. Here the
+     * model starts its own turns, so most handles are created inside the
+     * framework and never surface to us. `SpeechCreated` is emitted
+     * synchronously at construction, before the speech task is created, so a
+     * listener is the one place that catches every path — the greeting, each
+     * auto-reply, and a tool response.
+     *
+     * Expect one framework error line per attempt, worded as though it were
+     * impossible ("this should never happen!"). It is expected here; it is the
+     * sound of a question surviving a cough.
+     *
+     * A candidate who talks over a question is not silently ignored so much as
+     * not heard: while an uninterruptible turn is playing the framework feeds
+     * silence to the model in place of their audio
+     * (`discardAudioIfUninterruptible`, default true), so those words reach no
+     * transcript. That is the right trade with auto-reply on — audio that DID
+     * get through would be committed as a user turn and answered as soon as the
+     * question finished, which is the failure this setting exists to prevent.
+     * Their answer proper, once the question has finished playing, is
+     * unaffected.
+     */
+    session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
+      try {
+        ev.speechHandle.allowInterruptions = false;
+      } catch {
+        // The setter refuses a handle that has already been interrupted. There
+        // is nothing left to protect, and the turn is over either way.
+      }
     });
 
     // Every finalized conversation item (agent or candidate) becomes one

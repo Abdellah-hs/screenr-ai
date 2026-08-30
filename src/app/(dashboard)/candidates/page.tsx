@@ -32,8 +32,13 @@ export default async function TalentPoolPage({
   ]);
 
   return (
-    <div className="mx-auto max-w-5xl">
-      <div className="mb-5">
+    // `h-full` so the page is the viewport and the LIST scrolls, not the page.
+    // The search box and the campaign filter are the tools for getting through
+    // a long directory, so scrolling them off the top is the one thing this
+    // page cannot afford: you go looking for the search, and it is a screen
+    // above wherever you are.
+    <div className="mx-auto flex h-full max-w-5xl flex-col">
+      <div className="mb-5 shrink-0">
         <h1 className="text-2xl font-semibold text-ink">
           {showDirectory ? "All candidates" : "Talent pool"}
         </h1>
@@ -44,7 +49,10 @@ export default async function TalentPoolPage({
         </p>
       </div>
 
-      <div className="mb-6 inline-flex rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-1">
+      {/* `self-start` because a flex column stretches its children by default,
+          and this bar shrink-wraps its two tabs — without it the segmented
+          control becomes a full-width strip. */}
+      <div className="mb-6 inline-flex shrink-0 self-start rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-1">
         <ViewTab href="/candidates" label="Talent pool" count={entries.length} active={!showDirectory} />
         <ViewTab href="/candidates?view=all" label="All candidates" count={people.length} active={showDirectory} />
       </div>

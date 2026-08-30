@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.4"
+    PostgrestVersion: "14.5"
   }
   graphql_public: {
     Tables: {
@@ -1160,7 +1160,6 @@ export type Database = {
         | "interview_scheduled"
         | "interview_completed"
         | "interview_scored"
-        | "reference_check"
         | "manager_review"
         | "final_interview_scheduling"
         | "screening_expired"
@@ -1341,7 +1340,6 @@ export const Constants = {
         "interview_scheduled",
         "interview_completed",
         "interview_scored",
-        "reference_check",
         "manager_review",
         "final_interview_scheduling",
         "screening_expired",

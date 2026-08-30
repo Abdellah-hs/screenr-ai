@@ -1,3 +1,4 @@
+import { normalizedIncludes } from "@/lib/scoring/quotes";
 import type { ResumeCriterion } from "./criteria";
 import type {
   EvidenceLevel,
@@ -5,6 +6,15 @@ import type {
   ResumeEvidenceItem,
   ResumeEvidenceResponse,
 } from "./evidence";
+
+/**
+ * Quote matching moved to `@/lib/scoring/quotes` — all three scored stages
+ * verify a quote the same way, so it belongs with the shared ladder rather
+ * than here. Re-exported so this module's callers and tests are untouched, the
+ * same arrangement `screening-scoring` uses for the transcript and weight
+ * helpers.
+ */
+export { normalizeForQuoteMatch, normalizedIncludes } from "@/lib/scoring/quotes";
 
 /**
  * The evidence came back in a shape no amount of conservatism can rescue —
@@ -42,40 +52,6 @@ export interface ValidatedResumeEvidence {
    * correction and why it happened.
    */
   warnings: string[];
-}
-
-const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
-const QUOTE_CHARS = /[\u2018\u2019\u201A\u201B\u2032]/g;
-const DOUBLE_QUOTE_CHARS = /[\u201C\u201D\u201E\u201F\u2033]/g;
-const DASH_CHARS = /[\u2010-\u2015\u2212]/g;
-
-/**
- * Fold away every difference that is not a difference in what was said:
- * Unicode composition, case, curly-vs-straight punctuation, and whitespace
- * (including the line breaks our own document builder inserts).
- *
- * Deliberately conservative about what it does NOT remove — words, digits and
- * ordinary punctuation all survive, so this can widen a match but never invent
- * one between two genuinely different sentences.
- */
-export function normalizeForQuoteMatch(text: string): string {
-  return text
-    .normalize("NFKC")
-    .replace(ZERO_WIDTH, "")
-    .replace(QUOTE_CHARS, "'")
-    .replace(DOUBLE_QUOTE_CHARS, '"')
-    .replace(DASH_CHARS, "-")
-    .replace(/\u2026/g, "...")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/** Whether `quote` appears in `sourceText`, ignoring only cosmetic differences. */
-export function normalizedIncludes(sourceText: string, quote: string): boolean {
-  const needle = normalizeForQuoteMatch(quote);
-  if (!needle) return false;
-  return normalizeForQuoteMatch(sourceText).includes(needle);
 }
 
 /**

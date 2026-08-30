@@ -51,7 +51,11 @@ import {
 } from "./channel.js";
 import { createAnswerClock } from "./clock.js";
 import { createMachine, type InterviewEvent, type InterviewPhase, type InterviewState } from "./machine.js";
-import { readCallLanguage, type CallLanguage } from "./language.js";
+import {
+  readCallLanguage,
+  transcriptionLanguage,
+  type CallLanguage,
+} from "./language.js";
 import {
   greetingInstructions,
   goodbyeInstructions,
@@ -104,6 +108,17 @@ interface ScreeningRoomMetadata {
 // available, and pointing here fails the session the instant it opens, leaving
 // the candidate in a silent room. Verify with `GET /v1/models` before changing.
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
+
+/**
+ * The transcription sidecar, named rather than left to the plugin default.
+ *
+ * The default is `gpt-4o-mini-transcribe`, and it is what produces the durable
+ * record: the interviewer understands the audio natively, so a call sounds
+ * perfect while the TEXT the scorer reads is empty. Naming it here means a
+ * plugin upgrade cannot silently change what writes that record.
+ */
+const TRANSCRIPTION_MODEL =
+  process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
 // "marin"/"cedar" are the natural GA voices for gpt-realtime; "alloy" et al.
 // also work but sound more robotic.
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || "marin";
@@ -220,6 +235,25 @@ export default defineAgent({
       // and TTS in one model.
       llm: new openai.realtime.RealtimeModel({
         model: REALTIME_MODEL,
+        /**
+         * **The transcript is the record; this is what decides whether it has
+         * anything in it.** Speech-to-speech means the interviewer never reads
+         * this text — so when the sidecar fails, the call sounds completely
+         * normal and the durable evidence is blank. Every rubric dimension
+         * then scores `not_present`, and the 0 looks exactly like a candidate
+         * who said nothing useful.
+         *
+         * Passing the language is the half that was missing. The candidate
+         * chose it before the room existed and `speakIn` has been pinning the
+         * interviewer to it on every turn, while the transcriber was still
+         * auto-detecting each utterance on its own — worst on the short ones
+         * this call is full of ("Oui.", "Yes.", a filler). `undefined` when
+         * unpinned, which leaves auto-detection exactly as it was.
+         */
+        inputAudioTranscription: {
+          model: TRANSCRIPTION_MODEL,
+          language: transcriptionLanguage(callLanguage),
+        },
         voice: REALTIME_VOICE,
         turnDetection: {
           type: "semantic_vad",

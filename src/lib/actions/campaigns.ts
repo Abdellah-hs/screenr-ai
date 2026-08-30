@@ -391,7 +391,7 @@ export async function updateCampaign(id: string, formData: FormData) {
   // manual "Score Resume" button). Best-effort: a scoring failure must never
   // block the campaign save.
   try {
-    await scoreUnscoredCampaignCandidates(id, userId);
+    await scoreUnscoredCampaignCandidates(id);
   } catch (err) {
     console.error("Post-save candidate scoring failed (non-blocking):", err);
   }
@@ -450,7 +450,7 @@ export async function saveCampaignRubrics(
   // against may have just appeared. Best-effort — a scoring failure must never
   // lose the recruiter's rubric edit.
   try {
-    await scoreUnscoredCampaignCandidates(campaignId, userId);
+    await scoreUnscoredCampaignCandidates(campaignId);
   } catch (err) {
     console.error("Post-rubric-save candidate scoring failed (non-blocking):", err);
   }

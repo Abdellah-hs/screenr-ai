@@ -62,7 +62,6 @@ const EVENT_LABEL: Partial<Record<ApplicationState, string>> = {
   interview_scored: "Interview scored",
   interview_expired: "Interview window closed",
   interview_no_show: "Interview window closed",
-  reference_check: "Reference check started",
   manager_review: "Sent to manager review",
   final_interview_scheduling: "Final round offered",
   hired: "Hired",

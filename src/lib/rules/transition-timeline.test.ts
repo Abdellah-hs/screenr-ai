@@ -43,7 +43,6 @@ describe("transitionPolarity", () => {
       "screening_approved",
       "screening_sent",
       "interview_invited",
-      "reference_check",
       "manager_review",
       "final_interview_scheduling",
       "hired",

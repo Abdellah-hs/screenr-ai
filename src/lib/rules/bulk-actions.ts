@@ -65,7 +65,6 @@ const BULK_ADVANCE_TARGET: Partial<Record<ApplicationState, ApplicationState>> =
   screening_review_pending: "screening_approved",
   screening_scored: "interview_invited",
   interview_scored: "manager_review",
-  reference_check: "manager_review",
 };
 
 /** The forward target for a bulk advance, or null when there isn't one. */

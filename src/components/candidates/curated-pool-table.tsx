@@ -106,9 +106,12 @@ export function CuratedPoolTable({ entries }: { entries: TalentPoolEntry[] }) {
   if (entries.length === 0) return <EmptyPool />;
 
   return (
-    <div>
+    // Fits whatever height the page gives it; only the card list scrolls, so
+    // the search, the filter panel and the active-filter chips stay reachable
+    // however far down the pool you are.
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* ── Search + filters ────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <svg
             className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
@@ -165,7 +168,7 @@ export function CuratedPoolTable({ entries }: { entries: TalentPoolEntry[] }) {
       </div>
 
       {showFilters && (
-        <div className="mt-3 space-y-4 rounded-xl border border-[#E5E7EB] bg-[#FAFAFA] p-4">
+        <div className="mt-3 shrink-0 space-y-4 rounded-xl border border-[#E5E7EB] bg-[#FAFAFA] p-4">
           {tagCounts.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
@@ -284,7 +287,7 @@ export function CuratedPoolTable({ entries }: { entries: TalentPoolEntry[] }) {
           the list itself. Without these, three people out of forty looks like a
           pool that lost its marks. */}
       {chips.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <div className="mt-3 flex shrink-0 flex-wrap items-center gap-1.5">
           {chips.map((chip) => (
             <button
               key={chip.id}
@@ -316,7 +319,7 @@ export function CuratedPoolTable({ entries }: { entries: TalentPoolEntry[] }) {
         </div>
       )}
 
-      <p className="mb-3 mt-4 text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
+      <p className="mb-3 mt-4 shrink-0 text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
         {poolCountLabel(filtered.length, entries.length, narrowed || searching)}
       </p>
 
@@ -329,7 +332,10 @@ export function CuratedPoolTable({ entries }: { entries: TalentPoolEntry[] }) {
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
+        // `pr-1` keeps the hairline thumb off the card borders; `pb-1` stops
+        // the last card sitting flush against the cut. AddMoreCard scrolls
+        // with the list because it IS the end of the list.
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-1 pr-1">
           {filtered.map((entry) => (
             <PoolEntryCard
               key={entry.id}

@@ -23,7 +23,17 @@ export const INTERVIEW_SCORING_RULES_VERSION = "v2_covered_dimensions_only";
 export interface ScoredInterviewDimension {
   dimension_id: string;
   name: string;
-  /** The share of the overall this dimension actually carried, after normalising. */
+  /**
+   * This dimension's share of the WHOLE rubric, after normalising.
+   *
+   * Not the share it carried in `overall_score`, which since v2 is re-normalised
+   * across the assessed dimensions only — on a partly-covered interview an
+   * assessed dimension carried more than this, and an unreached one carried
+   * nothing. This is the recruiter's stated importance, which is what the
+   * breakdown should show: it is the same number for every candidate on the
+   * campaign, so it stays comparable between them, and it does not silently
+   * change because one conversation went somewhere another did not.
+   */
   weight: number;
   evidence_level: EvidenceLevel;
   /** What the model claimed, kept so a downgrade is visible in the audit trail. */

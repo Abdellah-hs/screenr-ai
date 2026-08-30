@@ -57,3 +57,35 @@ export function speakIn(language: CallLanguage | null): string {
     "and never apologise for it.\n\n"
   );
 }
+
+/**
+ * The same choice, as an ISO-639-1 code for the transcription sidecar.
+ *
+ * **The interviewer's language was pinned; the TRANSCRIBER's was never told.**
+ * OpenAI Realtime is speech-to-speech — the model understands the audio
+ * natively, so the conversation runs fine whatever else breaks — but the TEXT
+ * comes from a separate sidecar, and that text is the entire durable record:
+ * `extractTranscriptEvidence` reads it, quotes are verified against it, and an
+ * answer missing from it is scored `not_present`.
+ *
+ * Left unset, that sidecar auto-detects the language of every utterance
+ * independently. It is at its worst on exactly the utterances this call is made
+ * of — "Oui.", "Yes.", a filler before a real answer — and a failed detection
+ * comes back empty, which is dropped as silence. The candidate answered, the
+ * interviewer heard them, and the rubric dimension scores 0.
+ *
+ * We already know the answer: the candidate chose it on the page before the
+ * room existed. This tells the half of the pipeline that was still guessing.
+ *
+ * **`null` stays unpinned, and that is not an oversight.** An unpinned call is
+ * one where we genuinely do not know, so auto-detection is the honest fallback
+ * — the same rule `readCallLanguage` and `speakIn` already follow. Pinning a
+ * default would transcribe an Arabic call as though it were English, which
+ * fails silently and produces text nobody can tell is wrong.
+ */
+export function transcriptionLanguage(
+  language: CallLanguage | null,
+): string | undefined {
+  if (!language) return undefined;
+  return language === "french" ? "fr" : "en";
+}

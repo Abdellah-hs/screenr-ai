@@ -84,7 +84,7 @@ export function evaluateResumeScoringOutcome(
   }
 
   // Eligible always carries a ranking score by construction
-  // (`calculateNiceToHaveRanking`); the fallback only keeps this total.
+  // (`calculateRankingScore`); the fallback only keeps this total.
   const ranking = result.ranking_score ?? 0;
   const scoreLine = `Eligible — ranking score ${ranking} vs threshold ${config.resume_threshold}`;
 

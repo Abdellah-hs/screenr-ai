@@ -6,14 +6,15 @@ import {
   CARD_EYEBROW,
   CARD_HEADER,
   CARD_NOTE,
+  DowngradeNote,
   EvidenceAbsence,
   EvidenceBlock,
   EvidenceLadder,
   HEADER_ICON,
   HeaderIcon,
-  LEVEL_LABELS,
   LevelChip,
   RungMeter,
+  ScoreCaveatNotice,
   ThresholdCard,
 } from "./evidence-level-ui";
 
@@ -45,27 +46,6 @@ import {
  *    failure would misstate what happens next.
  */
 
-/**
- * A dimension the model claimed more for than survived verification.
- *
- * `reported_evidence_level` is stored exactly so this is legible: a verified
- * `partial` and a `strong` that was knocked down to `partial` because its quote
- * could not be found are the same number and very different readings. Nothing
- * showed the difference until now.
- */
-function DowngradeNote({ dimension }: { dimension: ScoredScreeningDimension }) {
-  if (dimension.reported_evidence_level === dimension.evidence_level) return null;
-
-  return (
-    <p className="mt-2.5 rounded-lg bg-[#FFFBEB] px-3 py-2 text-xs leading-[1.6] text-[#92400E]">
-      <span className="font-semibold">
-        Lowered from {LEVEL_LABELS[dimension.reported_evidence_level].toLowerCase()}.
-      </span>{" "}
-      The model read this dimension higher, but its quote could not be found in the
-      candidate&rsquo;s own speech. Credit is never awarded on an unverified quote.
-    </p>
-  );
-}
 
 /**
  * The call lost an answer the candidate actually gave.
@@ -93,36 +73,21 @@ function UnheardAnswersNotice({ count }: { count: number }) {
   if (count < 1) return null;
 
   return (
-    <section className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-5 py-4">
-      <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[#92400E]">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.6}
-          className="h-4 w-4 shrink-0"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
-          />
-        </svg>
-        This score may be understated
-      </h4>
-      <p className="mt-2 max-w-[68ch] text-xs leading-[1.6] text-[#92400E]">
-        {count === 1 ? "One answer" : `${count} answers`} the candidate gave{" "}
-        {count === 1 ? "was" : "were"} heard on the call but never transcribed, so{" "}
-        {count === 1 ? "it is" : "they are"} missing from the record the score is read
-        from. A dimension those words would have evidenced scores 0 here exactly as it
-        would if nothing had been said.
-      </p>
-      <p className="mt-2 max-w-[68ch] text-xs leading-[1.6] text-[#B45309]">
-        This is a failure on our side, not the candidate&rsquo;s. Read the transcript
-        below before acting on the number — or send a fresh screening link.
-      </p>
-    </section>
+    <ScoreCaveatNotice
+      heading="This score may be understated"
+      remedy={
+        <>
+          This is a failure on our side, not the candidate&rsquo;s. Read the transcript
+          below before acting on the number &mdash; or send a fresh screening link.
+        </>
+      }
+    >
+      {count === 1 ? "One answer" : `${count} answers`} the candidate gave{" "}
+      {count === 1 ? "was" : "were"} heard on the call but never transcribed, so{" "}
+      {count === 1 ? "it is" : "they are"} missing from the record the score is read
+      from. A dimension those words would have evidenced scores 0 here exactly as it
+      would if nothing had been said.
+    </ScoreCaveatNotice>
   );
 }
 
@@ -151,7 +116,10 @@ function DimensionRow({ dimension }: { dimension: ScoredScreeningDimension }) {
         </span>
       </div>
 
-      <DowngradeNote dimension={dimension} />
+      <DowngradeNote
+        level={dimension.evidence_level}
+        reportedLevel={dimension.reported_evidence_level}
+      />
 
       {dimension.evidence_items.length > 0 ? (
         <ul className="mt-2.5 space-y-1.5">

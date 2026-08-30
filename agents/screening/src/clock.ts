@@ -6,9 +6,8 @@
  * But a deadline the product enforces is one the candidate is entitled to see:
  * the minute is only fair because they watch it fall for its whole length.
  */
-import type { SCREENING_ANSWER_TOPIC } from "./channel.js";
 
-/** Wire shape published on {@link SCREENING_ANSWER_TOPIC}. */
+/** Wire shape published on the `screening.answer` data topic (see `channel.ts`). */
 export interface AnswerClockPacket {
   /** Milliseconds left when this was sent, or null to hide the counter. */
   remainingMs: number | null;

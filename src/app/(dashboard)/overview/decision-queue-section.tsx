@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ScoreInline } from "@/components/ui";
 import type { CandidateScore } from "@/lib/constants";
 import { eventLabel } from "@/lib/campaigns/detail-view";
+import { decisionPrompt } from "@/lib/candidates/decision-prompt";
 import {
   type DecisionGroup,
   type DecisionItem,
@@ -19,6 +20,11 @@ const GROUP_DOT: Record<DecisionGroup["key"], string> = {
   overdue: "bg-[#DC2626]",
   decide: "bg-[#D97706]",
   approve: "bg-[#D97706]",
+  // Amber like the other two groups that wait on this person, and NOT the grey
+  // of `lapsed`: these have a button behind them. Grey would put an application
+  // we broke in the same visual class as one where the candidate never turned
+  // up, which is the reading this group was split out to stop.
+  failed: "bg-[#D97706]",
   lapsed: "bg-[#9CA3AF]",
 };
 
@@ -84,10 +90,23 @@ export function DecisionQueueSection({ queue }: { queue: DecisionQueue }) {
             </div>
           </div>
 
-          <ul className="divide-y divide-[#F3F4F6]">
+          {/* The rows scroll inside the card once a group outgrows ~4 of them,
+              so every group is the same compact height and all four are on one
+              screen together — the grouping is the thing that says which job
+              each row is, and it is worth nothing if you have to scroll the
+              page to find the next heading.
+
+              ~4 rather than the ~6.5 this shipped with. At 6.5 the cap only
+              ever bit on the one long group; a five-person group still ran to
+              its full length, which is the same arrangement that pushed the
+              last group off the bottom, just with fewer rows doing it.
+
+              It is a max, not a height: a group of two still ends after two,
+              and the group heading stays put while the rows move under it. */}
+          <ul className="max-h-[18rem] divide-y divide-[#F3F4F6] overflow-y-auto">
             {group.items.map((item) => (
               <li key={item.applicationId}>
-                <QueueRow item={item} />
+                <QueueRow item={item} explain={EXPLAINED_GROUPS.has(group.key)} />
               </li>
             ))}
           </ul>
@@ -97,8 +116,28 @@ export function DecisionQueueSection({ queue }: { queue: DecisionQueue }) {
   );
 }
 
-function QueueRow({ item }: { item: DecisionItem }) {
+/**
+ * The two groups whose rows carry a sentence saying what to do about them.
+ *
+ * The other three do not need one: "Approve into screening" and "Scored ·
+ * waiting on you" name the job in the heading, and a line under every row
+ * would be the same sentence repeated down the page.
+ *
+ * These two are the opposite case. Both are outside the decision groups, so a
+ * recruiter has no button to reach for and nothing on the page tells them
+ * whether anything is owed — and the two look identical while meaning opposite
+ * things: an expired link is a fact about the candidate, a processing failure
+ * is a fact about us, and only one of them can be undone.
+ */
+const EXPLAINED_GROUPS = new Set<DecisionGroup["key"]>(["failed", "lapsed"]);
+
+function QueueRow({ item, explain = false }: { item: DecisionItem; explain?: boolean }) {
   const href = `/campaigns/${item.campaignId}/candidates/${item.applicationId}`;
+  // `decisionPrompt` is the one place that says what a state means for the
+  // person reading the file. It was written, tested, and rendered nowhere —
+  // including the correction that stopped `processing_failed` reading as "the
+  // CV could not be read", which is wrong for every route into that state.
+  const prompt = explain ? decisionPrompt(item.status) : null;
 
   return (
     <Link
@@ -115,6 +154,14 @@ function QueueRow({ item }: { item: DecisionItem }) {
         <span className="mt-0.5 block truncate text-xs text-[#6B7280]">
           {item.campaignTitle} · {eventLabel(item.status)}
         </span>
+        {/* Not truncated, unlike the two lines above it: this is the sentence
+            that says whether anything can be done, and half of it is worse
+            than none. */}
+        {prompt && (
+          <span className="mt-1 block text-xs leading-[1.5] text-[#6B7280]">
+            {prompt.detail}
+          </span>
+        )}
       </span>
 
       {/* Score and verdict are one object, on the indigo rail: nobody should
@@ -124,9 +171,21 @@ function QueueRow({ item }: { item: DecisionItem }) {
       {/* One fixed-width block, label pinned left and chip pinned right, so
           both form columns down the list. Shrink-wrapped, neither did: the
           label moved with the stage's name length and the chip moved with the
-          score's digit count, so a 0 and a 100 sat in different places. */}
+          score's digit count, so a 0 and a 100 sat in different places.
+
+          The width is sized for the RESUME row, which is the widest by some
+          way and was the one it was not sized for: the graded stages render
+          "0 /100" and stop, while a CV carries a third element nothing else
+          has — the eligibility pill — after a "rank" that replaces the
+          denominator rather than shortening it.
+
+          Measured in Jost rather than estimated, because being a few px short
+          here does not wrap or ellipsise, it truncates the verdict to
+          "Eligib": `Screening 0 /100` is 140px and fitted the old 150px box,
+          `Resume 90 rank Eligible` is 176px and did not, and the worst real
+          case — `Resume 100 rank Ineligible` — is 193px. */}
       {item.score !== null && item.scoreStage && (
-        <span className="flex w-[150px] shrink-0 items-center justify-between gap-2">
+        <span className="flex w-[200px] shrink-0 items-center justify-between gap-2">
           <span className="text-[11px] font-medium text-[#9CA3AF]">
             {SCORE_STAGE_LABEL[item.scoreStage]}
           </span>

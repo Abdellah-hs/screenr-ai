@@ -56,7 +56,12 @@ export function ScoreInline({
   return (
     <span
       className={cn(
-        "inline-flex w-max items-stretch overflow-hidden rounded-md border border-[#E5E7EB] bg-white",
+        // `shrink-0` because `overflow-hidden` is load-bearing here — it is
+        // what clips the rail into the rounded corner — so a squeezed instance
+        // does not wrap or ellipsise, it silently truncates the tier to a
+        // half-word ("Eligib"). A verdict that renders as a fragment of itself
+        // is worse than one that overflows its column visibly.
+        "inline-flex w-max shrink-0 items-stretch overflow-hidden rounded-md border border-[#E5E7EB] bg-white",
         className,
       )}
     >

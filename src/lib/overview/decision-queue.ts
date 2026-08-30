@@ -62,26 +62,48 @@ const APPROVAL_STATES: ApplicationState[] = ["screening_review_pending"];
 
 
 /**
- * Ended without anybody deciding anything. Deliberately separate from the
- * queue: there is no button here that resolves them, and mixing them into the
- * decision groups would inflate the "things waiting on you" count with things
- * that already happened.
+ * Ended without anybody deciding anything, because of something that happened
+ * in the world: a link ran out, a window closed, somebody did not turn up.
+ *
+ * Deliberately separate from the decision groups — there is no button here that
+ * resolves them, and mixing them in would inflate the "things waiting on you"
+ * count with things that already happened.
  */
 const LAPSED_STATES: ApplicationState[] = [
   "screening_expired",
   "interview_expired",
   "interview_no_show",
-  "processing_failed",
 ];
+
+/**
+ * Ended because WE broke, which is not the same thing and must not be filed
+ * with it.
+ *
+ * `processing_failed` sat in `LAPSED_STATES` under a heading reading "Ended
+ * without a decision", in a group whose whole premise is that nothing can be
+ * done about its contents. Everything else in the codebase insists on the
+ * opposite: the rules layer calls it "the only failure state that is OURS
+ * rather than a fact about the candidate", it is the only one with a way back
+ * (`reprocessFailedApplication`), and the candidate's own page renders it grey
+ * rather than red so it does not read as a verdict. The overview — the page a
+ * recruiter actually works from — was the one surface still saying otherwise,
+ * and it is the surface that decides whether anyone ever presses the button.
+ *
+ * A separate group, above the lapsed one, because doing nothing here costs a
+ * real applicant their application: nothing else surfaces the state, and a
+ * campaign with an auto-archive window set will bin it on a timer.
+ */
+const OUR_FAULT_STATES: ApplicationState[] = ["processing_failed"];
 
 /** Every state the overview queue reads. Used to scope the query. */
 export const DECISION_QUEUE_STATES: ApplicationState[] = [
   ...APPROVAL_STATES,
   ...AWAITING_DECISION_STATES,
+  ...OUR_FAULT_STATES,
   ...LAPSED_STATES,
 ];
 
-export type DecisionGroupKey = "overdue" | "decide" | "approve" | "lapsed";
+export type DecisionGroupKey = "overdue" | "decide" | "approve" | "failed" | "lapsed";
 
 export interface DecisionGroup {
   key: DecisionGroupKey;
@@ -205,9 +227,17 @@ export function groupDecisionQueue(items: DecisionItem[]): DecisionQueue {
   const overdue: DecisionItem[] = [];
   const decide: DecisionItem[] = [];
   const approve: DecisionItem[] = [];
+  const failed: DecisionItem[] = [];
   const lapsed: DecisionItem[] = [];
 
   for (const item of items) {
+    // Ahead of the SLA check, like the lapsed states: an application we failed
+    // to process is not "running late", and a lateness badge would describe
+    // the recruiter as slow for a queue nothing had told them about.
+    if (OUR_FAULT_STATES.includes(item.status)) {
+      failed.push(item);
+      continue;
+    }
     if (LAPSED_STATES.includes(item.status)) {
       lapsed.push(item);
       continue;
@@ -226,6 +256,7 @@ export function groupDecisionQueue(items: DecisionItem[]): DecisionQueue {
   overdue.sort(byAge);
   decide.sort(byAge);
   approve.sort(byAge);
+  failed.sort(byAge);
   lapsed.sort(byAge);
 
   const groups: DecisionGroup[] = [];
@@ -257,6 +288,20 @@ export function groupDecisionQueue(items: DecisionItem[]): DecisionQueue {
       title: "Approve into screening",
       subtitle: summarise(approve),
       items: approve,
+    });
+  }
+  if (failed.length > 0) {
+    groups.push({
+      key: "failed",
+      // Says whose fault it was, in the heading, because the whole point is
+      // that a recruiter reading this row must not take it as a verdict on the
+      // candidate — their CV is usually fine and often was never opened.
+      title: "Failed on our side · retry these",
+      // Named as an instruction rather than a count: unlike every other group
+      // on this page, nothing else will ever surface these, and an auto-archive
+      // window will remove them without anybody deciding anything.
+      subtitle: `${people(failed.length)} · not scored, not rejected`,
+      items: failed,
     });
   }
   if (lapsed.length > 0) {

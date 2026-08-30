@@ -213,11 +213,49 @@ describe("groupDecisionQueue", () => {
       item({ status: "interview_scored" }),
       item({ status: "screening_expired" }),
       item({ status: "interview_no_show" }),
-      item({ status: "processing_failed" }),
     ]);
 
     expect(queue.groups.find((g) => g.key === "decide")?.items).toHaveLength(1);
-    expect(queue.groups.find((g) => g.key === "lapsed")?.items).toHaveLength(3);
+    expect(queue.groups.find((g) => g.key === "lapsed")?.items).toHaveLength(2);
+  });
+
+  /**
+   * `processing_failed` used to sit in `lapsed`, under a heading reading "Ended
+   * without a decision" and in a group whose stated premise is that nothing
+   * resolves its contents. It is the one state that something does resolve —
+   * our extractor fell over, the CV is usually fine and often was never opened,
+   * and `reprocessFailedApplication` puts it back. Filing it with the lapses
+   * told a recruiter there was nothing to do about the one row where there was.
+   */
+  it("separates what we broke from what the candidate let lapse", () => {
+    const queue = groupDecisionQueue([
+      item({ applicationId: "ours", status: "processing_failed" }),
+      item({ applicationId: "theirs", status: "screening_expired" }),
+    ]);
+
+    expect(queue.groups.find((g) => g.key === "failed")?.items).toEqual([
+      expect.objectContaining({ applicationId: "ours" }),
+    ]);
+    expect(queue.groups.find((g) => g.key === "lapsed")?.items).toEqual([
+      expect.objectContaining({ applicationId: "theirs" }),
+    ]);
+  });
+
+  /** It is still not a decision group — it must not inflate "waiting on you". */
+  it("does not group a failed application as overdue even when it is late", () => {
+    const queue = groupDecisionQueue([
+      item({ status: "processing_failed", sla: { level: "escalation", hours: 300 } }),
+    ]);
+
+    expect(queue.groups.map((g) => g.key)).toEqual(["failed"]);
+  });
+
+  it("names the failed group so the fault is not read as the candidate's", () => {
+    const queue = groupDecisionQueue([item({ status: "processing_failed" })]);
+    const group = queue.groups.find((g) => g.key === "failed");
+
+    expect(group?.title).toMatch(/our side/i);
+    expect(group?.subtitle).toMatch(/not rejected/i);
   });
 
   it("does not group a lapsed application as overdue even when it is late", () => {

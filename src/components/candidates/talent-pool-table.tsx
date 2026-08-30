@@ -118,9 +118,12 @@ export function TalentPoolTable({ people }: { people: TalentPoolCandidate[] }) {
   }
 
   return (
-    <div>
+    // Fits whatever height the page gives it; only the card list scrolls, so
+    // the search and the campaign filter stay reachable however far down the
+    // directory you are.
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* Controls */}
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+      <div className="mb-5 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <svg
             className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]"
@@ -160,7 +163,7 @@ export function TalentPoolTable({ people }: { people: TalentPoolCandidate[] }) {
       </div>
 
       {/* Result count */}
-      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
+      <p className="mb-3 shrink-0 text-xs font-medium uppercase tracking-wider text-[#9CA3AF]">
         {filtered.length} {filtered.length === 1 ? "person" : "people"}
       </p>
 
@@ -169,7 +172,9 @@ export function TalentPoolTable({ people }: { people: TalentPoolCandidate[] }) {
           <p className="text-sm text-[#6B7280]">No candidates match your filters.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        // `pr-1` keeps the hairline thumb off the card borders; `pb-1` stops
+        // the last card sitting flush against the cut.
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-1 pr-1">
           {filtered.map(({ person, visibleApps }) => (
             <PersonCard key={person.id} person={person} applications={visibleApps} />
           ))}

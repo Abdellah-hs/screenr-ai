@@ -186,7 +186,6 @@ describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
       "interview_scheduled",
       "interview_completed",
       "interview_scored",
-      "reference_check",
     ] as ApplicationState[]) {
       expect(toCandidateStage(state)).toBe("interview");
     }

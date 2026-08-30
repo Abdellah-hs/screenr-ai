@@ -768,7 +768,7 @@ describe("scoreUnscoredCampaignCandidates", () => {
     vi.mocked(loadCampaignScoringContext).mockResolvedValue(null);
     vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
 
-    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID);
 
     expect(vi.mocked(advanceApplicationStatus)).not.toHaveBeenCalled();
   });
@@ -785,7 +785,7 @@ describe("scoreUnscoredCampaignCandidates", () => {
       appRow({ id: "app-3" }),
     ] as never);
 
-    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID);
 
     expect(vi.mocked(loadCampaignScoringContext)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(3);
@@ -799,7 +799,7 @@ describe("scoreUnscoredCampaignCandidates", () => {
     mockFetchCampaignStatus.mockResolvedValue("paused");
     vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
 
-    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID);
 
     expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
   });
@@ -815,7 +815,7 @@ describe("scoreUnscoredCampaignCandidates", () => {
       appRow({ id: "app-noparse", parsed_data: null }), // nothing to score — skip
     ] as never);
 
-    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID);
 
     expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(advanceApplicationStatus)).toHaveBeenCalledWith(
@@ -833,9 +833,48 @@ describe("scoreUnscoredCampaignCandidates", () => {
     ] as never);
     vi.mocked(evaluateApplicationResume).mockRejectedValueOnce(new Error("openai down"));
 
-    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID, "user-1");
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID);
 
     expect(vi.mocked(evaluateApplicationResume)).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * This module is `"use server"`, so this function is a callable endpoint
+   * whether or not any client component imports it. It used to take the
+   * campaign owner as an argument, and every ownership check inside is scoped
+   * by the id it is handed — so naming somebody else's campaign and user id
+   * passed all of them, and spent OpenAI budget, transitioned applications and
+   * emailed candidates on a campaign the caller had no claim to.
+   */
+  it("rejects unauthenticated callers before doing any work", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
+
+    await expect(scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID)).rejects.toThrow(
+      "Unauthorized",
+    );
+
+    expect(mockFetchCampaignStatus).not.toHaveBeenCalled();
+    expect(vi.mocked(evaluateApplicationResume)).not.toHaveBeenCalled();
+  });
+
+  it("scopes the sweep to the SESSION's user, never a caller-supplied one", async () => {
+    mockRequireUserId.mockResolvedValue("session-owner");
+    vi.mocked(fetchCandidatesByCampaignId).mockResolvedValue([appRow()] as never);
+
+    await scoreUnscoredCampaignCandidates(VALID_CAMPAIGN_ID);
+
+    expect(mockFetchCampaignStatus).toHaveBeenCalledWith(VALID_CAMPAIGN_ID, "session-owner");
+    expect(vi.mocked(fetchCandidatesByCampaignId)).toHaveBeenCalledWith(
+      VALID_CAMPAIGN_ID,
+      "session-owner",
+    );
+  });
+
+  it("rejects an invalid campaignId via Zod (uuid format)", async () => {
+    await expect(scoreUnscoredCampaignCandidates("not-a-uuid")).rejects.toThrow();
+
+    expect(mockFetchCampaignStatus).not.toHaveBeenCalled();
   });
 });
 

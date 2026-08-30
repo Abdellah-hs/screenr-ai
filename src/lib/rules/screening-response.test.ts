@@ -96,7 +96,6 @@ describe("assertEligibleForScreeningSend", () => {
     "interview_scheduled",
     "interview_completed",
     "interview_scored",
-    "reference_check",
     "manager_review",
     "final_interview_scheduling",
     "rejected",

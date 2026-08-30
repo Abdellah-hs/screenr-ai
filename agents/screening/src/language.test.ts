@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readCallLanguage, speakIn } from "./language.js";
+import { readCallLanguage, speakIn, transcriptionLanguage } from "./language.js";
 
 /**
  * The greeting asks "English or French?" and this reads the answer. It used to
@@ -60,5 +60,54 @@ describe("speakIn", () => {
    */
   it("ends cleanly so it can be prefixed", () => {
     expect(speakIn("english").endsWith("\n\n")).toBe(true);
+  });
+});
+
+/**
+ * The transcription sidecar writes the ONLY durable record of what the
+ * candidate said. Realtime is speech-to-speech, so the interviewer never reads
+ * that text — a call where this fails sounds completely normal and leaves an
+ * empty transcript, which `extractTranscriptEvidence` honestly reports as
+ * `not_present` on every rubric dimension. The score is 0 and nothing says why.
+ */
+describe("transcriptionLanguage", () => {
+  it("hands the sidecar the language the candidate already chose", () => {
+    expect(transcriptionLanguage("french")).toBe("fr");
+    expect(transcriptionLanguage("english")).toBe("en");
+  });
+
+  /**
+   * **Unpinned stays unpinned.** Auto-detection is the honest fallback when we
+   * genuinely do not know — the same rule `readCallLanguage` and `speakIn`
+   * follow. A default would transcribe an Arabic call as English, which fails
+   * silently and produces text nobody can tell is wrong.
+   */
+  it("leaves an unpinned call to auto-detect", () => {
+    expect(transcriptionLanguage(null)).toBeUndefined();
+  });
+
+  /**
+   * ISO-639-1, which is what the transcription API takes. A full language name
+   * is accepted by the type and ignored at the wire, so this would fail open —
+   * back to the auto-detection it exists to replace, invisibly.
+   */
+  it("uses ISO-639-1 codes, not language names", () => {
+    for (const language of ["english", "french"] as const) {
+      expect(transcriptionLanguage(language)).toMatch(/^[a-z]{2}$/);
+    }
+  });
+
+  /**
+   * The interviewer's language and the transcriber's must never disagree: one
+   * decides what is SAID, the other what is RECORDED, and a call spoken in
+   * French but transcribed as English is the exact failure this fixes.
+   */
+  it("is pinned in step with the interviewer's own language", () => {
+    for (const language of ["english", "french"] as const) {
+      expect(speakIn(language)).toContain(language === "french" ? "French" : "English");
+      expect(transcriptionLanguage(language)).toBeDefined();
+    }
+    expect(speakIn(null)).toBe("");
+    expect(transcriptionLanguage(null)).toBeUndefined();
   });
 });

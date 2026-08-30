@@ -84,7 +84,6 @@ describe("assertInterviewRescoreAllowed", () => {
     "interview_completed",
     "interview_scored",
     "manager_review",
-    "reference_check",
     "final_interview_scheduling",
   ] as const)("allows the in-pipeline state %s", (status) => {
     expect(() => assertInterviewRescoreAllowed(status)).not.toThrow();

@@ -29,7 +29,6 @@ import {
   replaceScreeningQuestions,
   upsertPendingScreeningResponse,
   fetchApplicationForScreeningSend,
-  fetchApplicationsReadyForScreeningSend,
   fetchScreeningResponseByApplicationId,
   type ScreeningQuestionRow,
   type ScreeningResponseRow,
@@ -335,68 +334,4 @@ export async function scoreScreeningAnswers(
   revalidatePath(`/campaigns/${app.campaign_id}`);
 
   return result;
-}
-
-/**
- * Send screening questions to every resume-scored candidate in a campaign
- * that's still in an early stage. Best-effort — errors are collected but
- * don't stop the rest of the batch.
- */
-export async function sendScreeningQuestionsBulk(
-  campaignId: string
-): Promise<{ sent: number; failed: number; errors: string[] }> {
-  const userId = await requireCampaignOwner(campaignId);
-
-  // Freeze outbound unless the campaign is Active.
-  await assertCampaignActiveById(campaignId, userId);
-
-  checkRateLimit(userId, {
-    name: "screening-send-bulk",
-    maxRequests: 5,
-    windowMs: 10 * 60 * 1000,
-  });
-
-  const [questions, applications] = await Promise.all([
-    fetchScreeningQuestionsByCampaignId(campaignId),
-    fetchApplicationsReadyForScreeningSend(campaignId, userId),
-  ]);
-
-  if (questions.length === 0) {
-    throw new Error(
-      "This campaign has no screening questions configured. Set them up first."
-    );
-  }
-  if (applications.length === 0) {
-    return { sent: 0, failed: 0, errors: ["No candidates are ready to receive screening questions."] };
-  }
-
-  const gmail = await getRecruiterGmailClient(userId);
-  const origin = await getRequestOrigin();
-  let sent = 0;
-  let failed = 0;
-  const errors: string[] = [];
-
-  for (const app of applications) {
-    try {
-      await buildAndSendOne({
-        gmail,
-        applicationId: app.application_id,
-        campaignTitle: app.campaign_title,
-        candidateName: app.candidate_name,
-        candidateEmail: app.candidate_email,
-        questions,
-        origin,
-      });
-      await tryAdvanceToScreeningSent(app.application_id);
-      sent++;
-    } catch (err) {
-      failed++;
-      errors.push(
-        `${app.candidate_email}: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    }
-  }
-
-  revalidatePath(`/campaigns/${campaignId}`);
-  return { sent, failed, errors };
 }

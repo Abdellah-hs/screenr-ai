@@ -221,8 +221,10 @@ export async function createScreeningRoomGrant(args: {
  * room, and
  * the same `canPublish` grant covers the candidate's camera as well as their
  * mic. The token gets a longer TTL because an interview runs longer than a
- * screening call (`screeningCallMinutes`, 5-10 minutes depending on how many
- * topics the rubric produced).
+ * screening call — about `screeningCallEstimateMinutes` (topic count plus two,
+ * floor five). That is an ESTIMATE and enforces nothing: screening has had no
+ * call-level clock since the budget moved onto each question, so the figure is
+ * what the candidate is told to expect, not a length anything cuts them off at.
  */
 export async function createInterviewRoomGrant(args: {
   applicationId: string;

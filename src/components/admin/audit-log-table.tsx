@@ -248,9 +248,14 @@ export function AuditLogTable({
           </span>
         </div>
 
-        <div className="overflow-x-auto" aria-busy={isPending}>
+        {/* Scrolls in its own box rather than growing the page: a 50-row page
+            pushed the pager and the caption below the fold, so the fallibility
+            note that has to be read WITH the numbers was never on screen at the
+            same time as them. The header sticks, or a row scrolled to halfway
+            down has no column labels. */}
+        <div className="max-h-[65vh] overflow-auto overscroll-contain" aria-busy={isPending}>
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-[#E5E7EB] bg-[#F9FAFB]">
+            <thead>
               <tr className="text-[11px] uppercase tracking-[0.06em] text-[#6B7280]">
                 <Th>When</Th>
                 <Th>Candidate</Th>
@@ -333,7 +338,10 @@ function FilterField({ label, children }: { label: string; children: React.React
 
 function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <th scope="col" className={`whitespace-nowrap px-5 py-2.5 font-semibold ${className}`}>
+    <th
+      scope="col"
+      className={`sticky top-0 z-10 whitespace-nowrap border-b border-[#E5E7EB] bg-[#F9FAFB] px-5 py-2.5 font-semibold ${className}`}
+    >
       {children}
     </th>
   );

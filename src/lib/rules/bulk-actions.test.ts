@@ -22,7 +22,6 @@ describe("bulkAdvanceTarget", () => {
     expect(bulkAdvanceTarget("screening_review_pending")).toBe("screening_approved");
     expect(bulkAdvanceTarget("screening_scored")).toBe("interview_invited");
     expect(bulkAdvanceTarget("interview_scored")).toBe("manager_review");
-    expect(bulkAdvanceTarget("reference_check")).toBe("manager_review");
   });
 
   /**

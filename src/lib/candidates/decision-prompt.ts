@@ -81,11 +81,6 @@ const PROMPTS: Record<ApplicationState, DecisionPrompt> = {
       "The score gates nothing and rejected nobody. Nothing moves until you choose.",
     waitingOnYou: true,
   },
-  reference_check: {
-    headline: "References are being checked",
-    detail: "Move it on once they are back.",
-    waitingOnYou: true,
-  },
   manager_review: {
     headline: "This is the decision point",
     detail:

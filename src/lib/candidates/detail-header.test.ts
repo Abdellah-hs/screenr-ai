@@ -53,6 +53,38 @@ describe("stagePill", () => {
     });
     expect(stagePill("hired").ink).toBe("#059669");
   });
+
+  // The overview links a group headed "nobody was rejected" straight at this
+  // pill. Calling any of these a rejection contradicts the page they were
+  // clicked from — and for `processing_failed` it blames the candidate for an
+  // outage of ours.
+  it.each([
+    "screening_expired",
+    "interview_expired",
+    "interview_no_show",
+    "processing_failed",
+    "archived",
+  ] as ApplicationState[])("does not call %s a rejection", (state) => {
+    const pill = stagePill(state);
+
+    expect(pill.label).not.toBe("Rejected");
+    expect(pill.ink).not.toBe(stagePill("rejected").ink);
+  });
+
+  it("says what actually happened, in the words the queue row used", () => {
+    expect(stagePill("interview_expired").label).toBe("Interview window closed");
+    expect(stagePill("screening_expired").label).toBe("Link expired unused");
+    expect(stagePill("processing_failed").label).toBe("Processing failed");
+  });
+
+  // A rejection somebody actually made keeps the red. The fix is about the
+  // states that ended without one, not about softening the real verdict.
+  it("leaves a real rejection red", () => {
+    expect(stagePill("rejected")).toMatchObject({
+      label: "Rejected",
+      ink: "#DC2626",
+    });
+  });
 });
 
 describe("timeInStageLabel", () => {

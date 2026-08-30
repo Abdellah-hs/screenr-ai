@@ -35,7 +35,6 @@ vi.mock("@/lib/data/screening-questions", () => ({
   replaceScreeningQuestions: vi.fn(),
   upsertPendingScreeningResponse: vi.fn(),
   fetchApplicationForScreeningSend: vi.fn(),
-  fetchApplicationsReadyForScreeningSend: vi.fn(),
   fetchScreeningResponseByApplicationId: vi.fn(),
   saveAnswerScores: vi.fn(),
 }));

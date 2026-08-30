@@ -273,6 +273,40 @@ export interface FrameSignals {
 export type SignalLabel = "person" | "phone";
 
 /**
+ * COCO class -> what it means to the app, or null for a class the product does
+ * not report on. One map, so the counting path and the diagnostic that explains
+ * it can never disagree about what a `remote` is.
+ */
+function signalLabel(classId: number): SignalLabel | null {
+  if (classId === PERSON_CLASS_ID) return "person";
+  return PHONE_CLASS_IDS.has(classId) ? "phone" : null;
+}
+
+/**
+ * A box clipped to the frame, and the share of the frame it then covers.
+ *
+ * Clipping BEFORE measuring is load-bearing and is why this is shared rather
+ * than written twice: a person half out of shot is judged on the part actually
+ * visible, not on an extrapolated box that drifts off-screen. `selectSignals`
+ * rejects on the ratio and `describeCandidates` exists to explain that
+ * rejection, so the two must compute it the same way by construction.
+ */
+function clipToFrame(
+  box: Detection["box"],
+  frame: { width: number; height: number },
+  frameArea: number,
+): { box: [number, number, number, number]; areaRatio: number } {
+  const x1 = Math.max(0, Math.min(box[0], frame.width));
+  const y1 = Math.max(0, Math.min(box[1], frame.height));
+  const x2 = Math.max(0, Math.min(box[2], frame.width));
+  const y2 = Math.max(0, Math.min(box[3], frame.height));
+  return {
+    box: [x1, y1, x2, y2],
+    areaRatio: (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea,
+  };
+}
+
+/**
  * Every person/phone candidate the model produced, with the two numbers that
  * decide whether it counts. Diagnostic only — nothing in the pipeline reads it.
  *
@@ -281,6 +315,9 @@ export type SignalLabel = "person" | "phone";
  * too small a share of the frame, or the model never saw it at all. Lowering a
  * threshold fixes only the first, and lowering one for the other two adds false
  * accusations without catching anything. This is what tells them apart.
+ *
+ * It measures through the same two helpers `selectSignals` does, so it can only
+ * ever report the numbers that were actually judged.
  */
 export function describeCandidates(
   detections: Detection[],
@@ -290,29 +327,99 @@ export function describeCandidates(
   if (frameArea === 0) return [];
 
   return detections
-    .filter((d) => d.classId === PERSON_CLASS_ID || PHONE_CLASS_IDS.has(d.classId))
-    .map((d) => {
-      const x1 = Math.max(0, Math.min(d.box[0], frame.width));
-      const y1 = Math.max(0, Math.min(d.box[1], frame.height));
-      const x2 = Math.max(0, Math.min(d.box[2], frame.width));
-      const y2 = Math.max(0, Math.min(d.box[3], frame.height));
+    .flatMap((d) => {
+      const label = signalLabel(d.classId);
+      if (!label) return [];
       return {
-        label: (d.classId === PERSON_CLASS_ID ? "person" : "phone") as SignalLabel,
+        label,
         score: d.score,
-        areaRatio: (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea,
+        areaRatio: clipToFrame(d.box, frame, frameArea).areaRatio,
       };
     })
     .sort((a, b) => b.score - a.score);
 }
 
-/** The floors `describeCandidates` output should be read against. */
-export const DETECTION_FLOORS = {
-  person: PERSON_MIN_SCORE,
-  additionalPerson: ADDITIONAL_PERSON_MIN_SCORE,
-  phone: PHONE_MIN_SCORE,
-  personArea: PERSON_MIN_AREA_RATIO,
-  phoneArea: PHONE_MIN_AREA_RATIO,
-} as const;
+/**
+ * Deliberately under every real floor, so the diagnostic can show a signal that
+ * was scored and REJECTED rather than only one that was never produced.
+ */
+export const DIAGNOSTIC_DECODE_FLOOR = 0.05;
+
+/**
+ * The pre-NMS floor an override actually produces.
+ *
+ * The override has to reach the DECODE floor too. That floor runs in front of
+ * every class threshold, so lowering a class floor without lowering this one
+ * just moved a filter nobody could see: the anchor was already gone, and the
+ * knob silently did nothing below 0.2 — exactly the range you reach for when a
+ * real camera is under-detecting. That was a real bug, which is why the
+ * derivation lives here with the rest of the threshold arithmetic rather than
+ * inline in the worker, where nothing tests it.
+ *
+ * `undefined` in means "no override", which `decodeYoloxOutput` reads as its
+ * own default — kept rather than resolved so the caller can still pass the
+ * parameter through untouched.
+ */
+export function decodeFloor(minScore?: number): number | undefined {
+  return minScore === undefined ? undefined : Math.min(minScore, DECODE_MIN_SCORE);
+}
+
+/**
+ * The floor the DIAGNOSTIC decodes at, which must never sit above the
+ * production one.
+ *
+ * If it did, the log would report "never produced at all" about a candidate the
+ * pipeline actually decoded — the one reading that sends you tuning the wrong
+ * knob, and precisely the confusion the flag exists to resolve. The invariant
+ * is asserted across the range in the tests rather than left to two `Math.min`
+ * calls a file apart.
+ */
+export function diagnosticDecodeFloor(minScore?: number): number {
+  return Math.min(DIAGNOSTIC_DECODE_FLOOR, decodeFloor(minScore) ?? DECODE_MIN_SCORE);
+}
+
+/**
+ * The score floors a caller may move, all optional. One named type because
+ * three places state it — `effectiveFloors`, `selectSignals` and the worker's
+ * own literal — and a fourth knob should be one edit, not three.
+ */
+export interface SignalThresholds {
+  personMinScore?: number;
+  additionalPersonMinScore?: number;
+  phoneMinScore?: number;
+}
+
+/**
+ * The floors a frame is actually judged against, override and clamp applied.
+ *
+ * Derived rather than snapshotted, because `VISION_DETECTION_MIN_SCORE` moves
+ * three of these and the extra-person floor is clamped one way only. The
+ * diagnostic reads `describeCandidates` output against this, and one that
+ * printed the compiled-in defaults would name a floor the pipeline is not
+ * using — in exactly the configuration someone sets the flag to investigate.
+ */
+export function effectiveFloors(opts: SignalThresholds = {}) {
+  const person = opts.personMinScore ?? PERSON_MIN_SCORE;
+  return {
+    person,
+    // The extra-person floor can only ever be RAISED. The knob behind it is a
+    // single env var meant for tuning a real camera, and the honest reading of
+    // "detect more" is "find the candidate more easily" — not "accuse more
+    // easily". A config change must not be able to quietly lower the bar on a
+    // finding nobody can check against footage. Also never below the floor for
+    // the first person, or a high override would leave a second person easier
+    // to count than the candidate, which is incoherent in the dangerous
+    // direction.
+    additionalPerson: Math.max(
+      ADDITIONAL_PERSON_MIN_SCORE,
+      person,
+      opts.additionalPersonMinScore ?? 0,
+    ),
+    phone: opts.phoneMinScore ?? PHONE_MIN_SCORE,
+    personArea: PERSON_MIN_AREA_RATIO,
+    phoneArea: PHONE_MIN_AREA_RATIO,
+  };
+}
 
 /** A detection that survived every threshold, clipped to the frame. */
 export interface CountedDetection {
@@ -346,26 +453,9 @@ export interface CountedDetection {
 export function selectSignals(
   detections: Detection[],
   frame: { width: number; height: number },
-  opts: {
-    personMinScore?: number;
-    additionalPersonMinScore?: number;
-    phoneMinScore?: number;
-  } = {},
+  opts: SignalThresholds = {},
 ): CountedDetection[] {
-  const personMinScore = opts.personMinScore ?? PERSON_MIN_SCORE;
-  const phoneMinScore = opts.phoneMinScore ?? PHONE_MIN_SCORE;
-  // The extra-person floor can only ever be RAISED. The knob behind it is a
-  // single env var meant for tuning a real camera, and the honest reading of
-  // "detect more" is "find the candidate more easily" — not "accuse more
-  // easily". A config change must not be able to quietly lower the bar on a
-  // finding nobody can check against footage. Also never below the floor for
-  // the first person, or a high override would leave a second person easier to
-  // count than the candidate, which is incoherent in the dangerous direction.
-  const additionalPersonMinScore = Math.max(
-    ADDITIONAL_PERSON_MIN_SCORE,
-    personMinScore,
-    opts.additionalPersonMinScore ?? 0,
-  );
+  const floors = effectiveFloors(opts);
   const frameArea = Math.max(0, frame.width) * Math.max(0, frame.height);
   if (frameArea === 0) return [];
 
@@ -377,30 +467,22 @@ export function selectSignals(
   let peopleCounted = 0;
 
   for (const det of ordered) {
-    const isPerson = det.classId === PERSON_CLASS_ID;
-    const isPhone = PHONE_CLASS_IDS.has(det.classId);
-    if (!isPerson && !isPhone) continue;
+    const label = signalLabel(det.classId);
+    if (!label) continue;
+    const isPerson = label === "person";
 
-    const x1 = Math.max(0, Math.min(det.box[0], frame.width));
-    const y1 = Math.max(0, Math.min(det.box[1], frame.height));
-    const x2 = Math.max(0, Math.min(det.box[2], frame.width));
-    const y2 = Math.max(0, Math.min(det.box[3], frame.height));
-    const areaRatio = (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea;
+    const { box, areaRatio } = clipToFrame(det.box, frame, frameArea);
 
     const minScore = isPerson
       ? peopleCounted === 0
-        ? personMinScore
-        : additionalPersonMinScore
-      : phoneMinScore;
-    const minArea = isPerson ? PERSON_MIN_AREA_RATIO : PHONE_MIN_AREA_RATIO;
+        ? floors.person
+        : floors.additionalPerson
+      : floors.phone;
+    const minArea = isPerson ? floors.personArea : floors.phoneArea;
     if (det.score < minScore || areaRatio < minArea) continue;
 
     if (isPerson) peopleCounted++;
-    kept.push({
-      label: isPerson ? "person" : "phone",
-      score: det.score,
-      box: [x1, y1, x2, y2],
-    });
+    kept.push({ label, score: det.score, box });
   }
 
   return kept;

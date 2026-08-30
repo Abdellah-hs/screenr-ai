@@ -212,10 +212,17 @@ function classifyScreeningFailure(
  * the token, and the server finalizes from the agent-reported draft.
  *
  * What the client still does: live captions + a response counter from the
- * room's transcription streams (display only), a hard countdown sized from the
- * campaign's topic count (`screeningCallMinutes`, the same function the
- * interviewer paces against), and the review / re-record step (a re-record
- * simply opens a fresh room; the new draft overwrites the old).
+ * room's transcription streams (display only), the PER-ANSWER countdown the
+ * worker publishes on `screening.answer`, and the review / re-record step (a
+ * re-record simply opens a fresh room; the new draft overwrites the old).
+ *
+ * **There is no call-level clock, and the one timer here is not one.** This
+ * used to run a hard cut sized from the campaign's topic count, against a
+ * `screeningCallMinutes` that no longer exists — a guillotine that ended a call
+ * mid-sentence and scored every unreached topic 0. The budget lives on each
+ * question instead, so the only timer left is `SCREENING_CALL_BACKSTOP_MINUTES`:
+ * a failure bound for a dead worker or an abandoned tab, never ticking, never
+ * rendered, and never approached by a call that is behaving.
  *
  * It renders in `CandidateShell`, the same employer-branded card as the video
  * interview, deliberately: the two are the same promise at different lengths,

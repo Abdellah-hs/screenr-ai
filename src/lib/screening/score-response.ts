@@ -70,7 +70,13 @@ export interface RunScreeningScoringInput {
  * Control > AI > Data: AI produces the score (evidence); the rule layer
  * (`evaluateScreeningScoringOutcome`) decides the transitions from that evidence
  * + campaign config. HITL rests at `screening_scored`; fully_auto chains through
- * to `interview_invited` (pass) or `rejected` (fail).
+ * to `interview_invited` on a pass.
+ *
+ * **Below the line nobody is rejected, in either mode.** The screening
+ * threshold advances; it does not reject. A candidate who fell short rests at
+ * `screening_scored` and waits for a person — which is why that state is in
+ * `AWAITING_DECISION_STATES`, so the queue it creates is visible rather than
+ * silent. The resume stage is the only one that still rejects without a human.
  *
  * Throws if the response is missing or not in the `responded` state — callers
  * that can't surface an error to a user (the candidate path) run this

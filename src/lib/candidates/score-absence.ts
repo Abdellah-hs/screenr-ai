@@ -25,7 +25,6 @@ const ABSENCE: Record<ApplicationState, string> = {
   interview_scheduled: "Not scored yet",
   interview_completed: "Scoring the interview",
   interview_scored: "Not scored yet",
-  reference_check: "References in progress",
 
   manager_review: "No stage score here",
   final_interview_scheduling: "Awaiting booking",

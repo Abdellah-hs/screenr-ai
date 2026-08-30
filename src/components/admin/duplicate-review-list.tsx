@@ -78,9 +78,13 @@ export function DuplicateReviewList({
   }
 
   return (
-    <div className="space-y-4">
+    // A column that fits its parent, so only the CARDS scroll. The notice is
+    // deliberately outside that scroller: it reports what just happened to a
+    // card, and resolving one near the bottom of a long queue would otherwise
+    // fire a confirmation several screens above where the person is looking.
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {notice && (
-        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-sm text-[#065F46]">
+        <div className="shrink-0 flex items-start gap-2.5 p-3 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-sm text-[#065F46]">
           <svg
             className="w-4 h-4 mt-0.5 shrink-0"
             fill="none"
@@ -110,14 +114,20 @@ export function DuplicateReviewList({
           <p className="text-[#6B7280]">No duplicates to review — the queue is clear.</p>
         </div>
       ) : (
-        items.map((item) => (
-          <DuplicateCard
-            key={item.flag.id}
-            item={item}
-            disabled={isPending}
-            onResolve={(decision) => openResolution(item, decision)}
-          />
-        ))
+        // `pr-1` keeps the hairline scrollbar off the cards' right edge, and
+        // `pb-1` stops the last one sitting flush against the cut. The empty
+        // state stays outside: there is nothing to scroll, and a scroller
+        // around it would strand its centred illustration at the top.
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-1 pr-1">
+          {items.map((item) => (
+            <DuplicateCard
+              key={item.flag.id}
+              item={item}
+              disabled={isPending}
+              onResolve={(decision) => openResolution(item, decision)}
+            />
+          ))}
+        </div>
       )}
 
       <Modal open={active !== null} onClose={closeModal}>

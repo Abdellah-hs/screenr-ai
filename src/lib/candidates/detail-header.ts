@@ -9,6 +9,7 @@ import {
   type SlaBreachLevel,
 } from "@/lib/constants";
 import { scoreAbsenceLabel } from "./score-absence";
+import { eventLabel } from "@/lib/campaigns/detail-view";
 
 /**
  * The facts in a candidate's header and decision rail, worked out away from the
@@ -43,7 +44,44 @@ const STAGE_PILL: Record<CandidateStage, StagePill> = {
   rejected: { label: "Rejected", ink: "#DC2626", bg: "#FEF2F2" },
 };
 
+/**
+ * Every state that ENDED without anybody turning the candidate down.
+ *
+ * `APPLICATION_STAGE_BUCKET` folds these into `rejected`, which is right for
+ * the funnel — it answers "still in play?", and none of them are — but wrong as
+ * a label on somebody's file. The overview already split them out of its rail
+ * for exactly this reason; the pill beside the name was the copy it missed, so
+ * the queue group headed "nobody was rejected" linked to a page whose loudest
+ * object was a red REJECTED.
+ *
+ * `processing_failed` is the one it hurt most: that state means OUR extractor
+ * fell over, so the pill reported our outage as a verdict on the candidate.
+ */
+const CLOSED_OUT_STATES: ApplicationState[] = [
+  "screening_expired",
+  "interview_expired",
+  "interview_no_show",
+  "processing_failed",
+  "archived",
+];
+
+/**
+ * Grey, not red: the colour has to say "no verdict was reached", and it is the
+ * same grey the funnel's archived row and the overview's lapsed group already
+ * use. Red is reserved for a rejection somebody actually made.
+ */
+const CLOSED_OUT_INK = "#6B7280";
+const CLOSED_OUT_BG = "#F3F4F6";
+
 export function stagePill(status: ApplicationState): StagePill {
+  // The label is the EVENT, from the same map the overview row and the
+  // candidate's own history read — "Interview window closed" on the row you
+  // clicked, "Interview window closed" on the page you land on. A pill that
+  // renamed it would break the one thing this palette exists to hold: a
+  // candidate must not change between the list and their page.
+  if (CLOSED_OUT_STATES.includes(status)) {
+    return { label: eventLabel(status), ink: CLOSED_OUT_INK, bg: CLOSED_OUT_BG };
+  }
   return STAGE_PILL[toCandidateStage(status)];
 }
 
@@ -125,7 +163,6 @@ const REACHED_BY_STATE: Record<ApplicationState, ScoreStage> = {
   interview_expired: "interview",
   interview_no_show: "interview",
 
-  reference_check: "interview",
   manager_review: "interview",
   final_interview_scheduling: "interview",
   hired: "interview",

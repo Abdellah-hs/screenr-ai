@@ -48,16 +48,18 @@ export function checkRateLimit(userId: string, options: RateLimitOptions): void 
   entry.timestamps.push(now);
   store.set(userId, entry);
 
-  // Prevent memory leak: prune entries with no active timestamps
+  // Prevent memory leak: prune entries with no active timestamps.
+  //
+  // The caller's own entry is skipped because it was just written, and it is
+  // the reason the bucket can never be emptied here: a `stores.delete(name)`
+  // guarded on `store.size === 0` used to follow this loop, and it was
+  // unreachable for exactly that reason. Buckets are keyed by limiter name, of
+  // which there is a small fixed set in the source, so the outer map is bounded
+  // anyway — it is the per-user entries inside that grow, and those are what
+  // this prunes.
   for (const [key, e] of store) {
     if (key !== userId && e.timestamps.every((t) => now - t >= windowMs)) {
       store.delete(key);
     }
-  }
-
-  // Also drop the whole bucket if it's empty — otherwise the outer `stores`
-  // Map keeps growing every time a new bucket name is used and then drains.
-  if (store.size === 0) {
-    stores.delete(name);
   }
 }

@@ -12,7 +12,6 @@ import { fetchCandidateById } from "@/lib/data/candidates";
 import {
   deleteTalentPoolEntry,
   fetchPooledCandidateEvidence,
-  fetchPooledCandidateIds,
   fetchTalentPoolEntries,
   fetchTalentPoolEntryByCandidate,
   updateTalentPoolEntry as updateTalentPoolEntryRow,
@@ -44,12 +43,6 @@ export async function getCuratedTalentPool(): Promise<TalentPoolEntry[]> {
   );
 
   return composeTalentPoolEntries(entries, evidence);
-}
-
-/** Candidate ids already pooled — lets the directory mark who is in the pool. */
-export async function getPooledCandidateIds(): Promise<string[]> {
-  const userId = await requireUserId();
-  return fetchPooledCandidateIds(userId);
 }
 
 export interface CandidatePoolState {

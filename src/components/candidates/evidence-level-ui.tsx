@@ -346,6 +346,91 @@ export function EvidenceAbsence({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * A reason to read the score below differently, sitting above the breakdown.
+ *
+ * One component for both spoken stages, because they sit on the same candidate
+ * page one under the other — the screening's "we lost an answer" notice and the
+ * interview's "this covered part of the rubric" notice are the same object, and
+ * the amber must not drift between them. It is the same argument `ThresholdCard`
+ * is built on.
+ *
+ * The shape is fixed at three parts because the third one is the point: a
+ * caveat that states a doubt and stops has told a recruiter their number may be
+ * wrong and given them nothing to do about it. `remedy` is where "read the
+ * transcript" or "this is not a verdict on the candidate" goes, and it is
+ * required rather than optional so it cannot be quietly left off.
+ */
+export function ScoreCaveatNotice({
+  heading,
+  children,
+  remedy,
+}: {
+  heading: string;
+  /** What happened, and what it does to the number below. */
+  children: React.ReactNode;
+  /** What to do about it. Never "reject on this score". */
+  remedy: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-5 py-4">
+      <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[#92400E]">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.6}
+          className="h-4 w-4 shrink-0"
+          aria-hidden="true"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+          />
+        </svg>
+        {heading}
+      </h4>
+      <p className="mt-2 max-w-[68ch] text-xs leading-[1.6] text-[#92400E]">{children}</p>
+      <p className="mt-2 max-w-[68ch] text-xs leading-[1.6] text-[#B45309]">{remedy}</p>
+    </section>
+  );
+}
+
+/**
+ * A dimension the model claimed more for than survived verification.
+ *
+ * `reported_evidence_level` is stored exactly so this is legible: a verified
+ * `partial` and a `strong` that was knocked down to `partial` because its quote
+ * could not be found are the same number and very different readings.
+ *
+ * One component for both spoken stages, like `ScoreCaveatNotice` above it and
+ * for the same reason — this sentence states the never-award-on-an-unverified-
+ * quote rule, and a rule written twice is one that eventually says two things.
+ * It takes the two levels rather than a dimension so neither stage's row type
+ * has to reach the shared kit.
+ */
+export function DowngradeNote({
+  level,
+  reportedLevel,
+}: {
+  level: EvidenceLevel;
+  /** What the model claimed, before quote verification lowered it. */
+  reportedLevel: EvidenceLevel;
+}) {
+  if (reportedLevel === level) return null;
+
+  return (
+    <p className="mt-2.5 rounded-lg bg-[#FFFBEB] px-3 py-2 text-xs leading-[1.6] text-[#92400E]">
+      <span className="font-semibold">
+        Lowered from {LEVEL_LABELS[reportedLevel].toLowerCase()}.
+      </span>{" "}
+      The model read this dimension higher, but its quote could not be found in the
+      candidate&rsquo;s own speech. Credit is never awarded on an unverified quote.
+    </p>
+  );
+}
+
+/**
  * A stage score against the bar the campaign set for it.
  *
  * The threshold is chosen in the wizard and then never shown again, so the only

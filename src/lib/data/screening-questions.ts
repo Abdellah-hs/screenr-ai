@@ -119,65 +119,6 @@ export async function fetchScoringContextByApplicationId(
   };
 }
 
-/**
- * All applications in a campaign that are ready to receive screening
- * questions: they've been resume-scored, they're still in an early stage,
- * and the candidate has an email. Used by the bulk-send button.
- */
-export async function fetchApplicationsReadyForScreeningSend(
-  campaignId: string,
-  userId: string
-): Promise<ApplicationForScreeningSend[]> {
-  const supabase = await createClient();
-
-  // Ownership check
-  const { data: campaign } = await supabase
-    .from("campaigns")
-    .select("id, title")
-    .eq("id", campaignId)
-    .eq("user_id", userId)
-    .single();
-  if (!campaign) return [];
-
-  const selectWithCandidate = `
-    id,
-    campaign_id,
-    candidate_id,
-    status,
-    resume_score,
-    candidates!inner ( id, first_name, last_name, email )
-  `;
-  const { data, error } = await supabase
-    .from("applications")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select(selectWithCandidate as any)
-    .eq("campaign_id", campaignId)
-    // `screening_approved` is the canonical post-resume-scoring state — the
-    // only state from which a candidate is ready to receive screening Qs.
-    .eq("status", "screening_approved")
-    .not("resume_score", "is", null);
-
-  if (error || !data) return [];
-
-  const results: ApplicationForScreeningSend[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const row of data as any[]) {
-    if (!row.candidates?.email) continue;
-    results.push({
-      application_id: row.id,
-      campaign_id: row.campaign_id,
-      candidate_id: row.candidate_id,
-      status: row.status as ApplicationState,
-      campaign_title: campaign.title,
-      candidate_name:
-        `${row.candidates.first_name ?? ""} ${row.candidates.last_name ?? ""}`.trim() ||
-        row.candidates.email,
-      candidate_email: row.candidates.email,
-    });
-  }
-  return results;
-}
-
 export interface ScreeningQuestionRow {
   id: string;
   campaign_id: string;
@@ -342,32 +283,6 @@ export async function fetchScreeningResponseByApplicationId(
     return null;
   }
   return (data || null) as unknown as ScreeningResponseRow | null;
-}
-
-export async function fetchScreeningResponsesByCampaignId(
-  campaignId: string
-): Promise<Record<string, ScreeningResponseRow>> {
-  const supabase = await createClient();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const db = supabase as any;
-  const { data, error } = await db
-    .from("screening_question_responses")
-    .select("*, applications!inner(campaign_id)")
-    .eq("applications.campaign_id", campaignId);
-
-  if (error || !data) {
-    console.error(
-      "Error fetching screening responses:",
-      JSON.stringify(error, null, 2)
-    );
-    return {};
-  }
-
-  const byApplicationId: Record<string, ScreeningResponseRow> = {};
-  for (const row of data as unknown as ScreeningResponseRow[]) {
-    byApplicationId[row.application_id] = row;
-  }
-  return byApplicationId;
 }
 
 export async function upsertPendingScreeningResponse(

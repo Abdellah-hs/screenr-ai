@@ -213,9 +213,24 @@ export const DEFAULT_SCORE_THRESHOLD = 70;
 // modes and transitions nobody in either — see "AI Usage Rules" in CLAUDE.md.
 // Copy here used to read "AI handles the entire pipeline autonomously", which
 // described a product this one deliberately is not.
-export const AUTOMATION_MODES: { value: AutomationMode; label: string; description: string }[] = [
-  { value: "fully_auto", label: "Fully Automatic", description: "Candidates advance on your thresholds without anyone approving first" },
-  { value: "human_in_loop", label: "Human-in-the-Loop", description: "Manager reviews and approves at each stage" },
+/**
+ * The two automation modes, as `value` and `label` only.
+ *
+ * There is deliberately no `description` here, unlike `INTERVIEW_PERSONAS`
+ * below. There was one, and nothing rendered it: the wizard writes its own
+ * copy inline, and the only consumer of the constant's version was a settings
+ * component nothing imported. That left two descriptions of one setting, and
+ * the unshipped one had already drifted — it said `fully_auto` means candidates
+ * "advance on your thresholds", omitting that below the resume threshold they
+ * are REJECTED, unseen, which is the highest-consequence thing the mode does.
+ *
+ * Any new surface should render the wizard's wording, not reintroduce a second
+ * one here. Copy that describes a rule belongs next to the control that sets
+ * it, where an author can see the rule it is describing.
+ */
+export const AUTOMATION_MODES: { value: AutomationMode; label: string }[] = [
+  { value: "fully_auto", label: "Fully Automatic" },
+  { value: "human_in_loop", label: "Human-in-the-Loop" },
 ];
 
 export const INTERVIEW_PERSONAS: { value: InterviewPersona; label: string; description: string }[] = [
@@ -698,7 +713,6 @@ export type ApplicationState =
   | "interview_completed"
   | "interview_scored"
   // Post-interview
-  | "reference_check"
   | "manager_review"
   | "final_interview_scheduling"
   // Failure states — explicit, never silent
@@ -751,10 +765,9 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   interview_scheduling: ["interview_scheduled", "rejected"],
   interview_scheduled: ["interview_completed", "interview_no_show", "rejected"],
   interview_completed: ["interview_scored", "processing_failed", "rejected"],
-  interview_scored: ["reference_check", "manager_review", "rejected"],
+  interview_scored: ["manager_review", "rejected"],
 
   // Post-interview
-  reference_check: ["manager_review", "rejected"],
   manager_review: ["final_interview_scheduling", "hired", "rejected"],
   final_interview_scheduling: ["hired", "rejected"],
 
@@ -916,7 +929,6 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   interview_scheduled: "interview",
   interview_completed: "interview",
   interview_scored: "interview",
-  reference_check: "interview",
 
   manager_review: "final_interview",
   final_interview_scheduling: "final_interview",

@@ -66,7 +66,6 @@ const ADVANCING_STATES: ApplicationState[] = [
   "screening_sent",
   "interview_invited",
   "manager_review",
-  "reference_check",
   "final_interview_scheduling",
   "hired",
 ];

@@ -161,22 +161,6 @@ export async function fetchPooledCandidateEvidence(
 }
 
 /** Candidate ids already in this recruiter's pool — drives the "Pooled" badge. */
-export async function fetchPooledCandidateIds(userId: string): Promise<string[]> {
-  const supabase = await createClient();
-
-  const { data, error } = await supabase
-    .from("talent_pool_entries")
-    .select("candidate_id")
-    .eq("added_by", userId);
-
-  if (error) {
-    console.error("fetchPooledCandidateIds failed:", error);
-    return [];
-  }
-
-  return (data ?? []).map((r) => r.candidate_id);
-}
-
 /** The recruiter's pool entry for one candidate, or null if not pooled. */
 export async function fetchTalentPoolEntryByCandidate(
   userId: string,
