@@ -13,7 +13,9 @@ import type {
   SlaTimer,
   InterviewAvailabilityRule,
   PipelineStageCount,
+  ReviewerRole,
 } from "@/lib/constants";
+import type { CampaignAccessRole } from "@/lib/rules/campaign-access";
 import { deriveDimensionFields } from "@/lib/rubric-weights";
 import {
   deriveResumeDimensionFields,
@@ -304,8 +306,59 @@ export async function fetchCampaignById(id: string, userId: string): Promise<Cam
 }
 
 /**
+ * The user's role on a campaign, or null when they have none (issue #132).
+ *
+ * `owner` when they created it; otherwise their `campaign_reviewers` row, if
+ * any. Deleted campaigns return null for everyone — a soft-deleted campaign is
+ * nobody's, and the ownership check has always treated it that way.
+ *
+ * Mirrors `campaign_role()` in SQL. Two queries rather than the RPC so this
+ * stays typed against the generated schema and testable with the ordinary
+ * Supabase mock; the database remains the real boundary either way.
+ */
+export async function fetchCampaignRole(
+  campaignId: string,
+  userId: string,
+): Promise<CampaignAccessRole | null> {
+  const supabase = await createClient();
+
+  const { data: owned } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (owned) return "owner";
+
+  // Not the owner. A reviewer row only counts while the campaign is live, so
+  // the existence check runs first rather than trusting the join.
+  const { data: live } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", campaignId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (!live) return null;
+
+  const { data: reviewer } = await supabase
+    .from("campaign_reviewers")
+    .select("role")
+    .eq("campaign_id", campaignId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  return (reviewer?.role as ReviewerRole | undefined) ?? null;
+}
+
+/**
  * Returns true if the user owns an active (non-deleted) campaign with the
  * given id. Used by action code to gate recruiter-scoped operations.
+ *
+ * **Owner only, deliberately.** For anything a reviewer should also be able to
+ * do, use `fetchCampaignRole` with the rules in `@/lib/rules/campaign-access`.
  */
 export async function verifyCampaignOwnership(
   campaignId: string,

@@ -1178,7 +1178,45 @@ The `NEXT_PUBLIC_` prefix is required because flags are read inside Client Compo
 
 | Flag | Default | What it gates |
 | --- | --- | --- |
-| `NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS` | off | The team-reviewers editor on `/campaigns/new`, and the reviewer rows `createCampaign` writes. The editor mints placeholder identities (`user-temp-<timestamp>`) for people with no account, and `campaign_reviewers` is referenced by no RLS policy (#132) — so the rows grant nothing while reading as though they do. Stays off until reviewer invites create real accounts and #132 settles what a reviewer may do. |
+| `NEXT_PUBLIC_ENABLE_TEAM_REVIEWERS` | off | The team-reviewers editor on `/campaigns/new`, and the reviewer rows `createCampaign` writes. **One of its two blockers is gone: `campaign_reviewers` now grants real access** (#132, decided 2026-08-30 — see "Campaign access roles" below). It stays off for the other one: the editor mints placeholder identities (`user-temp-<timestamp>`) for people with no account, so it writes rows for users who cannot log in. Those rows are inert rather than dangerous — `campaign_role()` matches on `auth.uid()`, which a placeholder id never is — but a reviewer list full of people who can never see the campaign is worse than no list. Stays off until reviewer invites create real accounts. |
+
+### Campaign access roles (decision 2026-08-30)
+
+`campaign_reviewers` and `reviewer_role_enum` shipped in the first schema
+migration and **nothing referenced them for five months**. Every campaign-scoped
+policy tested `campaigns.user_id = auth.uid()`, so assigning a teammate granted
+them the ability to read the row saying they were a reviewer, and nothing else —
+while the editor implied otherwise. That was issue #132.
+
+There is now one ladder, and every level includes the ones beneath it:
+
+| Role | May |
+| --- | --- |
+| `observer` | read everything on the campaign |
+| `reviewer` | + decide: transition an application, re-score, write audit rows |
+| `lead` | + configure: rubrics, questions, SLA timers, availability, the reviewer list |
+| `owner` | + delete the campaign |
+
+- **The database is the boundary.** `can_view_campaign` / `can_decide_campaign`
+  / `can_manage_campaign` are `SECURITY DEFINER` SQL functions, and definer is
+  load-bearing rather than convenience: a policy ON `campaigns` that queries
+  `campaigns` re-enters its own policy and recurses.
+- **`transition_application` had to change too**, and missing it would have made
+  the rest cosmetic. It is `SECURITY DEFINER`, so RLS does not apply to it — it
+  did its own owner check and would have refused a reviewer with "Access denied"
+  no matter how the policies read. It now calls `can_decide_campaign`.
+  `transition_application_system` is untouched: the cron and agent path has no
+  session and therefore no role to check.
+- **An observer is refused twice** — by `meetsCampaignRole` at the top of the
+  action, and by the policy underneath. The rules layer
+  (`src/lib/rules/campaign-access.ts`) is pure and exists so an action fails
+  with a readable error instead of surfacing a policy violation as an empty
+  result set three calls later. It is defence in depth, never the boundary.
+- **Reading and configuring are different authorities.** A reviewer decides
+  about a candidate; changing the rubric everyone is judged against is a lead's.
+  `screening-questions.ts` splits on exactly that line.
+- **`verifyCampaignOwnership` still exists and is still owner-only.** Use
+  `fetchCampaignRole` for anything a reviewer should also reach.
 
 ---
 

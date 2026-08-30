@@ -7,11 +7,15 @@ import {
   uuidSchema,
   screeningQuestionsArraySchema,
 } from "@/lib/validations";
+import {
+  meetsCampaignRole,
+  type CampaignAccessRole,
+} from "@/lib/rules/campaign-access";
 import { generateQuestionsForRole } from "@/lib/services/screening-questions";
 import {
   fetchCampaignScoringConfig,
   fetchScreeningRubricDimensions,
-  verifyCampaignOwnership,
+  fetchCampaignRole,
 } from "@/lib/data/campaigns";
 import { runScreeningScoring } from "@/lib/screening/score-response";
 import type { gmail_v1 } from "googleapis/build/src/apis/gmail";
@@ -34,11 +38,21 @@ import {
   type ScreeningResponseRow,
 } from "@/lib/data/screening-questions";
 
-async function requireCampaignOwner(campaignId: string): Promise<string> {
+/**
+ * Screening questions are campaign CONFIGURATION, so reading and editing them
+ * are different authorities (issue #132). A reviewer may see what candidates
+ * were asked; changing the question set is the owner's or a lead's, because it
+ * changes what every candidate is judged on.
+ */
+async function requireCampaignRole(
+  campaignId: string,
+  minimum: CampaignAccessRole,
+): Promise<string> {
   uuidSchema.parse(campaignId);
   const userId = await requireUserId();
 
-  if (!(await verifyCampaignOwnership(campaignId, userId))) {
+  const role = await fetchCampaignRole(campaignId, userId);
+  if (!meetsCampaignRole(role, minimum)) {
     throw new Error("Campaign not found or access denied");
   }
   return userId;
@@ -47,7 +61,7 @@ async function requireCampaignOwner(campaignId: string): Promise<string> {
 export async function getScreeningQuestions(
   campaignId: string
 ): Promise<ScreeningQuestionRow[]> {
-  await requireCampaignOwner(campaignId);
+  await requireCampaignRole(campaignId, "observer");
   return fetchScreeningQuestionsByCampaignId(campaignId);
 }
 
@@ -58,7 +72,7 @@ export async function getScreeningQuestions(
 export async function generateScreeningQuestions(
   campaignId: string
 ): Promise<{ prompt: string }[]> {
-  const userId = await requireCampaignOwner(campaignId);
+  const userId = await requireCampaignRole(campaignId, "lead");
 
   // Reuse the AI generation bucket — same OpenAI quota concern applies.
   checkRateLimit(userId, {
@@ -95,7 +109,7 @@ export async function saveScreeningQuestions(
   campaignId: string,
   questions: { id?: string; prompt: string }[]
 ): Promise<void> {
-  await requireCampaignOwner(campaignId);
+  await requireCampaignRole(campaignId, "lead");
 
   const validated = screeningQuestionsArraySchema.parse(questions);
 

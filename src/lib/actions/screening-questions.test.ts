@@ -26,7 +26,7 @@ vi.mock("@/lib/data/campaigns", () => ({
   fetchCampaignScoringConfig: vi.fn(),
   fetchActiveRubricVersion: vi.fn(),
   fetchScreeningRubricDimensions: vi.fn(),
-  verifyCampaignOwnership: vi.fn(),
+  fetchCampaignRole: vi.fn(),
 }));
 vi.mock("@/lib/data/transitions", () => ({ transitionApplication: vi.fn() }));
 vi.mock("./transition-notifications", () => ({ sendTransitionNotification: vi.fn() }));
@@ -45,7 +45,7 @@ import { saveScreeningQuestions, scoreScreeningAnswers } from "./screening-quest
 import { assertCampaignActiveById } from "./campaign-guards";
 import { revalidatePath } from "next/cache";
 import { requireUserId } from "@/lib/auth/guards";
-import { verifyCampaignOwnership } from "@/lib/data/campaigns";
+import { fetchCampaignRole } from "@/lib/data/campaigns";
 import { replaceScreeningQuestions } from "@/lib/data/screening-questions";
 import { scoreAnswers } from "@/lib/services/screening-questions";
 import {
@@ -354,7 +354,7 @@ describe("saveScreeningQuestions", () => {
   const CAMPAIGN_ID = "22222222-2222-4222-8222-222222222222";
 
   it("replaces the set and revalidates the campaign subtree, candidate pages included", async () => {
-    vi.mocked(verifyCampaignOwnership).mockResolvedValue(true);
+    vi.mocked(fetchCampaignRole).mockResolvedValue("owner");
     vi.mocked(replaceScreeningQuestions).mockResolvedValue([]);
 
     await saveScreeningQuestions(CAMPAIGN_ID, [

@@ -2,6 +2,11 @@ import { cache } from "react";
 import { NextResponse } from "next/server";
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import { fetchCampaignRole } from "@/lib/data/campaigns";
+import {
+  meetsCampaignRole,
+  type CampaignAccessRole,
+} from "@/lib/rules/campaign-access";
 
 /**
  * The authenticated user, fetched at most once per request.
@@ -68,4 +73,37 @@ export function requireBearerSecret(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   return null;
+}
+
+/**
+ * Campaign-scoped authorisation guard (issue #132).
+ *
+ * `requireUserId()` answers "is there a session"; this answers "may this
+ * session act on this campaign, at this level". Returns the caller's role so an
+ * action can branch further without a second lookup.
+ *
+ * ```ts
+ * const userId = await requireUserId();
+ * await requireCampaignAccess(campaignId, userId, "reviewer"); // throws for an observer
+ * ```
+ *
+ * **This is defence in depth, not the boundary.** RLS is the boundary: the
+ * policies added in `20260830140000_campaign_reviewer_access.sql` refuse the
+ * same caller, and `transition_application` refuses them again. The guard
+ * exists so an action fails with a readable error at its top instead of
+ * surfacing a policy violation as an empty result set three calls later.
+ *
+ * Defaults to `observer` — membership of any kind — because most callers only
+ * need "is this yours to look at".
+ */
+export async function requireCampaignAccess(
+  campaignId: string,
+  userId: string,
+  minimum: CampaignAccessRole = "observer",
+): Promise<CampaignAccessRole> {
+  const role = await fetchCampaignRole(campaignId, userId);
+  if (!meetsCampaignRole(role, minimum)) {
+    throw new Error("Access denied");
+  }
+  return role as CampaignAccessRole;
 }

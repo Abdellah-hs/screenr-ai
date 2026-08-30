@@ -4,7 +4,7 @@ import type { ParsedResumeData } from "@/lib/services/openai";
 import type { Database, Json } from "@/types/database.types";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
-import { verifyCampaignOwnership } from "@/lib/data/campaigns";
+import { fetchCampaignRole } from "@/lib/data/campaigns";
 import { AUTO_ARCHIVABLE_STATES } from "@/lib/rules/auto-archive";
 import type { DeterministicResumeScoreResult } from "@/lib/resume-scoring";
 import type {
@@ -271,7 +271,7 @@ export async function logAiAudit(params: {
 }
 
 export async function fetchCandidatesByCampaignId(campaignId: string, userId: string) {
-  if (!(await verifyCampaignOwnership(campaignId, userId))) {
+  if ((await fetchCampaignRole(campaignId, userId)) === null) {
     throw new Error("Campaign not found or access denied");
   }
   const supabase = await createClient();
@@ -340,7 +340,7 @@ export async function fetchCandidatesByCampaignId(campaignId: string, userId: st
  * No candidate join at all: this page never shows a person, only counts of them.
  */
 export async function fetchCampaignPipelineRows(campaignId: string, userId: string) {
-  if (!(await verifyCampaignOwnership(campaignId, userId))) {
+  if ((await fetchCampaignRole(campaignId, userId)) === null) {
     throw new Error("Campaign not found or access denied");
   }
   const supabase = await createClient();
@@ -410,7 +410,7 @@ export async function fetchCandidateById(applicationId: string, userId: string) 
     return null;
   }
 
-  if (!(await verifyCampaignOwnership(data.campaign_id, userId))) {
+  if ((await fetchCampaignRole(data.campaign_id, userId)) === null) {
     throw new Error("Access denied");
   }
 

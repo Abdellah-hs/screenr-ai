@@ -20,10 +20,10 @@ const mockFindCandidateByEmail = vi.fn();
 const mockFindCandidateByPhone = vi.fn();
 const mockFlagDuplicateCandidate = vi.fn();
 
-const mockVerifyCampaignOwnership = vi.fn();
+const mockFetchCampaignRole = vi.fn();
 
 vi.mock("@/lib/data/campaigns", () => ({
-  verifyCampaignOwnership: (...args: unknown[]) => mockVerifyCampaignOwnership(...args),
+  fetchCampaignRole: (...args: unknown[]) => mockFetchCampaignRole(...args),
 }));
 
 vi.mock("@/lib/data/duplicate-flags", () => ({
@@ -496,7 +496,7 @@ describe("interview context reads", () => {
  */
 describe("fetchCandidatesByCampaignId", () => {
   function stubQuery(result: { data: unknown; error: unknown }) {
-    mockVerifyCampaignOwnership.mockResolvedValue(true);
+    mockFetchCampaignRole.mockResolvedValue("owner");
     mockFrom.mockImplementation(() => ({
       select: () => ({
         eq: () => ({ order: () => Promise.resolve(result) }),
@@ -534,7 +534,7 @@ describe("fetchCandidatesByCampaignId", () => {
   });
 
   it("refuses a campaign the user does not own before running any query", async () => {
-    mockVerifyCampaignOwnership.mockResolvedValue(false);
+    mockFetchCampaignRole.mockResolvedValue(null);
     mockFrom.mockReset();
 
     await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
