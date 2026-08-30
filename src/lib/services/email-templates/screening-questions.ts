@@ -1,3 +1,5 @@
+import { screeningCallEstimateMinutes } from "@/lib/constants";
+
 export interface ScreeningEmailParams {
   candidateName: string;
   campaignTitle: string;
@@ -29,6 +31,21 @@ function formatDeadline(date: Date): string {
  * Build the screening-questions candidate email (subject + html + text).
  * Deliberately plain and friendly — no heavy branding, no external images,
  * so it renders well in every client and doesn't get flagged as marketing.
+ *
+ * It describes a **spoken** screening, because that is what the link opens.
+ * This copy was written for the typed form that #161 deleted: it promised
+ * "15–25 minutes to complete them" and a button reading "Answer the questions",
+ * so a candidate budgeted twenty minutes of typing and landed on a live call
+ * needing a microphone and a quiet room. The length comes from
+ * `screeningCallEstimateMinutes`.
+ *
+ * "About" is meant literally: since 2026-08-24 there is no hard cut to promise
+ * against. The call is paced per answer and ends when its topics are covered,
+ * so this number sets an expectation and enforces nothing. This is now the
+ * ONLY place it is quoted: the pre-call screen dropped it, on the grounds that
+ * a screen the candidate reads seconds before starting should not open with a
+ * number nothing enforces. It survives here because an INVITATION is read days
+ * ahead and has to help somebody decide when to sit down for this.
  */
 export function buildScreeningQuestionsEmail(params: ScreeningEmailParams) {
   const {
@@ -42,17 +59,20 @@ export function buildScreeningQuestionsEmail(params: ScreeningEmailParams) {
 
   const deadline = formatDeadline(expiresAt);
   const firstName = candidateName.split(" ")[0] || candidateName;
+  const minutes = screeningCallEstimateMinutes(questionCount);
 
-  const subject = `Next step for ${campaignTitle}: a few screening questions`;
+  const subject = `Next step for ${campaignTitle}: a short spoken interview`;
 
   const text = [
     `Hi ${firstName},`,
     ``,
     `Thanks for applying to the ${campaignTitle} role. Your resume looks like a promising fit, and ${companyName} would like to learn a bit more before inviting you to a full interview.`,
     ``,
-    `We've prepared ${questionCount} short questions for you. There are no right or wrong answers — we're just looking for concrete examples and your honest perspective. Most candidates take 15–25 minutes to complete them.`,
+    `The next step is a short spoken interview with our AI interviewer — about ${minutes} minutes, covering ${questionCount} topics. There are no right or wrong answers; we're just looking for concrete examples and your honest perspective.`,
     ``,
-    `Answer here:`,
+    `You'll need a quiet spot and a working microphone. Nothing is recorded — only a written transcript is kept — and you can stop and start again at any point while the call is still yours.`,
+    ``,
+    `Start here:`,
     `${respondUrl}`,
     ``,
     `Please respond by ${deadline}. If the link expires, just reply to this email and we'll send a fresh one.`,
@@ -80,14 +100,17 @@ export function buildScreeningQuestionsEmail(params: ScreeningEmailParams) {
                 <p style="margin:0 0 16px; font-size:15px; line-height:1.6;">
                   Thanks for applying to the <strong>${safeTitle}</strong> role. Your resume looks like a promising fit, and ${safeCompany} would like to learn a bit more before inviting you to a full interview.
                 </p>
+                <p style="margin:0 0 16px; font-size:15px; line-height:1.6;">
+                  The next step is a <strong>short spoken interview</strong> with our AI interviewer — about <strong>${minutes} minutes</strong>, covering ${questionCount} topics. There are no right or wrong answers; we're just looking for concrete examples and your honest perspective.
+                </p>
                 <p style="margin:0 0 24px; font-size:15px; line-height:1.6;">
-                  We've prepared <strong>${questionCount} short questions</strong> for you. There are no right or wrong answers — we're just looking for concrete examples and your honest perspective. Most candidates take 15–25 minutes to complete them.
+                  You'll need a quiet spot and a working microphone. Nothing is recorded — only a written transcript is kept — and you can stop and start again at any point while the call is still yours.
                 </p>
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 0 24px;">
                   <tr>
-                    <td align="center" bgcolor="#0369A1" style="border-radius: 8px;">
+                    <td align="center" bgcolor="#111827" style="border-radius: 8px;">
                       <a href="${safeUrl}" style="display:inline-block; padding: 14px 28px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; border-radius: 8px;">
-                        Answer the questions
+                        Start the interview
                       </a>
                     </td>
                   </tr>

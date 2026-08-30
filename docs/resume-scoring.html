@@ -1,0 +1,949 @@
+<title>Evidence to Threshold</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,600&family=Jost:wght@300;400;500;600&display=swap">
+
+<style>
+  /* ── Tokens ────────────────────────────────────────────────────────────
+     Palette is Screenr AI's own, not a new one: ink decides, indigo advises,
+     emerald is a terminal positive. Neutrals carry a faint indigo bias so
+     they read as chosen next to the accent rather than as default grey. */
+  :root {
+    --ground:      #FBFBFD;
+    --surface:     #FFFFFF;
+    --surface-sunk:#F5F5F8;
+    --border:      #E4E4EC;
+    --border-soft: #EFEFF4;
+
+    --ink:         #111827;
+    --body:        #3B4252;
+    --muted:       #6B7280;
+    --faint:       #9AA0AE;
+
+    --ai:          #4F46E5;
+    --ai-wash:     #EFEEFE;
+    --ai-edge:     #D9D6FB;
+
+    --link:        #2563EB;
+
+    --pass:        #047857;
+    --pass-wash:   #ECFDF5;
+    --pass-edge:   #A7F3D0;
+
+    --fail:        #B91C1C;
+    --fail-wash:   #FEF2F2;
+    --fail-edge:   #FCA5A5;
+
+    --warn:        #92400E;
+    --warn-wash:   #FFFBEB;
+    --warn-edge:   #FDE68A;
+
+    --shadow: 0 1px 2px rgba(17, 24, 39, .04), 0 8px 24px -16px rgba(17, 24, 39, .18);
+
+    --display: "Bodoni Moda", "Iowan Old Style", Georgia, serif;
+    --sans: "Jost", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0D0F16;
+      --surface:     #14171F;
+      --surface-sunk:#1A1E28;
+      --border:      #272C39;
+      --border-soft: #1F2430;
+
+      --ink:         #F2F3F7;
+      --body:        #C3C8D4;
+      --muted:       #939AAA;
+      --faint:       #6E7686;
+
+      --ai:          #A5A0FF;
+      --ai-wash:     #1D1B33;
+      --ai-edge:     #37326A;
+
+      --link:        #7DA6FF;
+
+      --pass:        #4ADE9B;
+      --pass-wash:   #10251D;
+      --pass-edge:   #1F553F;
+
+      --fail:        #FB8B8B;
+      --fail-wash:   #2A1618;
+      --fail-edge:   #5E2A2C;
+
+      --warn:        #FBC97A;
+      --warn-wash:   #251C0E;
+      --warn-edge:   #56411C;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -18px rgba(0, 0, 0, .8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0D0F16;
+    --surface:     #14171F;
+    --surface-sunk:#1A1E28;
+    --border:      #272C39;
+    --border-soft: #1F2430;
+
+    --ink:         #F2F3F7;
+    --body:        #C3C8D4;
+    --muted:       #939AAA;
+    --faint:       #6E7686;
+
+    --ai:          #A5A0FF;
+    --ai-wash:     #1D1B33;
+    --ai-edge:     #37326A;
+
+    --link:        #7DA6FF;
+
+    --pass:        #4ADE9B;
+    --pass-wash:   #10251D;
+    --pass-edge:   #1F553F;
+
+    --fail:        #FB8B8B;
+    --fail-wash:   #2A1618;
+    --fail-edge:   #5E2A2C;
+
+    --warn:        #FBC97A;
+    --warn-wash:   #251C0E;
+    --warn-edge:   #56411C;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px -18px rgba(0, 0, 0, .8);
+  }
+
+  /* ── Base ─────────────────────────────────────────────────────────── */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--body);
+    font-family: var(--sans);
+    font-weight: 400;
+    font-size: 16.5px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 72px 28px 120px;
+  }
+
+  @media (max-width: 640px) {
+    .page { padding: 44px 18px 80px; }
+    body { font-size: 16px; }
+  }
+
+  p { margin: 0 0 1.1em; max-width: 68ch; }
+  p:last-child { margin-bottom: 0; }
+
+  a { color: var(--link); text-decoration: none; border-bottom: 1px solid transparent; }
+  a:hover { border-bottom-color: currentColor; }
+  a:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 2px; }
+
+  strong { color: var(--ink); font-weight: 600; }
+
+  code {
+    font-family: var(--mono);
+    font-size: .86em;
+    background: var(--surface-sunk);
+    border: 1px solid var(--border-soft);
+    border-radius: 4px;
+    padding: .1em .38em;
+    color: var(--ink);
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────────── */
+  .masthead { margin-bottom: 64px; }
+
+  .kicker {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 18px;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: clamp(40px, 7vw, 62px);
+    line-height: 1.05;
+    letter-spacing: -.01em;
+    color: var(--ink);
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: 19px;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 60ch;
+    font-weight: 300;
+  }
+
+  /* The single claim the whole pipeline rests on. */
+  .thesis {
+    margin: 40px 0 0;
+    padding: 22px 26px;
+    background: var(--ai-wash);
+    border: 1px solid var(--ai-edge);
+    border-left: 3px solid var(--ai);
+    border-radius: 3px;
+  }
+  .thesis p { margin: 0; color: var(--ink); font-size: 17px; }
+
+  /* ── Section headings ─────────────────────────────────────────────── */
+  h2 {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: clamp(27px, 4vw, 34px);
+    line-height: 1.2;
+    color: var(--ink);
+    margin: 0 0 10px;
+    letter-spacing: -.005em;
+    text-wrap: balance;
+  }
+
+  .section { margin-top: 76px; }
+
+  .section-intro { color: var(--muted); max-width: 64ch; margin-bottom: 32px; }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0 0 8px;
+    letter-spacing: -.005em;
+  }
+
+  /* ── The pipeline ─────────────────────────────────────────────────────
+     Six stages, genuinely sequential, so they are numbered. The rail colour
+     is the information: indigo while a model is producing evidence, ink the
+     moment arithmetic takes over and never again after. */
+  .stages { display: flex; flex-direction: column; gap: 14px; }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 54px 1fr;
+    gap: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .stage-index {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 0;
+    background: var(--surface-sunk);
+    border-right: 1px solid var(--border-soft);
+    position: relative;
+  }
+  .stage-index::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--ink);
+  }
+  .stage[data-actor="ai"] .stage-index::before { background: var(--ai); }
+
+  .stage-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stage-body { padding: 20px 24px 22px; min-width: 0; }
+
+  .stage-actor {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    margin-bottom: 11px;
+    background: var(--surface-sunk);
+    color: var(--muted);
+    border: 1px solid var(--border-soft);
+  }
+  .stage[data-actor="ai"] .stage-actor {
+    background: var(--ai-wash);
+    color: var(--ai);
+    border-color: var(--ai-edge);
+  }
+
+  .stage-body p { font-size: 15.5px; margin-bottom: .9em; }
+  .stage-body p:last-child { margin-bottom: 0; }
+
+  .io {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-top: 14px;
+    padding-top: 13px;
+    border-top: 1px dashed var(--border);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .io b {
+    color: var(--faint);
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    align-self: center;
+  }
+  .io span { color: var(--ink); }
+
+  @media (max-width: 560px) {
+    .stage { grid-template-columns: 40px 1fr; }
+    .stage-body { padding: 16px 16px 18px; }
+  }
+
+  /* Marks the exact seam between model and machine. */
+  .seam {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 10px 0;
+    padding: 0 4px;
+  }
+  .seam-line { flex: 1; height: 1px; background: var(--border); }
+  .seam-text {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--faint);
+    white-space: nowrap;
+  }
+
+  /* ── Tables ───────────────────────────────────────────────────────── */
+  .scroller { overflow-x: auto; margin: 0 0 8px; -webkit-overflow-scrolling: touch; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+    min-width: 480px;
+  }
+
+  th {
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    padding: 0 16px 10px 0;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 11px 16px 11px 0;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: top;
+    color: var(--body);
+  }
+  tr:last-child td { border-bottom: none; }
+
+  td.level { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+  td.num {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--ink);
+    text-align: right;
+    padding-right: 24px;
+    white-space: nowrap;
+  }
+  th.num { text-align: right; padding-right: 24px; }
+
+  .zero { color: var(--faint); font-weight: 400; }
+
+  /* ── Worked example ───────────────────────────────────────────────── */
+  .worked {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: var(--shadow);
+    padding: 26px 28px;
+    margin-bottom: 18px;
+  }
+  .worked > h3 { margin-bottom: 16px; }
+
+  @media (max-width: 560px) { .worked { padding: 20px 16px; } }
+
+  .verdict {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 4px 11px;
+    border-radius: 999px;
+    border: 1px solid;
+  }
+  .verdict.pass { background: var(--pass-wash); color: var(--pass); border-color: var(--pass-edge); }
+  .verdict.fail { background: var(--fail-wash); color: var(--fail); border-color: var(--fail-edge); }
+
+  .calc {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.85;
+    background: var(--surface-sunk);
+    border: 1px solid var(--border-soft);
+    border-radius: 3px;
+    padding: 16px 18px;
+    margin: 16px 0 0;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--body);
+    font-variant-numeric: tabular-nums;
+  }
+  .calc .k { color: var(--ink); font-weight: 600; }
+  .calc .g { color: var(--pass); font-weight: 600; }
+  .calc .r { color: var(--fail); font-weight: 600; }
+  .calc .d { color: var(--faint); }
+
+  .note {
+    margin-top: 16px;
+    padding: 14px 18px;
+    background: var(--warn-wash);
+    border: 1px solid var(--warn-edge);
+    border-radius: 3px;
+    font-size: 14.5px;
+    color: var(--ink);
+  }
+  .note p { margin: 0; font-size: inherit; }
+  .note b { display: block; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--warn); margin-bottom: 5px; }
+
+  /* ── Rules list ───────────────────────────────────────────────────── */
+  .rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 18px; }
+  .rules li { padding-left: 20px; position: relative; max-width: 68ch; }
+  .rules li::before {
+    content: "";
+    position: absolute;
+    left: 0; top: .62em;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--ai);
+  }
+  .rules li.deny::before { background: var(--fail); }
+  .rules li.allow::before { background: var(--pass); }
+
+  /* ── Footer ───────────────────────────────────────────────────────── */
+  .colophon {
+    margin-top: 88px;
+    padding-top: 26px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--faint);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+  }
+  .colophon code { background: none; border: none; padding: 0; color: var(--muted); }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="kicker">Screenr AI · Resume stage</p>
+    <h1>Evidence to Threshold</h1>
+    <p class="standfirst">
+      How a CV becomes a gate result and a ranking number — every step from the
+      document the model is shown to the transition the state machine records.
+    </p>
+
+    <div class="thesis">
+      <p>
+        <strong>The model never returns a number.</strong> It reads the CV and
+        reports, per criterion, how strongly the document evidences it — plus the
+        exact words it read that from. Every figure after that is arithmetic in
+        code, from a fixed table. Change the number and you must change the
+        <em>reading</em>, not the maths.
+      </p>
+    </div>
+  </header>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <section class="section">
+    <h2>The six stages</h2>
+    <p class="section-intro">
+      The rail on the left says who is acting. Indigo is the model producing
+      evidence; ink is deterministic code. There is exactly one place where the
+      colour changes, and nothing after it consults the model again.
+    </p>
+
+    <div class="stages">
+
+      <article class="stage" data-actor="code">
+        <div class="stage-index"><span class="stage-num">01</span></div>
+        <div class="stage-body">
+          <span class="stage-actor">Code</span>
+          <h3>Build one document</h3>
+          <p>
+            The parsed CV fields are flattened into readable sections — name,
+            headline, summary, skills, experience, education. At apply time the
+            original extracted text is appended verbatim, so quotes can be checked
+            against the real file rather than a model's reading of it. Over 70,000
+            characters, the middle is dropped and marked.
+          </p>
+          <p>
+            That one string is used for <strong>three things that must agree</strong>: what
+            the model is shown, what its quotes are verified against, and what the
+            cache key hashes. If they could differ, quote-checking would be theatre —
+            the model could quote something real from a document the validator
+            never saw.
+          </p>
+          <div class="io">
+            <b>In</b><span>parsed CV + raw text</span>
+            <b>Out</b><span>normalized document</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage" data-actor="ai">
+        <div class="stage-index"><span class="stage-num">02</span></div>
+        <div class="stage-body">
+          <span class="stage-actor">Model</span>
+          <h3>Read the document, report evidence</h3>
+          <p>
+            <code>gpt-4o-mini</code>, temperature <code>0</code>, seed <code>7</code>,
+            structured outputs. It receives the job description as context, the
+            criteria as a bare numbered list, and the document. For each criterion,
+            in the same order, it must return an <strong>evidence level</strong>, the
+            <strong>verbatim quotes</strong> it read that from, which section each came
+            from, and a duration only if the CV literally states one.
+          </p>
+          <p>
+            Two things are withheld deliberately. It is <strong>never told which criteria
+            are must-haves</strong> — knowing a criterion is a knockout gives it reason to
+            shade evidence toward a verdict it can guess at. And borderline always
+            takes the <strong>lower</strong> level.
+          </p>
+          <div class="io">
+            <b>In</b><span>document + criteria</span>
+            <b>Out</b><span>level + quotes, per criterion</span>
+          </div>
+        </div>
+      </article>
+
+      <div class="seam" role="separator" aria-label="The model stops here">
+        <span class="seam-line"></span>
+        <span class="seam-text">The model stops here</span>
+        <span class="seam-line"></span>
+      </div>
+
+      <article class="stage" data-actor="code">
+        <div class="stage-index"><span class="stage-num">03</span></div>
+        <div class="stage-body">
+          <span class="stage-actor">Code</span>
+          <h3>Verify every quote</h3>
+          <p>
+            This is where the model stops being trusted. Two failure types are kept
+            apart because they mean different things:
+          </p>
+          <p>
+            <strong>Structural</strong> — wrong number of criteria, or wrong order — throws
+            and rejects the whole run. Nothing can be aligned, so nothing is safe to
+            salvage. <strong>Evidential</strong> — a quote is not in the document — discards
+            that quote with a warning. A criterion left with no verified quote is
+            downgraded to <code>unclear</code>, which scores zero.
+          </p>
+          <p>
+            Matching ignores only cosmetic differences: case, curly versus straight
+            quotes, dash types, whitespace. It can widen a match, never invent one.
+            <strong>Validation can only lower a level, never raise one.</strong>
+          </p>
+          <div class="io">
+            <b>In</b><span>reported evidence</span>
+            <b>Out</b><span>verified evidence + warnings</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage" data-actor="code">
+        <div class="stage-index"><span class="stage-num">04</span></div>
+        <div class="stage-body">
+          <span class="stage-actor">Code</span>
+          <h3>Level becomes a number</h3>
+          <p>
+            A lookup, not a judgement. The same table serves the voice-screening
+            stage, so a <code>strong</code> reading is worth 80 wherever it was read —
+            a recruiter comparing two stage scores is comparing two numbers made
+            the same way.
+          </p>
+          <div class="io">
+            <b>In</b><span>evidence level</span>
+            <b>Out</b><span>0 – 100 per criterion</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage" data-actor="code">
+        <div class="stage-index"><span class="stage-num">05</span></div>
+        <div class="stage-body">
+          <span class="stage-actor">Code</span>
+          <h3>The gate, then the ranking</h3>
+          <p>
+            <strong>The gate runs first.</strong> Every must-have is checked on its own
+            against a fixed 60. All must pass; every failure is reported, not just
+            the first. There is no total across must-haves and there cannot be —
+            the moment you sum them, a surplus on one pays for a shortfall on
+            another and "must" quietly becomes "mostly".
+          </p>
+          <p>
+            <strong>Then, only for an eligible candidate</strong>, the ranking: the mean
+            evidence score across <em>every</em> criterion, must-haves included,
+            rounded. An ineligible candidate has no ranking at all — never a low
+            number, which would read as "how close they came" and invite an
+            argument with the gate.
+          </p>
+          <div class="io">
+            <b>In</b><span>scored criteria</span>
+            <b>Out</b><span>eligible? + ranking or null</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="stage" data-actor="code">
+        <div class="stage-index"><span class="stage-num">06</span></div>
+        <div class="stage-body">
+          <span class="stage-actor">Code</span>
+          <h3>A rule decides, the state machine moves</h3>
+          <p>
+            The scorer never transitions. It hands the result to a pure rule, which
+            returns a target state and a written rationale; the caller executes it.
+            The threshold is consulted here and nowhere else.
+          </p>
+          <div class="io">
+            <b>In</b><span>result + campaign config</span>
+            <b>Out</b><span>transition + rationale</span>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <section class="section">
+    <h2>The evidence ladder</h2>
+    <p class="section-intro">
+      Six levels, fixed meanings, fixed scores. This is the seam where the AI
+      stops and the machine starts: the model chose a label, and every number
+      after that point is a consequence of that label and nothing else.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Level</th>
+            <th>What it means on a CV</th>
+            <th class="num">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="level">not_present</td>
+            <td>No explicit evidence of the criterion appears in the resume.</td>
+            <td class="num zero">0</td>
+          </tr>
+          <tr>
+            <td class="level">unclear</td>
+            <td>Wording that may relate to the criterion, but too ambiguous or indirect to establish that it is actually met. Also where an unverifiable quote lands.</td>
+            <td class="num zero">0</td>
+          </tr>
+          <tr>
+            <td class="level">weak</td>
+            <td>Explicitly mentioned (a skills list, say) with <strong>zero</strong> concrete examples — no project, responsibility, task, outcome or duration stated.</td>
+            <td class="num">25</td>
+          </tr>
+          <tr>
+            <td class="level">partial</td>
+            <td><strong>1</strong> concrete example of limited exposure: a course, small project, isolated task, or short-term use (&lt;3 months). Some actual exposure, not sustained professional use.</td>
+            <td class="num">55</td>
+          </tr>
+          <tr>
+            <td class="level">strong</td>
+            <td><strong>1–2</strong> clear examples of meaningful professional use: concrete projects or roles with specific responsibilities, repeated use, measurable outcomes, or duration ≥3 months.</td>
+            <td class="num">80</td>
+          </tr>
+          <tr>
+            <td class="level">very_strong</td>
+            <td><strong>3+</strong> substantial examples, <em>or</em> <strong>2+</strong> showing ownership, leadership, architecture decisions, or long-term professional experience (≥12 months).</td>
+            <td class="num">100</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <b>Why unclear scores zero</b>
+      <p>"We could not tell" is not partial credit. It sits beside <code>not_present</code>
+      on the ladder but says something different in the record: <code>not_present</code>
+      asserts the CV contains no such evidence, which we did not establish — we
+      established that the <em>quote</em> could not be found.</p>
+    </div>
+
+    <div class="note">
+      <b>These definitions are the scoring rule</b>
+      <p>They are pasted into the system prompt verbatim, so the boundary between
+      <code>strong</code> and <code>very_strong</code> is exactly the sentence above and
+      nothing else. Rewritten on 23 Aug 2026 to count examples and name duration
+      floors rather than lean on "meaningful" and "substantial" — two readers
+      should reach the same level from the same CV, and an adjective is not a
+      test. Editing them means bumping the prompt version, which invalidates every
+      cached reading rather than answering the old question.</p>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <section class="section">
+    <h2>What the model may and may not say</h2>
+    <p class="section-intro">
+      The boundary is enforced in the prompt and again in the schema. There is no
+      field for a verdict, so there is nowhere to put one.
+    </p>
+
+    <ul class="rules">
+      <li class="allow"><strong>May:</strong> report an evidence level, quote the document verbatim, name the section a quote came from, explain why it counts, and read a duration the CV states outright.</li>
+      <li class="deny"><strong>May not:</strong> return a numeric score, a weight, an overall rating, a tier, an eligibility verdict, a ranking, or a hire / no-hire recommendation — <em>in any field</em>, including free-text notes. Doing so is an error even when confident.</li>
+      <li class="deny"><strong>May not:</strong> infer a skill from a related one. React is not proof of Next.js. JavaScript is not proof of TypeScript. "Familiar with frontend" is not proof of a framework.</li>
+      <li class="deny"><strong>May not:</strong> be told which criteria are must-haves. Priority is stripped before the prompt is built.</li>
+    </ul>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <section class="section">
+    <h2>Worked through, twice</h2>
+    <p class="section-intro">
+      One rubric — three must-haves, four nice-to-haves — and two candidates.
+      Campaign threshold 70, mode <code>fully_auto</code>.
+    </p>
+
+    <div class="worked">
+      <h3>Candidate A · clears every gate</h3>
+      <div class="calc"><span class="d">must-haves — each checked alone against 60</span>
+  Python           very_strong   <span class="k">100</span>   <span class="g">pass</span>
+  Kubernetes       strong         <span class="k">80</span>   <span class="g">pass</span>
+  Docker           strong         <span class="k">80</span>   <span class="g">pass</span>
+
+<span class="d">nice-to-haves — no gate</span>
+  Terraform        weak           <span class="k">25</span>
+  AWS              weak           <span class="k">25</span>
+  Airflow          not_present     <span class="k">0</span>
+  Team leadership  not_present     <span class="k">0</span>
+
+<span class="d">─────────────────────────────────────────────</span>
+  eligible         <span class="g">yes</span>  <span class="d">— every must-have passed</span>
+  ranking          (100+80+80+25+25+0+0) ÷ 7 = 44.3 → <span class="k">44</span>
+  vs threshold     44 &lt; 70 → <span class="r">rejected</span> <span class="d">(fully_auto)</span></div>
+
+      <p style="margin-top:18px">
+        <span class="verdict pass">Eligible</span>
+        <span style="margin-left:10px; color:var(--muted); font-size:14.5px">ranking 44 — passed every requirement, thin on the extras</span>
+      </p>
+
+      <div class="note">
+        <b>What changed on 23 Aug 2026</b>
+        <p>The ranking used to average the <em>nice-to-haves alone</em>. This same
+        candidate scored <strong>13</strong> — (25+25+0+0) ÷ 4 — because the three
+        requirements they met were dropped from the mean entirely. Passing a gate
+        was the whole of what a must-have contributed, so <code>very_strong</code>
+        evidence of five years and <code>strong</code> evidence of one project were
+        indistinguishable.</p>
+      </div>
+    </div>
+
+    <div class="worked">
+      <h3>Candidate B · one gate short</h3>
+      <div class="calc"><span class="d">must-haves — each checked alone against 60</span>
+  Python           strong         <span class="k">80</span>   <span class="g">pass</span>
+  Kubernetes       partial        <span class="k">55</span>   <span class="r">FAIL</span>  <span class="d">55 &lt; 60</span>
+  Docker           very_strong   <span class="k">100</span>   <span class="g">pass</span>
+
+<span class="d">nice-to-haves — all four very_strong (100)</span>
+
+<span class="d">─────────────────────────────────────────────</span>
+  eligible         <span class="r">no</span>   <span class="d">— Kubernetes did not clear 60</span>
+  ranking          <span class="k">null</span> <span class="d">— an ineligible candidate is not ranked</span>
+  outcome          <span class="r">rejected</span> <span class="d">in EVERY mode, human-in-the-loop included</span></div>
+
+      <p style="margin-top:18px">
+        <span class="verdict fail">Ineligible</span>
+        <span style="margin-left:10px; color:var(--muted); font-size:14.5px">four perfect nice-to-haves change nothing</span>
+      </p>
+
+      <div class="note">
+        <b>The invariant</b>
+        <p>A nice-to-have can never repair a failed must-have — not by weighting,
+        averaging, or any other route. Eligibility is decided before any averaging
+        happens, and an ineligible candidate has no ranking for a surplus to
+        inflate. This is the property the whole module exists to hold, and the
+        tests assert it directly.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <section class="section">
+    <h2>Two bars, and only one is yours</h2>
+    <p class="section-intro">
+      Both are pass marks on the resume stage, and they are constantly confused
+      because only one of them is ever visible on a scored CV.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Bar</th>
+            <th class="num">Value</th>
+            <th>Applied to</th>
+            <th>Set where</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Must-have minimum</strong></td>
+            <td class="num">60</td>
+            <td>Each must-have criterion, on its own. All must clear it.</td>
+            <td>Fixed in code, same on every campaign</td>
+          </tr>
+          <tr>
+            <td><strong>Resume threshold</strong></td>
+            <td class="num">70</td>
+            <td>The ranking score, once the candidate is already eligible.</td>
+            <td>Your campaign settings</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:24px">
+      They cannot share a line. A must-have is a gate — the CV either states the
+      qualification or it does not — while the ranking orders the candidates who
+      already passed. At 60, <code>partial</code> fails and <code>strong</code> passes:
+      a must-have needs concrete professional or project evidence, not a mention
+      and not one course.
+    </p>
+
+    <h3 style="margin-top:36px">What the rule does with them</h3>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Situation</th>
+            <th>Mode</th>
+            <th>Transition</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Any must-have failed</td>
+            <td>either</td>
+            <td><code>rejected</code> · disposition <code>LOW_SCORE</code></td>
+          </tr>
+          <tr>
+            <td>Eligible</td>
+            <td><code>human_in_loop</code></td>
+            <td><code>screening_review_pending</code> — the threshold rejects nobody here; it only sorts your queue</td>
+          </tr>
+          <tr>
+            <td>Eligible, ranking ≥ threshold</td>
+            <td><code>fully_auto</code></td>
+            <td><code>screening_approved</code></td>
+          </tr>
+          <tr>
+            <td>Eligible, ranking &lt; threshold</td>
+            <td><code>fully_auto</code></td>
+            <td><code>rejected</code> · disposition <code>LOW_SCORE</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <b>Read the threshold against your rubric, not as a grade</b>
+      <p>The ranking is a mean over every criterion you wrote down. Add four
+      nice-to-haves that most CVs will not evidence and you pull every candidate's
+      ranking down by design — the number is honest, but 70 then means something
+      much stricter than it looks. If something genuinely matters, make it a
+      must-have: that is the control that actually gates, and it now lifts the
+      ranking too.</p>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────────────── -->
+  <section class="section">
+    <h2>What gets written down</h2>
+    <p class="section-intro">
+      AI output is evidence, not truth, so the whole run is recoverable after the
+      fact — including what was corrected on the way through.
+    </p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Where</th>
+            <th>What</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>The application row</strong></td>
+            <td>Ranking score (null when ineligible), the eligible flag, the full evaluation, tier, the written rationale, rubric version, and <code>scored_at</code> — which is the "has this been evaluated" marker, not the score.</td>
+          </tr>
+          <tr>
+            <td><strong>The audit log</strong></td>
+            <td>Raw model output, model name, prompt version, scoring-rules version, rubric version, the document hash, the criteria and their priorities, every validation warning, whether the evidence was cached, and where the run came from.</td>
+          </tr>
+          <tr>
+            <td><strong>The evidence cache</strong></td>
+            <td>Keyed on the document hash, the criteria labels and priorities in order, rubric version, prompt version, model, and rules version. <strong>Only the evidence is cached</strong> — the score is recomputed on every run, so a served result can never predate the rules it claims to follow.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:24px">
+      Criterion <em>ids</em> are deliberately left out of the cache key: re-saving a
+      rubric mints new ids for unchanged criteria, and keying on them would throw
+      away every cached result each time you edited an unrelated field. What
+      identifies a criterion is its label, its priority, and its position — the
+      three things the prompt actually depends on.
+    </p>
+  </section>
+
+  <footer class="colophon">
+    <span>Rules version <code>v2_ranking_over_all_criteria</code></span>
+    <span>Prompt <code>v4_resume_evidence</code></span>
+    <span>Model <code>gpt-4o-mini</code> · temp 0 · seed 7</span>
+  </footer>
+
+</div>

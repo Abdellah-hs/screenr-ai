@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { AccessToken, AgentDispatchClient, RoomServiceClient } from "livekit-server-sdk";
+import type { CallLanguage } from "@/lib/constants";
 
 /**
  * LiveKit room service for the candidate voice screening.
@@ -12,9 +13,28 @@ import { AccessToken, AgentDispatchClient, RoomServiceClient } from "livekit-ser
  *
  * Trust model: this module is only ever called AFTER the action layer verified
  * the candidate's signed screening token. The room name embeds the application
- * id, the join token is scoped to exactly that room, and the screening
- * instructions travel in room metadata — which only the server (and the agent)
- * can read or set; the candidate cannot alter what they'll be asked.
+ * id and the join token is scoped to exactly that room.
+ *
+ * **Room metadata is candidate-VISIBLE. Put nothing confidential in it.**
+ * Only the server can SET it, so a candidate cannot alter what they will be
+ * asked — but LiveKit delivers metadata to every participant: it arrives in the
+ * JOIN response and is exposed as `room.metadata` on the client SDK. Until
+ * 2026-08-24 the interviewer instructions travelled here, which meant a
+ * candidate with the network tab open read the whole confidential topic guide
+ * before being asked anything, defeating "questions never shown in advance"
+ * (docs/voice-screening.md, mitigation #2) — and, on the interview side,
+ * handed them the campaign's interviewing stance.
+ *
+ * The metadata now carries the application id alone. Each worker fetches its
+ * own instructions from `GET /api/agent/{screening,interview}/instructions`,
+ * guarded by `AGENT_API_SECRET` — the same secret it already holds to report
+ * transcripts, so the boundary gained no new trust.
+ *
+ * **Deploy order matters.** A worker that still expects instructions in
+ * metadata finds none and leaves, stranding the candidate in a silent room, so
+ * the workers under `agents/` must be restarted BEFORE this app is deployed.
+ * They fetch first and fall back to metadata, so a new worker runs against
+ * either version of the app; an old worker does not.
  */
 
 /** What the candidate's browser needs to join their screening call. */
@@ -24,10 +44,34 @@ export interface ScreeningRoomGrant {
   participantToken: string;
 }
 
-/** Metadata the agent worker reads off the room to run the interview. */
+/**
+ * Metadata the agent worker reads off the room.
+ *
+ * The application id and nothing else — see the trust model above. It is the
+ * one thing that has to be here (the worker has no other way to learn which
+ * application it was dispatched for) and the one thing that costs nothing to
+ * expose: the candidate's own signed token already encodes it.
+ */
 export interface ScreeningRoomMetadata {
   application_id: string;
-  instructions: string;
+  /**
+   * The language the candidate chose before starting, for the worker to speak.
+   *
+   * **The second thing metadata carries, and the exception is deliberate.** The
+   * rule is "the application id and nothing else", because LiveKit delivers
+   * metadata to every participant — which is how the confidential topic guide
+   * once leaked to the candidate's browser. This one costs nothing to expose
+   * for the same reason the id does: it came FROM that browser seconds earlier.
+   * It is the candidate's own choice being handed back.
+   *
+   * It belongs on the ROOM rather than on the application: a re-record is a new
+   * call, and somebody who picked the wrong language should get to pick again
+   * by starting over.
+   *
+   * A closed enum, never free text, because it ends up inside the interviewer's
+   * own instructions.
+   */
+  language: CallLanguage;
 }
 
 /**
@@ -38,8 +82,18 @@ export interface ScreeningRoomMetadata {
  */
 export type InterviewRoomGrant = ScreeningRoomGrant;
 
-/** Metadata the interview agent worker reads off the room. */
-export type InterviewRoomMetadata = ScreeningRoomMetadata;
+/**
+ * Metadata the interview agent worker reads off the room.
+ *
+ * **No longer an alias of the screening one.** The screening room carries the
+ * candidate's language choice as well, because they pick it on the page before
+ * the call; the AI interview has no such choice, and a field the interview
+ * worker never reads would be one more thing sitting in metadata that LiveKit
+ * hands to every participant.
+ */
+export interface InterviewRoomMetadata {
+  application_id: string;
+}
 
 /** A room with nobody in it closes itself after this many seconds. */
 const EMPTY_ROOM_TIMEOUT_SECONDS = 5 * 60;
@@ -112,7 +166,8 @@ function requireEnv(name: "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRE
  */
 export async function createScreeningRoomGrant(args: {
   applicationId: string;
-  instructions: string;
+  /** Validated by the caller; the room is created with it and cannot change. */
+  language: CallLanguage;
 }): Promise<ScreeningRoomGrant> {
   const serverUrl = requireEnv("LIVEKIT_URL");
   const apiKey = requireEnv("LIVEKIT_API_KEY");
@@ -122,7 +177,7 @@ export async function createScreeningRoomGrant(args: {
 
   const metadata: ScreeningRoomMetadata = {
     application_id: args.applicationId,
-    instructions: args.instructions,
+    language: args.language,
   };
 
   // RoomServiceClient talks HTTP; it accepts the wss:// url and rewrites it.
@@ -161,15 +216,18 @@ export async function createScreeningRoomGrant(args: {
 /**
  * Create a fresh room for one AI video-interview attempt and mint the
  * candidate's join token. Mirrors `createScreeningRoomGrant` — the interview
- * agent worker keys off the `interview-` room-name prefix, the instructions
- * (résumé-grounded) travel in room metadata out of the candidate's reach, and
+ * agent worker keys off the `interview-` room-name prefix, the worker fetches
+ * its own (résumé-grounded) instructions rather than reading them off the
+ * room, and
  * the same `canPublish` grant covers the candidate's camera as well as their
- * mic. The token gets a longer TTL because interviews run longer than the
- * ~5-minute screening call.
+ * mic. The token gets a longer TTL because an interview runs longer than a
+ * screening call — about `screeningCallEstimateMinutes` (topic count plus two,
+ * floor five). That is an ESTIMATE and enforces nothing: screening has had no
+ * call-level clock since the budget moved onto each question, so the figure is
+ * what the candidate is told to expect, not a length anything cuts them off at.
  */
 export async function createInterviewRoomGrant(args: {
   applicationId: string;
-  instructions: string;
 }): Promise<InterviewRoomGrant> {
   const serverUrl = requireEnv("LIVEKIT_URL");
   const apiKey = requireEnv("LIVEKIT_API_KEY");
@@ -177,10 +235,7 @@ export async function createInterviewRoomGrant(args: {
 
   const roomName = `interview-${args.applicationId}-${randomBytes(4).toString("hex")}`;
 
-  const metadata: InterviewRoomMetadata = {
-    application_id: args.applicationId,
-    instructions: args.instructions,
-  };
+  const metadata: InterviewRoomMetadata = { application_id: args.applicationId };
 
   const rooms = new RoomServiceClient(serverUrl, apiKey, apiSecret);
   await rooms.createRoom({

@@ -153,6 +153,15 @@ export const FUNNEL_STAGES: FunnelStage[] = [
 ];
 
 /**
+ * The same stages, keyed, so a caller that wants one by name does not have to
+ * `.find()` it and cast the `undefined` away — a cast the type system cannot
+ * check, over a list that is not the domain list.
+ */
+export const FUNNEL_STAGE_BY_KEY: Record<string, FunnelStage> = Object.fromEntries(
+  FUNNEL_STAGES.map((stage) => [stage.key, stage]),
+);
+
+/**
  * Terminal housekeeping bucket. Not part of the forward funnel and only shown
  * where archived applications are split out of Rejected (the candidate list).
  */
@@ -240,10 +249,16 @@ export function PipelineFunnel({
   campaignId,
   stageCounts,
   total,
+  activeStage,
+  hrefFor,
 }: {
   campaignId: string;
   stageCounts: Record<string, number>;
   total: number;
+  /** Highlighted card — the stage the page is currently previewing. */
+  activeStage?: string;
+  /** Where a card goes. Defaults to the filtered candidate list. */
+  hrefFor?: (stageKey: string) => string;
 }) {
   const active =
     (stageCounts.applied ?? 0) +
@@ -261,7 +276,12 @@ export function PipelineFunnel({
             key={stage.key}
             stage={stage}
             count={stageCounts[stage.key] ?? 0}
-            href={`/campaigns/${campaignId}/candidates?stage=${stage.key}`}
+            active={activeStage === stage.key}
+            href={
+              hrefFor
+                ? hrefFor(stage.key)
+                : `/campaigns/${campaignId}/candidates?stage=${stage.key}`
+            }
           />
         ))}
       </div>

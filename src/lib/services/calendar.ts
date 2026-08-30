@@ -1,4 +1,6 @@
-import { google, type calendar_v3 } from "googleapis";
+// Deep import — see the note in ./gmail.ts. The `googleapis` root barrel
+// carries all 323 API surfaces; this is the one we call.
+import { calendar as calendarApi, type calendar_v3 } from "googleapis/build/src/apis/calendar";
 import { createGoogleAuthClient } from "./gmail";
 import { zonedWallTimeToUtc } from "@/lib/scheduling/slots";
 
@@ -119,7 +121,7 @@ export async function fetchCalendarSchedule(params: {
 }
 
 function createCalendarClient(refreshToken: string): calendar_v3.Calendar {
-  return google.calendar({ version: "v3", auth: createGoogleAuthClient(refreshToken) });
+  return calendarApi({ version: "v3", auth: createGoogleAuthClient(refreshToken) });
 }
 
 // NOTE: the earlier free/busy query (`fetchBusyIntervals`) was removed in

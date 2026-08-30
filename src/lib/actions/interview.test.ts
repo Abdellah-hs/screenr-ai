@@ -176,15 +176,20 @@ describe("startCandidateInterview", () => {
     expect(mockCreateGrant).not.toHaveBeenCalled();
   });
 
-  it("opens a room with résumé-grounded, job-titled instructions", async () => {
+  /**
+   * The instructions are deliberately NOT passed here. Their only route to the
+   * worker was room metadata, which LiveKit delivers to every participant — so
+   * the candidate's browser received the résumé block and the campaign's
+   * interviewing stance on join. The worker fetches them from the agent API
+   * now, and what they contain is asserted where they are composed
+   * (src/lib/interview/instructions.test.ts).
+   */
+  it("opens a room carrying the application id alone", async () => {
     const grant = await startCandidateInterview("tok");
 
     expect(mockEnsureSession).toHaveBeenCalledWith("app-1", FUTURE, mockAdminDb);
     expect(mockMarkStarted).toHaveBeenCalledWith("app-1", mockAdminDb);
-    const arg = mockCreateGrant.mock.calls[0][0];
-    expect(arg.applicationId).toBe("app-1");
-    expect(arg.instructions).toContain("Senior Backend Engineer");
-    expect(arg.instructions).toContain("Stripe"); // grounded in the real résumé
+    expect(mockCreateGrant).toHaveBeenCalledWith({ applicationId: "app-1" });
     expect(grant.roomName).toBe("interview-app-1-abcd");
   });
 
@@ -193,32 +198,6 @@ describe("startCandidateInterview", () => {
 
     await expect(startCandidateInterview("tok")).rejects.toThrow();
     expect(mockCreateGrant).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The campaign's persona was stored and displayed but never sent to the
-   * worker, so a recruiter who picked "Pressure" got a neutral interview and a
-   * stored setting that misdescribed it. Room metadata is the only path to the
-   * interviewer, so asserting it here is asserting the fix.
-   */
-  it("sends the campaign's configured persona to the interviewer", async () => {
-    mockFetchInterviewContext.mockResolvedValue({
-      ...RESUME_CTX,
-      interview_persona: "pressure",
-    });
-
-    await startCandidateInterview("tok");
-
-    const { instructions } = mockCreateGrant.mock.calls[0][0];
-    expect(instructions).toContain("PRESSURE");
-    expect(instructions.toLowerCase()).toContain("push back");
-  });
-
-  it("runs the unchanged neutral interview for a default campaign", async () => {
-    await startCandidateInterview("tok");
-
-    const { instructions } = mockCreateGrant.mock.calls[0][0];
-    expect(instructions).not.toContain("Your interviewing stance");
   });
 
   it("reads and writes through the admin client (no recruiter session exists)", async () => {

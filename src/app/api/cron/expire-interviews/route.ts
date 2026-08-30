@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sweepExpiredInterviews } from "@/lib/interview/expiry-sweep";
+import { requireBearerSecret } from "@/lib/auth/guards";
 
 // Service-role writes + a live timestamp: must run per-request on the server.
 export const dynamic = "force-dynamic";
@@ -16,16 +17,8 @@ export const runtime = "nodejs";
  * CLAUDE.md → Scheduled Jobs (Cron). Inert until one is pointed at it.
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    // Fail closed: an unset secret must never leave the endpoint open.
-    console.error("CRON_SECRET is not configured; refusing to run the sweep.");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  }
-
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearerSecret(request, "CRON_SECRET", "the sweep");
+  if (denied) return denied;
 
   const result = await sweepExpiredInterviews();
   return NextResponse.json({ ok: true, ...result });

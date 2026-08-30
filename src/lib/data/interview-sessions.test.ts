@@ -270,7 +270,7 @@ describe("saveInterviewScore", () => {
 describe("appendProctoringSnapshot", () => {
   const snapshot = {
     at: "2026-08-04T12:00:00.000Z",
-    condition: "multiple_people" as const,
+    conditions: ["multiple_people" as const, "phone_visible" as const],
     key: "camp/app/1.jpg",
   };
 

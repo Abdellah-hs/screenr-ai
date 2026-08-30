@@ -47,12 +47,32 @@ export const PERSON_CLASS_ID = 0;
 const PHONE_CLASS_IDS: ReadonlySet<number> = new Set([67, 65]);
 
 /**
- * Minimum detection score to count a person. Low-ish because a person mid-frame
- * is the easiest thing this model does; the real false-positive guard is the area
- * floor below, and a weak score is separately folded into the sample's confidence
- * so the rule layer can discard it.
+ * Minimum detection score to count THE FIRST person — the candidate.
+ *
+ * Deliberately permissive, and the asymmetry with the floor below is the whole
+ * point. Failing to detect the person who is sitting there does not produce "no
+ * finding": it produces `person_absent`, an accusation, against someone who
+ * never left. Side lighting, a turned head or a half-cropped torso routinely
+ * score in the 0.4s. So the candidate is easy to find, and the real
+ * false-positive guard for them is the area floor below.
  */
 const PERSON_MIN_SCORE = 0.35;
+
+/**
+ * Minimum detection score to count a SECOND (or third…) person.
+ *
+ * The opposite bias, for the opposite reason: an extra person in the room is a
+ * claim of misconduct, and a wrong one is the expensive failure — with no
+ * recording, nobody can go and check it. So every person after the first has to
+ * be seen clearly, and a marginal box is simply not counted rather than being
+ * reported and argued about later.
+ *
+ * It is `VISION_MIN_CONFIDENCE` (0.6) by construction: that is the bar the rule
+ * layer already applies to a frame before it will believe anything in it, so
+ * counting an extra person below it would report evidence the rules would
+ * refuse to act on anyway.
+ */
+const ADDITIONAL_PERSON_MIN_SCORE = 0.6;
 
 /**
  * Phones are small, often partly occluded by a hand, and easy to confuse with
@@ -77,10 +97,15 @@ const PHONE_MIN_AREA_RATIO = 0.003;
 const NMS_IOU_THRESHOLD = 0.45;
 
 /**
- * Pre-NMS score floor. Below both class thresholds on purpose — filtering here
+ * Pre-NMS score floor. Below every class threshold on purpose — filtering here
  * only bounds how much work NMS does; the real decisions happen after it.
+ *
+ * Exported because a caller lowering a class floor for tuning has to lower this
+ * one with it. It sits in front of every other threshold, so an override above
+ * it is honoured and one below it silently does nothing — the anchor was
+ * already gone.
  */
-const DECODE_MIN_SCORE = 0.2;
+export const DECODE_MIN_SCORE = 0.2;
 
 /** One decoded box, in SOURCE-image pixel coordinates. */
 export interface Detection {
@@ -124,52 +149,66 @@ export function decodeYoloxOutput(
   if (ratio <= 0) return [];
 
   const detections: Detection[] = [];
+  // A short tensor is a broken model export, not a frame we can partly read, so
+  // the guard bounds the whole walk rather than one row of one pyramid level —
+  // `break`ing out of the innermost loop alone left the outer ones spinning
+  // over anchors that had already been ruled out.
+  const anchorCount = Math.floor(raw.length / NUM_ATTRS);
   let anchorOffset = 0;
 
   for (const stride of STRIDES) {
     const gridSize = Math.floor(inputSize / stride);
 
-    for (let gy = 0; gy < gridSize; gy++) {
-      for (let gx = 0; gx < gridSize; gx++) {
-        const base = (anchorOffset + gy * gridSize + gx) * NUM_ATTRS;
-        if (base + NUM_ATTRS > raw.length) break;
+    for (let cell = 0; cell < gridSize * gridSize; cell++) {
+      const anchor = anchorOffset + cell;
+      if (anchor >= anchorCount) return detections;
 
-        // Class probabilities are ≤ 1, so objectness bounds the final score —
-        // bailing here skips the 80-wide class scan for the vast majority of
-        // the 3,549 anchors.
-        const objectness = raw[base + 4];
-        if (objectness < minScore) continue;
+      const gy = Math.floor(cell / gridSize);
+      const gx = cell % gridSize;
+      const base = anchor * NUM_ATTRS;
 
-        let bestClass = -1;
-        let bestClassScore = 0;
-        for (let c = 0; c < NUM_CLASSES; c++) {
-          const p = raw[base + 5 + c];
-          if (p > bestClassScore) {
-            bestClassScore = p;
-            bestClass = c;
-          }
+      // Class probabilities are ≤ 1, so objectness bounds the final score —
+      // bailing here skips the 80-wide class scan for the vast majority of
+      // the 3,549 anchors.
+      const objectness = raw[base + 4];
+      if (objectness < minScore) continue;
+
+      // Only the anchor's BEST class survives, which is a deliberate
+      // narrowing of YOLOX's reference `multiclass_nms` — that keeps every
+      // (box, class) pair above the floor. It costs recall in one case: a
+      // phone whose top class at its anchor is something else is dropped
+      // outright. Kept because this pipeline is biased to miss rather than
+      // invent, and a second class per anchor is a second chance to raise an
+      // incident nobody can check against footage.
+      let bestClass = -1;
+      let bestClassScore = 0;
+      for (let c = 0; c < NUM_CLASSES; c++) {
+        const p = raw[base + 5 + c];
+        if (p > bestClassScore) {
+          bestClassScore = p;
+          bestClass = c;
         }
-        if (bestClass < 0) continue;
-
-        const score = objectness * bestClassScore;
-        if (score < minScore) continue;
-
-        const cx = (raw[base] + gx) * stride;
-        const cy = (raw[base + 1] + gy) * stride;
-        const w = Math.exp(raw[base + 2]) * stride;
-        const h = Math.exp(raw[base + 3]) * stride;
-
-        detections.push({
-          classId: bestClass,
-          score,
-          box: [
-            (cx - w / 2) / ratio,
-            (cy - h / 2) / ratio,
-            (cx + w / 2) / ratio,
-            (cy + h / 2) / ratio,
-          ],
-        });
       }
+      if (bestClass < 0) continue;
+
+      const score = objectness * bestClassScore;
+      if (score < minScore) continue;
+
+      const cx = (raw[base] + gx) * stride;
+      const cy = (raw[base + 1] + gy) * stride;
+      const w = Math.exp(raw[base + 2]) * stride;
+      const h = Math.exp(raw[base + 3]) * stride;
+
+      detections.push({
+        classId: bestClass,
+        score,
+        box: [
+          (cx - w / 2) / ratio,
+          (cy - h / 2) / ratio,
+          (cx + w / 2) / ratio,
+          (cy + h / 2) / ratio,
+        ],
+      });
     }
 
     anchorOffset += gridSize * gridSize;
@@ -228,16 +267,159 @@ export function nms(
 export interface FrameSignals {
   personCount: number;
   phoneCount: number;
-  /**
-   * The lowest score among the people that were counted, or 1 when none were.
-   * The weakest box is what the count hinges on, so it — not the best box — is
-   * what the sample's confidence should inherit.
-   */
-  weakestPersonScore: number;
 }
 
 /** What a kept box means to the app. COCO classes collapse into these two. */
 export type SignalLabel = "person" | "phone";
+
+/**
+ * COCO class -> what it means to the app, or null for a class the product does
+ * not report on. One map, so the counting path and the diagnostic that explains
+ * it can never disagree about what a `remote` is.
+ */
+function signalLabel(classId: number): SignalLabel | null {
+  if (classId === PERSON_CLASS_ID) return "person";
+  return PHONE_CLASS_IDS.has(classId) ? "phone" : null;
+}
+
+/**
+ * A box clipped to the frame, and the share of the frame it then covers.
+ *
+ * Clipping BEFORE measuring is load-bearing and is why this is shared rather
+ * than written twice: a person half out of shot is judged on the part actually
+ * visible, not on an extrapolated box that drifts off-screen. `selectSignals`
+ * rejects on the ratio and `describeCandidates` exists to explain that
+ * rejection, so the two must compute it the same way by construction.
+ */
+function clipToFrame(
+  box: Detection["box"],
+  frame: { width: number; height: number },
+  frameArea: number,
+): { box: [number, number, number, number]; areaRatio: number } {
+  const x1 = Math.max(0, Math.min(box[0], frame.width));
+  const y1 = Math.max(0, Math.min(box[1], frame.height));
+  const x2 = Math.max(0, Math.min(box[2], frame.width));
+  const y2 = Math.max(0, Math.min(box[3], frame.height));
+  return {
+    box: [x1, y1, x2, y2],
+    areaRatio: (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea,
+  };
+}
+
+/**
+ * Every person/phone candidate the model produced, with the two numbers that
+ * decide whether it counts. Diagnostic only — nothing in the pipeline reads it.
+ *
+ * It exists because "my phone was not detected" has three different causes that
+ * look identical from outside: the model scored it below the floor, the box was
+ * too small a share of the frame, or the model never saw it at all. Lowering a
+ * threshold fixes only the first, and lowering one for the other two adds false
+ * accusations without catching anything. This is what tells them apart.
+ *
+ * It measures through the same two helpers `selectSignals` does, so it can only
+ * ever report the numbers that were actually judged.
+ */
+export function describeCandidates(
+  detections: Detection[],
+  frame: { width: number; height: number },
+): { label: SignalLabel; score: number; areaRatio: number }[] {
+  const frameArea = Math.max(0, frame.width) * Math.max(0, frame.height);
+  if (frameArea === 0) return [];
+
+  return detections
+    .flatMap((d) => {
+      const label = signalLabel(d.classId);
+      if (!label) return [];
+      return {
+        label,
+        score: d.score,
+        areaRatio: clipToFrame(d.box, frame, frameArea).areaRatio,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Deliberately under every real floor, so the diagnostic can show a signal that
+ * was scored and REJECTED rather than only one that was never produced.
+ */
+export const DIAGNOSTIC_DECODE_FLOOR = 0.05;
+
+/**
+ * The pre-NMS floor an override actually produces.
+ *
+ * The override has to reach the DECODE floor too. That floor runs in front of
+ * every class threshold, so lowering a class floor without lowering this one
+ * just moved a filter nobody could see: the anchor was already gone, and the
+ * knob silently did nothing below 0.2 — exactly the range you reach for when a
+ * real camera is under-detecting. That was a real bug, which is why the
+ * derivation lives here with the rest of the threshold arithmetic rather than
+ * inline in the worker, where nothing tests it.
+ *
+ * `undefined` in means "no override", which `decodeYoloxOutput` reads as its
+ * own default — kept rather than resolved so the caller can still pass the
+ * parameter through untouched.
+ */
+export function decodeFloor(minScore?: number): number | undefined {
+  return minScore === undefined ? undefined : Math.min(minScore, DECODE_MIN_SCORE);
+}
+
+/**
+ * The floor the DIAGNOSTIC decodes at, which must never sit above the
+ * production one.
+ *
+ * If it did, the log would report "never produced at all" about a candidate the
+ * pipeline actually decoded — the one reading that sends you tuning the wrong
+ * knob, and precisely the confusion the flag exists to resolve. The invariant
+ * is asserted across the range in the tests rather than left to two `Math.min`
+ * calls a file apart.
+ */
+export function diagnosticDecodeFloor(minScore?: number): number {
+  return Math.min(DIAGNOSTIC_DECODE_FLOOR, decodeFloor(minScore) ?? DECODE_MIN_SCORE);
+}
+
+/**
+ * The score floors a caller may move, all optional. One named type because
+ * three places state it — `effectiveFloors`, `selectSignals` and the worker's
+ * own literal — and a fourth knob should be one edit, not three.
+ */
+export interface SignalThresholds {
+  personMinScore?: number;
+  additionalPersonMinScore?: number;
+  phoneMinScore?: number;
+}
+
+/**
+ * The floors a frame is actually judged against, override and clamp applied.
+ *
+ * Derived rather than snapshotted, because `VISION_DETECTION_MIN_SCORE` moves
+ * three of these and the extra-person floor is clamped one way only. The
+ * diagnostic reads `describeCandidates` output against this, and one that
+ * printed the compiled-in defaults would name a floor the pipeline is not
+ * using — in exactly the configuration someone sets the flag to investigate.
+ */
+export function effectiveFloors(opts: SignalThresholds = {}) {
+  const person = opts.personMinScore ?? PERSON_MIN_SCORE;
+  return {
+    person,
+    // The extra-person floor can only ever be RAISED. The knob behind it is a
+    // single env var meant for tuning a real camera, and the honest reading of
+    // "detect more" is "find the candidate more easily" — not "accuse more
+    // easily". A config change must not be able to quietly lower the bar on a
+    // finding nobody can check against footage. Also never below the floor for
+    // the first person, or a high override would leave a second person easier
+    // to count than the candidate, which is incoherent in the dangerous
+    // direction.
+    additionalPerson: Math.max(
+      ADDITIONAL_PERSON_MIN_SCORE,
+      person,
+      opts.additionalPersonMinScore ?? 0,
+    ),
+    phone: opts.phoneMinScore ?? PHONE_MIN_SCORE,
+    personArea: PERSON_MIN_AREA_RATIO,
+    phoneArea: PHONE_MIN_AREA_RATIO,
+  };
+}
 
 /** A detection that survived every threshold, clipped to the frame. */
 export interface CountedDetection {
@@ -255,39 +437,52 @@ export interface CountedDetection {
  * Boxes are clipped to the frame before their area is measured, so a person
  * half out of shot is judged on the part actually visible rather than on an
  * extrapolated box that drifts off-screen.
+ *
+ * People are graded on a SLIDING floor, best box first: the strongest person is
+ * the candidate and is found easily, every person after them must be seen
+ * clearly. The two failures are not symmetrical and must not share a threshold
+ * — missing the candidate manufactures `person_absent` against somebody sitting
+ * right there, while inventing an extra person accuses them of something.
+ *
+ * A person who fails the stricter floor is simply NOT COUNTED, and the frame is
+ * still reported. That distinction is the whole repair: the marginal box used
+ * to be counted and then poison the sample's confidence, which made the rule
+ * layer discard the frame whole — losing the candidate's own presence and any
+ * phone in the same shot along with the doubtful second person.
  */
 export function selectSignals(
   detections: Detection[],
   frame: { width: number; height: number },
-  opts: { personMinScore?: number; phoneMinScore?: number } = {},
+  opts: SignalThresholds = {},
 ): CountedDetection[] {
-  const personMinScore = opts.personMinScore ?? PERSON_MIN_SCORE;
-  const phoneMinScore = opts.phoneMinScore ?? PHONE_MIN_SCORE;
+  const floors = effectiveFloors(opts);
   const frameArea = Math.max(0, frame.width) * Math.max(0, frame.height);
   if (frameArea === 0) return [];
 
   const kept: CountedDetection[] = [];
+  // Strongest first, so "the first person" means the best-evidenced one rather
+  // than whichever anchor the decoder happened to reach first. `nms` already
+  // sorts this way; sorting here means `selectSignals` does not depend on it.
+  const ordered = [...detections].sort((a, b) => b.score - a.score);
+  let peopleCounted = 0;
 
-  for (const det of detections) {
-    const isPerson = det.classId === PERSON_CLASS_ID;
-    const isPhone = PHONE_CLASS_IDS.has(det.classId);
-    if (!isPerson && !isPhone) continue;
+  for (const det of ordered) {
+    const label = signalLabel(det.classId);
+    if (!label) continue;
+    const isPerson = label === "person";
 
-    const x1 = Math.max(0, Math.min(det.box[0], frame.width));
-    const y1 = Math.max(0, Math.min(det.box[1], frame.height));
-    const x2 = Math.max(0, Math.min(det.box[2], frame.width));
-    const y2 = Math.max(0, Math.min(det.box[3], frame.height));
-    const areaRatio = (Math.max(0, x2 - x1) * Math.max(0, y2 - y1)) / frameArea;
+    const { box, areaRatio } = clipToFrame(det.box, frame, frameArea);
 
-    const minScore = isPerson ? personMinScore : phoneMinScore;
-    const minArea = isPerson ? PERSON_MIN_AREA_RATIO : PHONE_MIN_AREA_RATIO;
+    const minScore = isPerson
+      ? peopleCounted === 0
+        ? floors.person
+        : floors.additionalPerson
+      : floors.phone;
+    const minArea = isPerson ? floors.personArea : floors.phoneArea;
     if (det.score < minScore || areaRatio < minArea) continue;
 
-    kept.push({
-      label: isPerson ? "person" : "phone",
-      score: det.score,
-      box: [x1, y1, x2, y2],
-    });
+    if (isPerson) peopleCounted++;
+    kept.push({ label, score: det.score, box });
   }
 
   return kept;
@@ -303,25 +498,24 @@ export function selectSignals(
 export function countKept(kept: CountedDetection[]): FrameSignals {
   let personCount = 0;
   let phoneCount = 0;
-  let weakestPersonScore = 1;
 
   for (const det of kept) {
-    if (det.label === "person") {
-      personCount++;
-      weakestPersonScore = Math.min(weakestPersonScore, det.score);
-    } else {
-      phoneCount++;
-    }
+    if (det.label === "person") personCount++;
+    else phoneCount++;
   }
 
-  return { personCount, phoneCount, weakestPersonScore };
+  return { personCount, phoneCount };
 }
 
 /** Select and count in one call, for callers that don't need the boxes. */
 export function countSignals(
   detections: Detection[],
   frame: { width: number; height: number },
-  opts: { personMinScore?: number; phoneMinScore?: number } = {},
+  opts: {
+    personMinScore?: number;
+    additionalPersonMinScore?: number;
+    phoneMinScore?: number;
+  } = {},
 ): FrameSignals {
   return countKept(selectSignals(detections, frame, opts));
 }
@@ -412,19 +606,30 @@ export function frameUsability(meanLuma: number, stdDev: number): number {
 }
 
 /**
- * The confidence carried by one reported sample.
+ * The confidence carried by one reported sample: HOW WELL THE FRAME COULD BE
+ * SEEN, and nothing else.
  *
- * With people in frame it is capped by the weakest box the count depends on, so
- * a marginal detection can't be reported as a certainty. With nobody in frame
- * there is no box to inherit from, and the honest reading is the frame quality
- * itself: a clear, well-lit, empty room IS a confident absence, while a black
- * frame is no evidence at all and gets dropped by the rule layer.
+ * It used to also be capped by the weakest counted person's score, on the
+ * reasoning that a marginal detection should not be reported as a certainty.
+ * That reasoning was right and the mechanism was wrong, because the rule layer
+ * does not read confidence as a discount — it reads it as a gate, and discards
+ * the whole sample below `VISION_MIN_CONFIDENCE` (0.6). So a candidate detected
+ * at 0.5 in a well-lit room did not produce weak evidence of presence; they
+ * produced NO evidence, and the frame vanished along with any phone in it.
+ *
+ * That inverted the bias this module exists to hold. An empty frame inherited
+ * only the (high) frame quality and was kept, while an occupied one inherited
+ * the (low) box score and was deleted — so the pipeline systematically kept
+ * confident absences and threw away marginal presences. Two deleted samples sit
+ * inside `VISION_MAX_SAMPLE_GAP_MS`, so they did not even break the run: a
+ * candidate visible for twenty seconds of a thirty-second window was reported
+ * absent for all thirty.
+ *
+ * Detection strength now decides WHAT IS COUNTED, in `selectSignals`, where a
+ * doubtful box costs only itself. This decides whether the frame is worth
+ * believing at all — the judgement a detector cannot make for itself, since it
+ * answers an unlit room with the same silence as an empty one.
  */
-export function observationConfidence(
-  usability: number,
-  signals: Pick<FrameSignals, "personCount" | "weakestPersonScore">,
-): number {
-  const clamped = Math.max(0, Math.min(1, usability));
-  if (signals.personCount === 0) return clamped;
-  return Math.min(clamped, Math.max(0, Math.min(1, signals.weakestPersonScore)));
+export function observationConfidence(usability: number): number {
+  return Math.max(0, Math.min(1, usability));
 }

@@ -98,15 +98,18 @@ describe("fetchExpiredInterviewNotifications", () => {
 });
 
 describe("fetchAwaitingDecisionNotifications", () => {
-  it("counts both post-interview human-decision states together", async () => {
-    // interview_scored (HITL, recruiter must advance) and manager_review (a
-    // manager owes a decision) are the same problem for the recruiter: someone
-    // finished their interview and is waiting on us.
+  it("counts every waiting-on-a-human state together", async () => {
+    // The three are one problem for the recruiter: a candidate was scored and
+    // is now waiting on us. screening_scored is in the list because the
+    // screening threshold advances but never rejects — below the line rests
+    // here, and a queue nobody can see is worse than the auto-reject it
+    // replaced.
     mockIs.mockResolvedValue({ data: [], error: null });
 
     await fetchAwaitingDecisionNotifications("user-1");
 
     expect(mockInStatus).toHaveBeenCalledWith("status", [
+      "screening_scored",
       "interview_scored",
       "manager_review",
     ]);

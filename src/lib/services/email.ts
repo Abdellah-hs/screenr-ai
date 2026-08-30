@@ -1,4 +1,4 @@
-import type { gmail_v1 } from "googleapis";
+import type { gmail_v1 } from "googleapis/build/src/apis/gmail";
 
 export interface SendEmailParams {
   to: string;

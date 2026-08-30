@@ -20,8 +20,30 @@ type Mode = GenerateDescriptionInput["mode"];
  * Grounding inputs (seniority, skills, …) are generation-only; title/department/
  * location are read live from the surrounding form.
  */
-export function DescriptionField({ initialValue = "" }: { initialValue?: string }) {
-  const [value, setValue] = useState(initialValue);
+export function DescriptionField({
+  initialValue = "",
+  value: controlledValue,
+  onChange,
+  rows = 4,
+}: {
+  /** Uncontrolled seed. Ignored when `value` is passed. */
+  initialValue?: string;
+  /** Controlled mode — required by the wizard, whose steps unmount. */
+  value?: string;
+  /** Reports the current text — the AI-assist buttons write to it too, so a
+   *  caller cannot get this from the textarea's own change events. */
+  onChange?: (value: string) => void;
+  rows?: number;
+}) {
+  const [internal, setInternal] = useState(initialValue);
+  const value = controlledValue ?? internal;
+
+  function setValue(next: string | ((current: string) => string)) {
+    const resolved = typeof next === "function" ? next(value) : next;
+    if (controlledValue === undefined) setInternal(resolved);
+    onChange?.(resolved);
+  }
+
   const [panelOpen, setPanelOpen] = useState(false);
 
   const [seniority, setSeniority] = useState("");
@@ -132,7 +154,7 @@ export function DescriptionField({ initialValue = "" }: { initialValue?: string 
         id="description"
         name="description"
         required
-        rows={panelOpen ? 8 : 4}
+        rows={panelOpen ? rows + 3 : rows}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         className="w-full resize-y rounded-lg border border-[#E5E7EB] bg-white px-4 py-2 text-sm text-[#111827] outline-none transition-colors focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB]"
@@ -141,11 +163,6 @@ export function DescriptionField({ initialValue = "" }: { initialValue?: string 
 
       {panelOpen && (
         <div className="mt-2 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] p-3">
-          <p className="mb-2 text-xs text-[#6B7280]">
-            Draft a description from a few details. AI only writes text — you edit
-            and save. It won&apos;t invent salary, benefits, or visa terms.
-          </p>
-
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <select
               value={seniority}

@@ -9,8 +9,15 @@ import {
   requiresDisposition,
   DISPOSITION_CODES,
   DISPOSITION_LABELS,
+  SCREENING_ANSWER_BUDGET_MS,
+  SCREENING_CALL_BACKSTOP_MINUTES,
+  SCREENING_WRAP_UP_RESERVE_MS,
+  screeningCallEstimateMinutes,
   TIER_COLORS,
   TIER_LABELS,
+  IN_PLAY_CANDIDATE_STAGES,
+  TERMINAL_CANDIDATE_STAGES,
+  inPlayCandidateCount,
   type ApplicationState,
   type CandidateScore,
   type CandidateStage,
@@ -179,7 +186,6 @@ describe("APPLICATION_STAGE_BUCKET / toCandidateStage", () => {
       "interview_scheduled",
       "interview_completed",
       "interview_scored",
-      "reference_check",
     ] as ApplicationState[]) {
       expect(toCandidateStage(state)).toBe("interview");
     }
@@ -208,12 +214,27 @@ describe("failure states", () => {
     expect(ALL_STATES).toContain(state);
   });
 
-  it.each(FAILURE_STATES)(
+  it.each(FAILURE_STATES.filter((state) => state !== "processing_failed"))(
     "makes %s an observable dead-end whose only exit is archived",
     (state) => {
       expect(APPLICATION_STATE_TRANSITIONS[state]).toEqual(["archived"]);
     },
   );
+
+  // The exception, and it is the only one: `processing_failed` records OUR
+  // failure to read a CV, not a fact about the candidate. When the outage
+  // clears it goes back to `new` and is scored like any other application.
+  it("lets processing_failed recover to new, and nowhere else but archived", () => {
+    expect(APPLICATION_STATE_TRANSITIONS.processing_failed).toEqual(["new", "archived"]);
+  });
+
+  // A repair must not double as a shortcut past the rule that decides where a
+  // scored CV goes.
+  it("does not let a recovery skip straight into a decided state", () => {
+    for (const target of APPLICATION_STATE_TRANSITIONS.processing_failed) {
+      expect(["screening_approved", "screening_review_pending", "rejected"]).not.toContain(target);
+    }
+  });
 
   it("reaches screening_expired from screening_sent", () => {
     expect(APPLICATION_STATE_TRANSITIONS.screening_sent).toContain(
@@ -242,6 +263,7 @@ describe("pipelineDisplayScore", () => {
       overall,
       ai_summary: "",
       factors: [],
+      evaluation: null,
       scored_at: "2026-06-16T00:00:00.000Z",
       rubric_version: null,
       current_rubric_version: null,
@@ -311,15 +333,22 @@ describe("screening tier display config", () => {
     // the raw enum itself (`tier.charAt(0).toUpperCase() + ...`), so it kept
     // rendering "Moderate" while every other surface changed. A component that
     // derives its own label silently opts out of the next rename too.
+    //
+    // Reading TIER_LABELS and delegating to the score block that reads it are
+    // both fine — the invariant is that nobody builds a label from the enum.
     const sources = [
       "src/components/candidates/talent-pool-table.tsx",
       "src/components/campaigns/candidate-table.tsx",
+      "src/components/ui/score-block.tsx",
     ];
 
     for (const file of sources) {
       const src = readFileSync(join(process.cwd(), file), "utf8");
-      expect(src).toContain("TIER_LABELS");
-      expect(src).not.toMatch(/tier\.charAt\(0\)\.toUpperCase\(\)/);
+      expect(src, file).not.toMatch(/tier\.charAt\(0\)\.toUpperCase\(\)/);
+      expect(
+        src.includes("TIER_LABELS") || src.includes("ScoreInline"),
+        `${file} must read TIER_LABELS or delegate to a component that does`,
+      ).toBe(true);
     }
   });
 });
@@ -359,5 +388,137 @@ describe("disposition codes", () => {
 
     expect(label).toBeDefined();
     expect(label).not.toMatch(/_/);
+  });
+});
+
+describe("screening call pacing", () => {
+  /**
+   * The 2026-08-24 change: a screening call has no clock the candidate races.
+   * Each ANSWER gets its own budget and the call ends when its topics are
+   * covered, so the estimate below is copy — it is quoted in the invitation
+   * email and on the pre-call screen and enforced nowhere.
+   *
+   * This is the assertion that would fail if anyone re-derived a timer from
+   * it, which is exactly how the old five-minute guillotine came about: one
+   * function fed the copy AND the hard cut, so "about 5 minutes" was a promise
+   * and a threat in the same sentence.
+   */
+  it("estimates a longer call for more topics, since a call now lasts as long as its topics", () => {
+    expect(screeningCallEstimateMinutes(8)).toBeGreaterThan(
+      screeningCallEstimateMinutes(3),
+    );
+  });
+
+  it("never advertises a call shorter than the setup it asks of the candidate", () => {
+    // Finding a quiet room and sorting out a microphone is not worth doing for
+    // three minutes, however few topics there are.
+    for (const count of [0, 1, 3]) {
+      expect(screeningCallEstimateMinutes(count)).toBeGreaterThanOrEqual(5);
+    }
+  });
+
+  it("is monotonic — one more topic never shortens the estimate", () => {
+    for (let topics = 0; topics < 15; topics += 1) {
+      expect(screeningCallEstimateMinutes(topics + 1)).toBeGreaterThanOrEqual(
+        screeningCallEstimateMinutes(topics),
+      );
+    }
+  });
+
+  /**
+   * The backstop is a failure bound, not a duration — it catches a dead worker
+   * or an abandoned tab, both of which bill a Realtime session by the minute.
+   * It has to sit above the worst case a well-behaved call can reach, or it
+   * would start cutting real interviews and become the guillotine again.
+   *
+   * This replaced the old `MAX_SCREENING_CALL_MINUTES <=
+   * INTERVIEW_DURATION_MINUTES` assertion, which compared two fixed lengths.
+   * Screening no longer has a fixed length, so that comparison no longer has
+   * two comparable things in it.
+   */
+  it("keeps the backstop above the longest call that could legitimately happen", () => {
+    const topics = 8;
+    // **One answer per topic, because that is the whole call now** (decision
+    // 2026-08-27): follow-ups are gone, so a topic can draw exactly one minute
+    // rather than up to three. The budget alone, because a budget is all there
+    // is — the grace that used to sit on top of it was retired on 2026-08-25,
+    // when zero started moving the call on whoever was talking.
+    const worstCaseMs = topics * SCREENING_ANSWER_BUDGET_MS;
+
+    expect(SCREENING_CALL_BACKSTOP_MINUTES * 60_000).toBeGreaterThan(worstCaseMs);
+  });
+
+  /**
+   * The estimate is what the candidate is told; the backstop is what actually
+   * stops the room. Quoting the backstop would frighten people off a call that
+   * will really take seven minutes.
+   */
+  it("never quotes the backstop to the candidate", () => {
+    for (const count of [0, 3, 5, 8, 15]) {
+      expect(screeningCallEstimateMinutes(count)).toBeLessThan(
+        SCREENING_CALL_BACKSTOP_MINUTES,
+      );
+    }
+  });
+
+  /**
+   * The wrap-up reserve is carved out of the backstop, so it only matters on a
+   * call that has already gone wrong. It still has to fit inside it.
+   */
+  it("leaves the wrap-up reserve inside the backstop", () => {
+    expect(SCREENING_WRAP_UP_RESERVE_MS).toBeLessThan(
+      SCREENING_CALL_BACKSTOP_MINUTES * 60_000,
+    );
+  });
+});
+
+describe("inPlayCandidateCount", () => {
+  function buckets(over: Partial<Record<CandidateStage, number>> = {}) {
+    return {
+      applied: 0,
+      screening: 0,
+      interview: 0,
+      final_interview: 0,
+      hired: 0,
+      rejected: 0,
+      ...over,
+    };
+  }
+
+  it("counts everybody still moving through the pipeline", () => {
+    const total = inPlayCandidateCount(
+      buckets({ applied: 4, screening: 3, interview: 2, final_interview: 1 }),
+    );
+
+    expect(total).toBe(10);
+  });
+
+  /**
+   * The reason this is a function over a list rather than a written-out sum.
+   * A sum fails SILENTLY when a stage is added — the new bucket is simply left
+   * out, and the figure then disagrees with the total minus the outcome rows
+   * printed on the same card, with nothing to say which one is wrong.
+   */
+  it("covers every non-terminal stage, so a new stage cannot be silently dropped", () => {
+    const everyStageHasOne = buckets({
+      applied: 1,
+      screening: 1,
+      interview: 1,
+      final_interview: 1,
+      hired: 1,
+      rejected: 1,
+    });
+
+    expect(inPlayCandidateCount(everyStageHasOne)).toBe(IN_PLAY_CANDIDATE_STAGES.length);
+  });
+
+  it("excludes the outcomes — a hire is not somebody still in play", () => {
+    expect(inPlayCandidateCount(buckets({ hired: 7, rejected: 9 }))).toBe(0);
+  });
+
+  it("and the two sets do not overlap", () => {
+    for (const stage of TERMINAL_CANDIDATE_STAGES) {
+      expect(IN_PLAY_CANDIDATE_STAGES).not.toContain(stage);
+    }
   });
 });

@@ -222,7 +222,7 @@ new
                       interview_completed ─► interview_scored
                                                      │
                                                      ▼
-                            [reference_check] ─► manager_review
+                                          manager_review
                                                      │
                                                      ▼
                               final_interview_scheduling ─► hired
@@ -439,7 +439,7 @@ These are the places where today's code falls short of the architecture above. T
 - **Candidate-submit path** (`submitScreeningAnswers`) cannot call `transition_application` directly because the RPC requires `auth.uid()`. The recruiter's `scoreScreeningAnswers` catches up with a double transition. Fix: a token-scoped RPC.
 - **`upsertCandidate` auto-merges on email**; PRD requires flagging duplicates for HR review instead.
 - **Screening Q&A is text-based.** PRD 3.4.3 requires video/audio. Treat the current form as a shortcut.
-- **Missing first-class stages**: interview scheduling, reference check, final interview scheduling. The states exist; the flows don't.
+- **Missing first-class stages**: interview scheduling, final interview scheduling. The states exist; the flows don't. (Reference check was the third entry here; the stage was removed outright on 2026-08-30 — PRD 3.19 retired, enum value dropped.)
 - **`interview_no_show`, `processing_failed`** have no emission paths yet.
 - **`src/lib/data/campaigns.ts` is 530 lines** — mixes campaigns, applications, and stage queries. Split planned alongside Candidate/Application separation.
 

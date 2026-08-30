@@ -13,6 +13,7 @@ export function HitlReviewPanel({
   campaignId,
   campaignActive,
   hasScreeningQuestions,
+  bare = false,
 }: {
   applicationId: string;
   // For the "set up screening questions" jump link in the blocked-approval hint.
@@ -23,6 +24,9 @@ export function HitlReviewPanel({
   // Approving emails the screening questions immediately, so it's blocked
   // until the campaign has a question set. The server action re-checks this.
   hasScreeningQuestions: boolean;
+  // Drop the card chrome when the panel is already inside one (the decision
+  // rail) — a card nested in a card reads as two separate asks.
+  bare?: boolean;
 }) {
   const router = useRouter();
   const [decision, setDecision] = useState<Decision | null>(null);
@@ -83,7 +87,13 @@ export function HitlReviewPanel({
   const isApprove = decision === "approve";
 
   return (
-    <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-xl p-5">
+    <div
+      className={
+        bare
+          ? "rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-4"
+          : "rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-5"
+      }
+    >
       <div className="flex items-start gap-3 mb-4">
         <div className="w-8 h-8 rounded-full bg-[#FEF3C7] text-[#B45309] flex items-center justify-center shrink-0">
           <svg
@@ -171,7 +181,7 @@ export function HitlReviewPanel({
               <button
                 type="button"
                 onClick={acknowledgeWarning}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] transition-colors"
+                className="px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] transition-colors"
               >
                 Got it
               </button>
@@ -180,7 +190,7 @@ export function HitlReviewPanel({
         ) : (
           <>
             <ModalHeader>
-              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+              <h2 className="text-lg font-semibold text-[#111827]">
                 {isApprove ? "Approve for screening" : "Reject application"}
               </h2>
               <p className="text-sm text-[#6B7280] mt-1">
@@ -200,7 +210,7 @@ export function HitlReviewPanel({
                   ? "e.g. Strong relevant experience; want to see screening answers."
                   : "e.g. Background does not match required stack; declining."
               }
-              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#0369A1] focus:ring-1 focus:ring-[#0369A1] outline-none resize-y"
+              className="w-full px-3 py-2 text-sm bg-white border border-[#E5E7EB] rounded-lg text-[#111827] focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] outline-none resize-y"
             />
 
             {error && (

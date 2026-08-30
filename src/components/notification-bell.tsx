@@ -104,9 +104,13 @@ export function NotificationBell({
         aria-label={total > 0 ? `Notifications (${total})` : "Notifications"}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="relative text-[#6B7280] hover:text-[#111827] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] rounded-md"
+        // Same chassis as the filter controls below it — hairline border,
+        // rounded-lg, solid white — so the bell reads as one of the page's own
+        // controls rather than a loose icon. 44px square: the global touch
+        // floor sizes it anyway, so the box may as well be square on purpose.
+        className="relative inline-flex h-11 w-11 items-center justify-center rounded-lg border border-[#D1D5DB] bg-white text-[#6B7280] cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-[3px] focus-visible:outline-primary/45 focus-visible:outline-offset-2"
       >
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
         </svg>
         {total > 0 && (

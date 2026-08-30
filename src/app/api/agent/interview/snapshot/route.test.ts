@@ -78,11 +78,15 @@ describe("POST /api/agent/interview/snapshot", () => {
       expect.objectContaining({ campaignId: CAMPAIGN_ID, applicationId: APP_ID }),
       expect.objectContaining({ __brand: "admin-client" }),
     );
-    // The condition is DERIVED from the counts by the rule layer, never taken
+    // The conditions are DERIVED from the counts by the rule layer, never taken
     // from the worker — one definition of what a reading means.
     expect(mockAppend).toHaveBeenCalledWith(
       APP_ID,
-      { at: "2026-08-04T12:00:00.000Z", condition: "multiple_people", key: KEY },
+      {
+        at: "2026-08-04T12:00:00.000Z",
+        conditions: ["multiple_people"],
+        key: KEY,
+      },
       expect.anything(),
     );
   });
@@ -92,7 +96,24 @@ describe("POST /api/agent/interview/snapshot", () => {
 
     expect(mockAppend).toHaveBeenCalledWith(
       APP_ID,
-      expect.objectContaining({ condition: "phone_visible" }),
+      expect.objectContaining({ conditions: ["phone_visible"] }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * One frame, two findings. Filing it under only the most serious one left the
+   * phone incident with no picture behind it whenever a second person happened
+   * to share the frame — which is precisely when a recruiter needs one.
+   */
+  it("files a frame showing both a phone and a second person under both", async () => {
+    await POST(request(body({ person_count: 2, phone_count: 1 }), "agent-secret"));
+
+    expect(mockAppend).toHaveBeenCalledWith(
+      APP_ID,
+      expect.objectContaining({
+        conditions: ["multiple_people", "phone_visible"],
+      }),
       expect.anything(),
     );
   });

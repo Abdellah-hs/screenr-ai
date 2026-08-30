@@ -56,23 +56,49 @@ export interface CampaignApplyGate {
 }
 
 /**
- * Whether the public apply page should accept a new application right now. Three
- * gates, all required: the campaign must be processing (active); the recruiter's
- * manual intake switch (`accepting_applications`) must be on; AND — only when
- * they opted into deadline enforcement — the deadline must not have passed. An
- * unenforced deadline never blocks applications (it's informational). This is
- * the single decision the apply action reads.
+ * Which of the three intake gates is shut, or null when the apply page is live.
+ *
+ * The recruiter-facing copy needs the *reason*, not the boolean. "Active" is
+ * two different situations — a campaign whose link takes CVs and one whose
+ * link turns candidates away — and a status badge reading Active beside a
+ * public page reading "Applications are closed" is a contradiction the
+ * recruiter cannot resolve without being told which gate closed it.
+ */
+export type ApplyGateBlocker = "not_active" | "intake_closed" | "deadline_passed";
+
+/**
+ * The three gates the public apply page runs, in order: the campaign must be
+ * processing (active); the recruiter's manual intake switch
+ * (`accepting_applications`) must be on; AND — only when they opted into
+ * deadline enforcement — the deadline must not have passed. An unenforced
+ * deadline never blocks applications (it's informational).
+ *
+ * The order is the reporting order too: the first shut gate is the one named,
+ * because it is the one the recruiter has to open first.
+ */
+export function applyGateBlocker(
+  campaign: CampaignApplyGate,
+  now: Date,
+): ApplyGateBlocker | null {
+  if (!isCampaignProcessingActive(campaign.status)) return "not_active";
+  if (!campaign.accepting_applications) return "intake_closed";
+  if (campaign.deadline_enforced && isDeadlinePassed(campaign.deadline, now)) {
+    return "deadline_passed";
+  }
+  return null;
+}
+
+/**
+ * Whether the public apply page should accept a new application right now.
+ * This is the single decision the apply action reads, and it is defined as
+ * "no gate is shut" rather than repeating the gates — so the recruiter's
+ * explanation and the candidate's experience cannot drift apart.
  */
 export function isCampaignAcceptingApplications(
   campaign: CampaignApplyGate,
   now: Date,
 ): boolean {
-  if (!isCampaignProcessingActive(campaign.status)) return false;
-  if (!campaign.accepting_applications) return false;
-  if (campaign.deadline_enforced && isDeadlinePassed(campaign.deadline, now)) {
-    return false;
-  }
-  return true;
+  return applyGateBlocker(campaign, now) === null;
 }
 
 /**

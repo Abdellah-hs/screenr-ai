@@ -1,9 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import type { SupabaseDb } from "@/lib/supabase/types";
+import type { ScoredInterviewDimension } from "@/lib/interview-scoring";
 import type { Json } from "@/types/database.types";
 import type {
   ProctoringReport,
   ProctoringSnapshot,
+  StoredProctoringSnapshot,
   VisionObservation,
 } from "@/lib/proctoring/incidents";
 
@@ -55,7 +57,44 @@ export interface InterviewDimension {
 export interface InterviewScore {
   overall_score: number;
   overall_rationale: string;
+  /**
+   * Legacy per-competency numbers, from the scorer that asked the model for
+   * 0-100 and let it choose the competencies. Empty on every interview scored
+   * since 2026-08-28 — `dimension_scores` carries the breakdown now.
+   */
   dimensions: InterviewDimension[];
+  /**
+   * The evidence-based rubric breakdown.
+   *
+   * **Null means the interview was scored by the old numeric prompt** (anything
+   * before 2026-08-28) and renders from `dimensions`. History is not
+   * back-filled: a score should show the unit it was actually graded in, and
+   * the two are not comparable — the old overall was an unweighted mean of
+   * model-chosen competencies, this one a weighted mean over the recruiter's
+   * rubric. The same rule screening applied to `dimension_scores` in #163.
+   */
+  dimension_scores?: ScoredInterviewDimension[] | null;
+  /** Which arithmetic produced the overall. Null on the legacy numeric path. */
+  rules_version?: string | null;
+  /**
+   * How much of the rubric the interview actually reached: the number of
+   * assessed dimensions and their share of the rubric's weight (0-1).
+   *
+   * Not optional decoration. Since v2 the overall is the mean over the ASSESSED
+   * dimensions only, so 100 from one dimension of five and 80 from all five are
+   * both plausible numbers that mean very different things. Absent on scores
+   * written before this, which is honest — nothing measured it then.
+   */
+  covered_count?: number;
+  covered_weight?: number;
+  /** Quotes discarded and levels downgraded on the way to this score. */
+  validation_warnings?: string[];
+  /**
+   * Free-text summaries from the retired numeric scorer. Empty since
+   * 2026-08-28: the per-dimension notes and the overall rationale say the same
+   * things against the rubric, and a second free-text field would have meant
+   * forking the evidence schema the two spoken stages now share.
+   */
   strengths: string[];
   concerns: string[];
   /** interview-stage rubric version active at score time (staleness tracking). */
@@ -80,7 +119,7 @@ export interface InterviewSessionRow {
    * Draft index of evidence stills captured during the call. Pruned to the
    * confirmed incidents at submit — see `attachSnapshots`.
    */
-  proctoring_snapshots: ProctoringSnapshot[] | null;
+  proctoring_snapshots: StoredProctoringSnapshot[] | null;
   expires_at: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -283,7 +322,10 @@ export async function appendProctoringSnapshot(
  */
 export async function saveProctoringSnapshots(
   applicationId: string,
-  snapshots: ProctoringSnapshot[],
+  // Whatever survived the prune, at whatever vintage it was written: this
+  // rewrites the index, so a legacy single-label row must go back as it was
+  // rather than being silently reshaped by the code that happened to read it.
+  snapshots: StoredProctoringSnapshot[],
   db: SupabaseDb,
 ): Promise<void> {
   const q = db as AnyDb;

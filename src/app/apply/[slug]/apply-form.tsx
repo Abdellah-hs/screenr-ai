@@ -10,7 +10,7 @@ const ACCEPT_ATTR = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-o
 const MAX_BYTES = 10 * 1024 * 1024;
 
 const INPUT_CLASS =
-  "w-full rounded-lg border border-[#D1D5DB] bg-white px-3.5 py-2.5 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#0369A1] focus:border-[#0369A1] transition-colors duration-200 disabled:opacity-50";
+  "w-full rounded-lg border border-[#D1D5DB] bg-white px-3.5 py-2.5 text-sm text-[#111827] placeholder:text-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] transition-colors duration-200 disabled:opacity-50";
 
 interface ApplyFormProps {
   slug: string;
@@ -132,7 +132,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                 {step === 1 ? (
                   <>
                     <h1 className="text-2xl xl:text-3xl font-semibold text-[#111827]">Apply for this role</h1>
-                    <p className="mt-1.5 text-sm xl:text-base font-semibold text-[#0369A1]">{campaignTitle}</p>
+                    <p className="mt-1.5 text-sm xl:text-base font-semibold text-[#111827]">{campaignTitle}</p>
                   </>
                 ) : (
                   <>
@@ -153,7 +153,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                     <h1 className="text-2xl xl:text-3xl font-semibold text-[#111827]">Almost done</h1>
                     <p className="mt-1.5 text-sm text-[#6B7280]">
                       Attach your CV to finish your application to{" "}
-                      <span className="font-semibold text-[#0369A1]">{campaignTitle}</span>.
+                      <span className="font-semibold text-[#111827]">{campaignTitle}</span>.
                     </p>
                   </>
                 )}
@@ -226,7 +226,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                       <label htmlFor="apply-linkedin" className="block text-sm font-medium text-[#111827] mb-1.5">
                         LinkedIn
                       </label>
-                      <div className="flex rounded-lg border border-[#D1D5DB] bg-white focus-within:ring-2 focus-within:ring-[#0369A1] focus-within:border-[#0369A1] transition-colors duration-200">
+                      <div className="flex rounded-lg border border-[#D1D5DB] bg-white focus-within:ring-2 focus-within:ring-[#2563EB] focus-within:border-[#2563EB] transition-colors duration-200">
                         <span className="flex items-center rounded-l-lg border-r border-[#D1D5DB] bg-[#F9FAFB] px-3 text-sm text-[#6B7280] select-none">
                           linkedin.com/
                         </span>
@@ -246,7 +246,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                       <label htmlFor="apply-website" className="block text-sm font-medium text-[#111827] mb-1.5">
                         Personal site
                       </label>
-                      <div className="flex rounded-lg border border-[#D1D5DB] bg-white focus-within:ring-2 focus-within:ring-[#0369A1] focus-within:border-[#0369A1] transition-colors duration-200">
+                      <div className="flex rounded-lg border border-[#D1D5DB] bg-white focus-within:ring-2 focus-within:ring-[#2563EB] focus-within:border-[#2563EB] transition-colors duration-200">
                         <span className="flex items-center rounded-l-lg border-r border-[#D1D5DB] bg-[#F9FAFB] px-3 text-sm text-[#6B7280] select-none">
                           https://
                         </span>
@@ -264,7 +264,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
 
                     <button
                       type="submit"
-                      className="w-full inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 min-h-[48px] !mt-6"
+                      className="w-full inline-flex items-center justify-center px-6 py-3 text-base font-semibold text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-150 min-h-[48px] !mt-6"
                     >
                       Continue
                     </button>
@@ -295,24 +295,24 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                           onDrop={handleDrop}
                           className={`w-full flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-6 sm:p-8 text-center transition-colors duration-200 cursor-pointer ${
                             dragging
-                              ? "border-[#0369A1] bg-[#F0F9FF]"
-                              : "border-[#CBD5E1] bg-white hover:border-[#0369A1] hover:bg-[#F8FAFC]"
+                              ? "border-[#2563EB] bg-[#EFF6FF]"
+                              : "border-[#D1D5DB] bg-white hover:border-[#2563EB] hover:bg-[#F9FAFB]"
                           }`}
                         >
-                          <span className="w-12 h-12 rounded-full bg-[#F0F9FF] flex items-center justify-center">
-                            <svg className="w-6 h-6 text-[#0369A1]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <span className="w-12 h-12 rounded-full bg-[#EFF6FF] flex items-center justify-center">
+                            <svg className="w-6 h-6 text-[#2563EB]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                             </svg>
                           </span>
                           <span className="text-sm font-medium text-[#111827]">
-                            Drag your CV here, or <span className="text-[#0369A1]">browse</span>
+                            Drag your CV here, or <span className="text-[#2563EB]">browse</span>
                           </span>
                           <span className="text-xs text-[#9CA3AF]">PDF or Word (.docx), up to 10 MB</span>
                         </button>
                       ) : (
                         <div className="flex items-center gap-3 rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-sm">
-                          <span className="w-10 h-10 shrink-0 rounded-lg bg-[#F0F9FF] flex items-center justify-center">
-                            <svg className="w-5 h-5 text-[#0369A1]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <span className="w-10 h-10 shrink-0 rounded-lg bg-[#F3F4F6] flex items-center justify-center">
+                            <svg className="w-5 h-5 text-[#6B7280]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                           </span>
@@ -328,7 +328,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                             }}
                             disabled={submitting}
                             aria-label="Remove file"
-                            className="shrink-0 rounded-lg p-2 text-[#9CA3AF] hover:bg-[#F1F5F9] hover:text-[#6B7280] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] transition-colors disabled:opacity-50 cursor-pointer"
+                            className="shrink-0 rounded-lg p-2 text-[#9CA3AF] hover:bg-[#F3F4F6] hover:text-[#374151] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] transition-colors disabled:opacity-50 cursor-pointer"
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -341,7 +341,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
                     <button
                       type="submit"
                       disabled={submitting}
-                      className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 text-base font-semibold text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px]"
+                      className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 text-base font-semibold text-white bg-[#111827] rounded-lg cursor-pointer hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px]"
                     >
                       {submitting ? (
                         <>
@@ -372,7 +372,7 @@ export default function ApplyForm({ slug, campaignTitle }: ApplyFormProps) {
               <span
                 key={s}
                 className={`h-2 w-2 rounded-full transition-colors duration-200 ${
-                  step === s ? "bg-[#0369A1]" : "bg-[#E5E7EB]"
+                  step === s ? "bg-[#111827]" : "bg-[#E5E7EB]"
                 }`}
               />
             ))}

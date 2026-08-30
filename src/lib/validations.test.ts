@@ -88,6 +88,7 @@ describe('campaignFormSchema', () => {
     deadline_enforced: false,
     location: 'Remote',
     automation_mode: 'human_in_loop' as const,
+    resume_threshold: 70,
     screening_threshold: 70,
     interview_persona: 'neutral' as const,
     interview_slot_minutes: null,
@@ -125,6 +126,19 @@ describe('campaignFormSchema', () => {
     const negative = campaignFormSchema.safeParse({ ...validCampaign, screening_threshold: -1 });
     expect(tooHigh.success).toBe(false);
     expect(negative.success).toBe(false);
+  });
+
+  it('rejects a resume_threshold outside 0-100', () => {
+    const tooHigh = campaignFormSchema.safeParse({ ...validCampaign, resume_threshold: 101 });
+    const negative = campaignFormSchema.safeParse({ ...validCampaign, resume_threshold: -1 });
+    expect(tooHigh.success).toBe(false);
+    expect(negative.success).toBe(false);
+  });
+
+  it('requires resume_threshold — the CV bar is not optional', () => {
+    const withoutResumeBar: Record<string, unknown> = { ...validCampaign };
+    delete withoutResumeBar.resume_threshold;
+    expect(campaignFormSchema.safeParse(withoutResumeBar).success).toBe(false);
   });
 
   it('rejects an unknown status value', () => {
@@ -180,6 +194,7 @@ describe('parseCampaignFormData', () => {
     fd.set('positions', '2');
     fd.set('status', 'draft');
     fd.set('automation_mode', 'human_in_loop');
+    fd.set('resume_threshold', '70');
     fd.set('screening_threshold', '70');
     fd.set('interview_persona', 'neutral');
     for (const [key, value] of Object.entries(overrides)) {
@@ -206,6 +221,29 @@ describe('parseCampaignFormData', () => {
     const fd = buildFormData({ screening_threshold: '-20' });
     const result = parseCampaignFormData(fd);
     expect(result.screening_threshold).toBe(0);
+  });
+
+  it('clamps resume_threshold to 0-100 independently of the screening bar', () => {
+    const fd = buildFormData({ resume_threshold: '500', screening_threshold: '40' });
+    const result = parseCampaignFormData(fd);
+    expect(result.resume_threshold).toBe(100);
+    expect(result.screening_threshold).toBe(40);
+  });
+
+  it('keeps the two bars separate — each field lands on its own column', () => {
+    const fd = buildFormData({ resume_threshold: '55', screening_threshold: '80' });
+    const result = parseCampaignFormData(fd);
+    expect(result.resume_threshold).toBe(55);
+    expect(result.screening_threshold).toBe(80);
+  });
+
+  it('defaults both thresholds to 70 when the fields are missing', () => {
+    const fd = buildFormData();
+    fd.delete('resume_threshold');
+    fd.delete('screening_threshold');
+    const result = parseCampaignFormData(fd);
+    expect(result.resume_threshold).toBe(70);
+    expect(result.screening_threshold).toBe(70);
   });
 
   it('defaults positions to 1 when NaN', () => {
@@ -251,6 +289,54 @@ describe('parseCampaignFormData', () => {
     fd.set('rubrics_json', '{"wrong": "shape"}');
     const result = parseCampaignFormData(fd);
     expect(result.rubrics).toEqual([]);
+  });
+
+  it('parses screening questions staged on the create form', () => {
+    const fd = buildFormData({
+      screening_questions_json: JSON.stringify([
+        { prompt: 'Describe a system you scaled past its first design.' },
+        { prompt: 'What made you look outside your current role?' },
+      ]),
+    });
+
+    const result = parseCampaignFormData(fd);
+
+    expect(result.screeningQuestions).toEqual([
+      { prompt: 'Describe a system you scaled past its first design.' },
+      { prompt: 'What made you look outside your current role?' },
+    ]);
+  });
+
+  /**
+   * `null`, not `[]`. An edit form that does not carry the field is saying
+   * "I do not manage questions", which must leave the stored set alone; an
+   * empty array is the recruiter having removed the last one. A parser that
+   * returned `[]` for both would let any caller that forgets the field wipe a
+   * campaign's whole question set.
+   */
+  it('reports the screening question field as absent rather than empty', () => {
+    const fd = buildFormData();
+    const result = parseCampaignFormData(fd);
+    expect(result.screeningQuestions).toBeNull();
+  });
+
+  // An empty set is legal at creation: a recruiter without a job description
+  // yet cannot generate questions, and blocking creation on that is worse than
+  // the "no questions yet" banner the campaign page already shows.
+  it('accepts an explicitly empty screening question set', () => {
+    const fd = buildFormData({ screening_questions_json: '[]' });
+    const result = parseCampaignFormData(fd);
+    expect(result.screeningQuestions).toEqual([]);
+  });
+
+  it('drops a screening question set whose prompts are too short', () => {
+    const fd = buildFormData({
+      screening_questions_json: JSON.stringify([{ prompt: 'why?' }]),
+    });
+
+    const result = parseCampaignFormData(fd);
+
+    expect(result.screeningQuestions).toEqual([]);
   });
 
   it('parses availability rules and the scalar interview-config fields', () => {

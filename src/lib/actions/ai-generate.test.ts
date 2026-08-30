@@ -5,11 +5,13 @@ const {
   mockCheckRateLimit,
   mockGenerateJobDescription,
   mockGenerateSocialPosts,
+  mockGenerateQuestionsForRole,
 } = vi.hoisted(() => ({
   mockRequireUserId: vi.fn(),
   mockCheckRateLimit: vi.fn(),
   mockGenerateJobDescription: vi.fn(),
   mockGenerateSocialPosts: vi.fn(),
+  mockGenerateQuestionsForRole: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
@@ -27,7 +29,20 @@ vi.mock("@/lib/services/openai", () => ({
   generateSocialPosts: mockGenerateSocialPosts,
 }));
 
-import { generateCampaignDescription, generateSocialPosts } from "./ai-generate";
+vi.mock("@/lib/services/screening-questions", () => ({
+  generateQuestionsForRole: mockGenerateQuestionsForRole,
+}));
+
+import {
+  generateCampaignDescription,
+  generateSocialPosts,
+  generateScreeningQuestionsFromDescription,
+} from "./ai-generate";
+
+const SAMPLE_QUESTIONS = [
+  { prompt: "Describe a system you scaled past its first design.", is_required: true },
+  { prompt: "What made you look outside your current role?", is_required: false },
+];
 
 const SAMPLE_POSTS = {
   linkedin: "We're hiring.",
@@ -41,6 +56,7 @@ beforeEach(() => {
   mockRequireUserId.mockResolvedValue("user-1");
   mockGenerateJobDescription.mockResolvedValue("A drafted job description.");
   mockGenerateSocialPosts.mockResolvedValue(SAMPLE_POSTS);
+  mockGenerateQuestionsForRole.mockResolvedValue(SAMPLE_QUESTIONS);
 });
 
 describe("generateCampaignDescription", () => {
@@ -117,5 +133,91 @@ describe("generateSocialPosts", () => {
       }),
     );
     expect(result).toEqual(SAMPLE_POSTS);
+  });
+});
+
+/**
+ * The create form has no campaign row yet, so it cannot use
+ * `generateScreeningQuestions(campaignId)` — that one reads the description
+ * back out of the database. This is the description-first counterpart.
+ */
+describe("generateScreeningQuestionsFromDescription", () => {
+  const DESCRIPTION = "We are hiring a senior backend engineer to own our payments platform.";
+
+  it("rejects an anonymous caller before doing any work", async () => {
+    mockRequireUserId.mockRejectedValueOnce(new Error("Unauthorized"));
+
+    await expect(generateScreeningQuestionsFromDescription(DESCRIPTION)).rejects.toThrow(
+      "Unauthorized",
+    );
+    expect(mockCheckRateLimit).not.toHaveBeenCalled();
+    expect(mockGenerateQuestionsForRole).not.toHaveBeenCalled();
+  });
+
+  it("rejects a description too short to generate from, before calling the model", async () => {
+    await expect(generateScreeningQuestionsFromDescription("hi")).rejects.toThrow();
+    expect(mockGenerateQuestionsForRole).not.toHaveBeenCalled();
+  });
+
+  it("returns the generated questions without persisting anything", async () => {
+    await expect(generateScreeningQuestionsFromDescription(DESCRIPTION)).resolves.toEqual(
+      SAMPLE_QUESTIONS,
+    );
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith({
+      jobDescription: DESCRIPTION,
+      rubricDimensions: [],
+    });
+  });
+
+  /**
+   * The point of the change: the wizard is holding the screening rubric on the
+   * same step, so questions are drafted against what the answers will actually
+   * be scored on rather than against the job description alone.
+   */
+  it("passes the wizard's screening rubric through to the generator", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION, [
+      "Scaling experience",
+      "Debugging method",
+    ]);
+
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith({
+      jobDescription: DESCRIPTION,
+      rubricDimensions: [{ name: "Scaling experience" }, { name: "Debugging method" }],
+    });
+  });
+
+  /**
+   * The action must not pin a count. How many questions to draft is a function
+   * of the rubric, and it is answered in one place — the generator — so the
+   * wizard and the campaign page cannot size a set differently.
+   */
+  it("leaves the question count to the generator rather than fixing it here", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION, ["Scaling experience"]);
+
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith(
+      expect.not.objectContaining({ count: expect.anything() }),
+    );
+  });
+
+  /**
+   * A half-typed dimension is a normal state to press "draft questions" in.
+   * Failing the whole call over one empty row would be the wizard blocking
+   * itself over a field the recruiter is still filling in.
+   */
+  it("drops blank dimension names rather than refusing the request", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION, ["Scaling experience", "  "]);
+
+    expect(mockGenerateQuestionsForRole).toHaveBeenCalledWith(
+      expect.objectContaining({ rubricDimensions: [{ name: "Scaling experience" }] }),
+    );
+  });
+
+  it("shares the AI generation rate-limit bucket with its siblings", async () => {
+    await generateScreeningQuestionsFromDescription(DESCRIPTION);
+
+    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({ name: "ai-generate" }),
+    );
   });
 });

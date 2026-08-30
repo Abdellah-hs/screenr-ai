@@ -8,8 +8,14 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { scoreAnswers, scoreTranscript } from "./screening-questions";
-import type { VoiceTranscriptTurn } from "@/lib/data/screening-questions";
+import {
+  DEFAULT_SCREENING_QUESTION_COUNT,
+  MAX_DRAFTED_SCREENING_QUESTIONS,
+  MIN_DRAFTED_SCREENING_QUESTIONS,
+  generateQuestionsForRole,
+  scoreAnswers,
+  screeningQuestionCountForRubric,
+} from "./screening-questions";
 
 function aiResponse(payload: unknown) {
   return {
@@ -33,8 +39,8 @@ afterEach(() => {
 });
 
 const sampleQuestions = [
-  { id: "q-1", prompt: "Walk me through a hard system design.", is_required: true },
-  { id: "q-2", prompt: "What's your debugging approach?", is_required: false },
+  { id: "q-1", prompt: "Walk me through a hard system design." },
+  { id: "q-2", prompt: "What's your debugging approach?" },
 ];
 
 const sampleAnswers = [
@@ -53,6 +59,129 @@ function answerPayload(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+
+describe("screeningQuestionCountForRubric", () => {
+  /**
+   * The rule the whole function exists for: the rubric is the scoring unit, so
+   * the question set is sized to the rubric rather than to a fixed number.
+   */
+  it("drafts one question per rubric dimension", () => {
+    for (const n of [3, 4, 5, 6, 7, 8]) {
+      expect(screeningQuestionCountForRubric(n)).toBe(n);
+    }
+  });
+
+  it("never drafts fewer than the floor, however small the rubric", () => {
+    // Evidence is read across the whole transcript, so extra questions give a
+    // dimension more chances to be evidenced. A two-question call would put
+    // half the score on each answer.
+    expect(screeningQuestionCountForRubric(1)).toBe(MIN_DRAFTED_SCREENING_QUESTIONS);
+    expect(screeningQuestionCountForRubric(2)).toBe(MIN_DRAFTED_SCREENING_QUESTIONS);
+  });
+
+  it("caps a large rubric rather than drafting a call nobody finishes", () => {
+    // The prompt combines the closest-related dimensions past this point.
+    expect(screeningQuestionCountForRubric(12)).toBe(MAX_DRAFTED_SCREENING_QUESTIONS);
+    expect(screeningQuestionCountForRubric(40)).toBe(MAX_DRAFTED_SCREENING_QUESTIONS);
+  });
+
+  it("falls back to the fixed count when there is no rubric at all", () => {
+    expect(screeningQuestionCountForRubric(0)).toBe(DEFAULT_SCREENING_QUESTION_COUNT);
+  });
+
+  it("stays within the bound a saved question set is validated against", () => {
+    // screeningQuestionsArraySchema caps a saved set at 15; a draft that
+    // exceeded it would be un-saveable the moment it was generated.
+    expect(MAX_DRAFTED_SCREENING_QUESTIONS).toBeLessThanOrEqual(15);
+    expect(MIN_DRAFTED_SCREENING_QUESTIONS).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("generateQuestionsForRole — sizing the set", () => {
+  function questionsResponse(n: number) {
+    return aiResponse({
+      questions: Array.from({ length: n }, (_, i) => ({ prompt: `Question ${i + 1}?` })),
+    });
+  }
+
+  function promptSentToModel(): string {
+    const call = mockCreate.mock.calls[0][0] as {
+      messages: { role: string; content: string }[];
+    };
+    return call.messages.map((m) => m.content).join(" ");
+  }
+
+  it("asks the model for one question per rubric dimension", async () => {
+    mockCreate.mockResolvedValueOnce(questionsResponse(7));
+
+    await generateQuestionsForRole({
+      jobDescription: "Senior data engineer, streaming pipelines.",
+      rubricDimensions: [
+        { name: "Kafka" },
+        { name: "SQL" },
+        { name: "Collaboration" },
+        { name: "Model validation" },
+        { name: "Airflow" },
+        { name: "Cost awareness" },
+        { name: "Incident response" },
+      ],
+    });
+
+    // Seven dimensions against a fixed five left two of them unprobed, and an
+    // unprobed dimension scores 0 for every candidate.
+    expect(promptSentToModel()).toContain("exactly 7 questions");
+  });
+
+  it("shrinks the set for a small rubric instead of padding it off-rubric", async () => {
+    mockCreate.mockResolvedValueOnce(questionsResponse(3));
+
+    await generateQuestionsForRole({
+      jobDescription: "Support engineer.",
+      rubricDimensions: [{ name: "Troubleshooting" }, { name: "Written comms" }],
+    });
+
+    expect(promptSentToModel()).toContain("exactly 3 questions");
+  });
+
+  it("tells the model that a spare question must stay on the rubric", async () => {
+    mockCreate.mockResolvedValueOnce(questionsResponse(3));
+
+    await generateQuestionsForRole({
+      jobDescription: "Support engineer.",
+      rubricDimensions: [{ name: "Troubleshooting" }],
+    });
+
+    // Three questions for one dimension: the extras must probe it again rather
+    // than wander onto topics nothing scores.
+    expect(promptSentToModel()).toMatch(/more questions than dimensions/i);
+  });
+
+  it("still drafts against the description alone when there is no rubric", async () => {
+    mockCreate.mockResolvedValueOnce(questionsResponse(5));
+
+    await generateQuestionsForRole({
+      jobDescription: "Support engineer.",
+      rubricDimensions: [],
+    });
+
+    expect(promptSentToModel()).toContain(
+      `exactly ${DEFAULT_SCREENING_QUESTION_COUNT} questions`,
+    );
+  });
+
+  it("honours an explicit count over the rubric-derived one", async () => {
+    mockCreate.mockResolvedValueOnce(questionsResponse(4));
+
+    await generateQuestionsForRole({
+      jobDescription: "Support engineer.",
+      rubricDimensions: [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "D" }, { name: "E" }],
+      count: 4,
+    });
+
+    expect(promptSentToModel()).toContain("exactly 4 questions");
+  });
+});
 
 describe("scoreAnswers", () => {
   it("returns audit evidence (rawOutput, model, promptVersion) alongside the normalized result", async () => {
@@ -140,294 +269,5 @@ describe("scoreAnswers", () => {
     await expect(
       scoreAnswers({ jobDescription: "JD", questions: sampleQuestions, answers: sampleAnswers }),
     ).rejects.toThrow("OpenAI returned an empty response");
-  });
-});
-
-const sampleTranscript: VoiceTranscriptTurn[] = [
-  { role: "agent", text: "Walk me through a hard system design.", at: "2026-06-03T10:00:00.000Z" },
-  { role: "candidate", text: "I led the migration of our monolith to services...", at: "2026-06-03T10:00:08.000Z" },
-  { role: "agent", text: "What's your debugging approach?", at: "2026-06-03T10:01:00.000Z" },
-  { role: "candidate", text: "I start with logs and reproduce locally...", at: "2026-06-03T10:01:07.000Z" },
-];
-
-// Quotes copied verbatim from sampleTranscript's candidate turns, so the
-// transcript-evidence verifier treats these payloads as grounded (a no-op).
-const GROUNDED_Q1 = "I led the migration of our monolith";
-const GROUNDED_Q2 = "I start with logs and reproduce locally";
-
-function voicePayload(overrides: Record<string, unknown> = {}) {
-  return {
-    overall_score: 68,
-    overall_rationale: "Solid spoken answers.",
-    answers: [
-      { question_id: "q-1", score: 80, rationale: "Strong", evidence_quote: GROUNDED_Q1 },
-      { question_id: "q-2", score: 64, rationale: "Decent", evidence_quote: GROUNDED_Q2 },
-    ],
-    ...overrides,
-  };
-}
-
-describe("scoreTranscript", () => {
-  it("returns the same evidence shape as scoreAnswers, tagged with the voice prompt version", async () => {
-    const payload = voicePayload({ overall_score: 68 });
-    mockCreate.mockResolvedValueOnce(aiResponse(payload));
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.overall_score).toBe(68);
-    expect(evidence.rawOutput).toBe(JSON.stringify(payload));
-    expect(evidence.model).toBe("gpt-4o-mini");
-    expect(evidence.promptVersion).toBe("v2_voice_screening_scoring");
-  });
-
-  it("sends the spoken transcript to the model", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
-
-    await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    const userMessage = mockCreate.mock.calls[0][0].messages.find(
-      (m: { role: string }) => m.role === "user",
-    ).content as string;
-    expect(userMessage).toContain("I led the migration of our monolith");
-    expect(userMessage).toContain("Walk me through a hard system design.");
-  });
-
-  it("requires a verbatim evidence quote per question in the system prompt", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
-
-    await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    const systemMessage = mockCreate.mock.calls[0][0].messages.find(
-      (m: { role: string }) => m.role === "system",
-    ).content as string;
-    expect(systemMessage).toContain("evidence_quote");
-    expect(systemMessage).toContain("score it exactly 0");
-  });
-
-  it("clamps and rounds scores into 0..100", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(
-        voicePayload({
-          overall_score: 130,
-          answers: [
-            { question_id: "q-1", score: 240, rationale: "x", evidence_quote: GROUNDED_Q1 },
-            { question_id: "q-2", score: -10, rationale: "y", evidence_quote: GROUNDED_Q2 },
-          ],
-        }),
-      ),
-    );
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.overall_score).toBe(100);
-    expect(evidence.result.answers.map((a) => a.score)).toEqual([100, 0]);
-  });
-
-  it("forces a 0 for a question whose evidence_quote is empty, and recomputes the overall", async () => {
-    // The model scores q-2 without citing any candidate speech — the partial-call
-    // bug (a question the candidate never reached should never score above 0).
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(
-        voicePayload({
-          overall_score: 55,
-          answers: [
-            { question_id: "q-1", score: 80, rationale: "Strong", evidence_quote: GROUNDED_Q1 },
-            { question_id: "q-2", score: 30, rationale: "General interest", evidence_quote: "" },
-          ],
-        }),
-      ),
-    );
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    const scoreById = Object.fromEntries(
-      evidence.result.answers.map((a) => [a.question_id, a.score]),
-    );
-    expect(scoreById["q-1"]).toBe(80);
-    expect(scoreById["q-2"]).toBe(0);
-    expect(evidence.result.overall_score).toBe(40);
-  });
-
-  it("forces a 0 when the cited quote is not present in the candidate's transcript", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(
-        voicePayload({
-          answers: [
-            { question_id: "q-1", score: 80, rationale: "Strong", evidence_quote: GROUNDED_Q1 },
-            {
-              question_id: "q-2",
-              score: 65,
-              rationale: "Claimed expertise",
-              evidence_quote: "I have ten years of kubernetes in production",
-            },
-          ],
-        }),
-      ),
-    );
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    const scoreById = Object.fromEntries(
-      evidence.result.answers.map((a) => [a.question_id, a.score]),
-    );
-    expect(scoreById["q-1"]).toBe(80);
-    expect(scoreById["q-2"]).toBe(0);
-  });
-
-  it("leaves scores untouched when every quote is grounded in the transcript", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload({ overall_score: 72 })));
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.answers.map((a) => a.score)).toEqual([80, 64]);
-    expect(evidence.result.overall_score).toBe(72);
-  });
-
-  it("scores a transcript with no candidate speech as zero, without calling the model", async () => {
-    // Interviewer asked the questions; the candidate never spoke. Scoring this
-    // must be a deterministic zero, never an AI call (the model fabricates
-    // answers for a silent call).
-    const interviewerOnly: VoiceTranscriptTurn[] = [
-      { role: "agent", text: "Walk me through a hard system design.", at: "2026-06-03T10:00:00.000Z" },
-      { role: "agent", text: "What's your debugging approach?", at: "2026-06-03T10:01:00.000Z" },
-    ];
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: interviewerOnly,
-    });
-
-    expect(mockCreate).not.toHaveBeenCalled();
-    expect(evidence.result.overall_score).toBe(0);
-    expect(evidence.result.answers.map((a) => a.score)).toEqual([0, 0]);
-  });
-
-  it("throws when OPENAI_API_KEY is not configured", async () => {
-    delete process.env.OPENAI_API_KEY;
-
-    await expect(
-      scoreTranscript({ jobDescription: "JD", questions: sampleQuestions, transcript: sampleTranscript }),
-    ).rejects.toThrow("OPENAI_API_KEY is not configured");
-    expect(mockCreate).not.toHaveBeenCalled();
-  });
-
-  it("throws when the AI returns an empty content string", async () => {
-    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: "" } }] });
-
-    await expect(
-      scoreTranscript({ jobDescription: "JD", questions: sampleQuestions, transcript: sampleTranscript }),
-    ).rejects.toThrow("OpenAI returned an empty response");
-  });
-});
-
-describe("scoreTranscript — evidence traceability (#148)", () => {
-  it("persists the quote and its transcript turn per question", async () => {
-    // Before this, the quote was parsed, used to verify the score, and dropped
-    // — leaving a per-question number with nothing behind it.
-    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.answers[0].evidence_quote).toBe(GROUNDED_Q1);
-    // Indices into the full transcript, agent turns included.
-    expect(evidence.result.answers.map((a) => a.evidence_turn_index)).toEqual([1, 3]);
-  });
-
-  it("leaves no evidence on a question it zeroed for an invented quote", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(
-        voicePayload({
-          answers: [
-            { question_id: "q-1", score: 90, rationale: "Strong", evidence_quote: "I ran a team of twenty" },
-            { question_id: "q-2", score: 64, rationale: "Decent", evidence_quote: GROUNDED_Q2 },
-          ],
-        }),
-      ),
-    );
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.answers[0].score).toBe(0);
-    expect(evidence.result.answers[0].evidence_turn_index).toBeNull();
-    expect(evidence.result.answers[0].evidence_quote).toBeUndefined();
-  });
-
-  /**
-   * The bug this guards: `enforceTranscriptEvidence` used to return the
-   * original result untouched when no score changed. With evidence now
-   * attached in the same pass, that early return would drop every quote on a
-   * fully-grounded response — the common case.
-   */
-  it("attaches evidence even when no score needed correcting", async () => {
-    mockCreate.mockResolvedValueOnce(aiResponse(voicePayload()));
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.answers.every((a) => a.evidence_quote)).toBe(true);
-    // …and the overall is untouched, since nothing was demoted.
-    expect(evidence.result.overall_score).toBe(68);
-  });
-
-  it("leaves a legitimately zero-scored question unevidenced", async () => {
-    mockCreate.mockResolvedValueOnce(
-      aiResponse(
-        voicePayload({
-          answers: [
-            { question_id: "q-1", score: 0, rationale: "Never addressed", evidence_quote: "" },
-            { question_id: "q-2", score: 64, rationale: "Decent", evidence_quote: GROUNDED_Q2 },
-          ],
-        }),
-      ),
-    );
-
-    const evidence = await scoreTranscript({
-      jobDescription: "JD",
-      questions: sampleQuestions,
-      transcript: sampleTranscript,
-    });
-
-    expect(evidence.result.answers[0].evidence_turn_index).toBeUndefined();
-    expect(evidence.result.answers[1].evidence_turn_index).toBe(3);
   });
 });

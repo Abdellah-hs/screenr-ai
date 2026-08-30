@@ -1,0 +1,43 @@
+-- Migration: 20260823140000_drop_unused_stage_score_columns.sql
+-- Drop `applications.screening_q_score` and `applications.interview_score`.
+--
+-- Both were declared in the original pipeline schema
+-- (20260330174903_candidate_pipeline_schema.sql) and NOTHING has ever written
+-- to either one. The two later stage scores live where the evidence that
+-- produced them lives:
+--
+--   screening -> screening_question_responses.overall_score (+ .status = 'scored')
+--   interview -> interview_sessions.scores->>'overall_score'
+--
+-- That is deliberate and stays: a score belongs beside its transcript, its
+-- rationale and its rubric version, so it cannot be read without its evidence.
+-- `applications.resume_score` is NOT affected — it is written by the resume
+-- scorer and holds the ranking score (null for an ineligible candidate, with
+-- `scored_at` as the "has this been evaluated" marker).
+--
+-- Two always-null columns are not harmless. Both readers of them were bugs:
+--
+--   * The overview's decision queue selected both, so every candidate in the
+--     group headed "Scored - waiting on you" rendered with no score at all.
+--   * The curated talent pool's `bestScore` read both, so "the best they have
+--     ever done" was silently the resume score alone. Somebody who scored 45
+--     on their CV and 88 at interview was excluded from an 80-100 search by
+--     the one filter meant to surface them (PRD 3.11.2).
+--
+-- Both were repointed at the real sources before this migration. Dropping the
+-- columns is what stops the next reader wiring themselves to a column that
+-- always answers null.
+--
+-- Data loss: none. Verified against the live database before writing this —
+-- 0 non-null rows in each column across all 45 applications. The check is
+-- reproducible:
+--
+--   SELECT count(*) FILTER (WHERE screening_q_score IS NOT NULL) AS screening,
+--          count(*) FILTER (WHERE interview_score  IS NOT NULL) AS interview
+--   FROM public.applications;
+--
+-- Reversible by re-adding the columns; there is no value to restore into them.
+
+ALTER TABLE public.applications
+    DROP COLUMN IF EXISTS screening_q_score,
+    DROP COLUMN IF EXISTS interview_score;

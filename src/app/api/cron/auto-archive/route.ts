@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sweepAutoArchive } from "@/lib/archive/auto-archive-sweep";
+import { requireBearerSecret } from "@/lib/auth/guards";
 
 // Service-role writes + a live timestamp: must run per-request on the server.
 export const dynamic = "force-dynamic";
@@ -16,15 +17,8 @@ export const runtime = "nodejs";
  * `Authorization: Bearer ${CRON_SECRET}`. Fails closed when unset.
  */
 export async function GET(request: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) {
-    console.error("CRON_SECRET is not configured; refusing to run the sweep.");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  }
-
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearerSecret(request, "CRON_SECRET", "the sweep");
+  if (denied) return denied;
 
   const result = await sweepAutoArchive();
   return NextResponse.json({ ok: true, ...result });

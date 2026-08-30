@@ -64,3 +64,27 @@ export function evaluateInterviewScoringOutcome(
     },
   ];
 }
+
+/**
+ * States where an interview re-score is not allowed: the application is closed.
+ * Re-scoring exists to refresh evidence for live candidates — rewriting the
+ * current score on a decided application would only muddy its record.
+ */
+const RESCORE_BLOCKED_STATES: ApplicationState[] = ["hired", "rejected", "archived"];
+
+/**
+ * Guard for the recruiter-triggered interview re-score. Throws when the
+ * application has reached a terminal state. Anywhere else in the pipeline is
+ * fine — a re-score only produces fresh evidence (the audit log keeps every
+ * run) and never transitions, so it cannot disturb an in-flight application.
+ *
+ * The mirror of `assertResumeRescoreAllowed`, and the reason both exist is the
+ * same: a re-score is an evidence refresh, not a decision.
+ */
+export function assertInterviewRescoreAllowed(status: ApplicationState): void {
+  if (RESCORE_BLOCKED_STATES.includes(status)) {
+    throw new Error(
+      `This application is closed (${status}) — re-scoring would rewrite the record behind a decision that has already been made.`,
+    );
+  }
+}

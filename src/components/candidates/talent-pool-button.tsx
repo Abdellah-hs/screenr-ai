@@ -24,11 +24,18 @@ export function TalentPoolButton({
   candidateName,
   initialState,
   suggestions = [],
+  size = "inline",
 }: {
   applicationId: string;
   candidateName: string;
   initialState: CandidatePoolState;
   suggestions?: string[];
+  /**
+   * `inline` — beside body copy. `bar` — the pinned decision bar, where it
+   * must match the height of the actions it sits next to. `full` — stacked
+   * full-width in a rail.
+   */
+  size?: "inline" | "bar" | "full";
 }) {
   const [state, setState] = useState(initialState);
   const [open, setOpen] = useState(false);
@@ -43,11 +50,17 @@ export function TalentPoolButton({
             ? "Edit the tags and note on this talent pool entry"
             : "Keep this candidate for a future role"
         }
-        className={
+        className={[
+          size === "full"
+            ? "flex min-h-11 w-full justify-center gap-2 text-[13px] font-semibold"
+            : size === "bar"
+              ? "inline-flex min-h-11 w-max justify-center gap-2 whitespace-nowrap text-[13px] font-semibold"
+              : "inline-flex gap-1.5 px-4 py-2 text-sm font-medium",
+          "cursor-pointer items-center rounded-lg border px-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]",
           state.pooled
-            ? "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] px-4 py-2 text-sm font-medium text-[#047857] transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
-            : "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#D1D5DB] bg-white px-4 py-2 text-sm font-medium text-[#4B5563] transition-colors hover:bg-[#F9FAFB] hover:text-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1]"
-        }
+            ? "border-[#A7F3D0] bg-[#ECFDF5] text-[#047857] hover:brightness-95"
+            : "border-[#D1D5DB] bg-white text-[#4B5563] hover:bg-[#F9FAFB] hover:text-[#111827]",
+        ].join(" ")}
       >
         <svg
           className="h-4 w-4"

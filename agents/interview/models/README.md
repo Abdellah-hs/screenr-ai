@@ -22,11 +22,11 @@ obligation to network use of the service it runs in — not something to take on
 by accident for a detector that counts people. If you swap the weights, check
 the licence before the benchmark.
 
-Accuracy is more than sufficient for the job. The detector runs at one frame per
-~10 seconds and only needs to answer "how many people, is there a phone" at
-webcam range, where subjects are large and close. Its output is then filtered by
-the app's rule layer, which requires three consecutive sightings before anything
-becomes an incident — so a marginal single-frame call never reaches a recruiter.
+Accuracy is more than sufficient for the job. The detector only needs to answer
+"how many people, is there a phone" at webcam range, where subjects are large and
+close. Its output is then filtered by the app's rule layer, which measures a run
+from its first flagged sample to its last — so a marginal single-frame call spans
+zero time, can never clear a threshold, and never reaches a recruiter.
 
 ## Why it is committed
 

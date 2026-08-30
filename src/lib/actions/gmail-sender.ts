@@ -1,4 +1,4 @@
-import type { gmail_v1 } from "googleapis";
+import type { gmail_v1 } from "googleapis/build/src/apis/gmail";
 import { fetchGmailConnection } from "@/lib/data/integrations";
 import { createGmailClient } from "@/lib/services/gmail";
 import type { SupabaseDb } from "@/lib/supabase/types";

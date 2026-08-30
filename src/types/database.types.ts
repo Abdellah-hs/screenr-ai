@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.4"
+    PostgrestVersion: "14.5"
   }
   graphql_public: {
     Tables: {
@@ -159,16 +159,16 @@ export type Database = {
           candidate_id: string
           created_at: string
           id: string
-          interview_score: number | null
           parsed_data: Json | null
           rejection_reason: string | null
+          resume_eligible: boolean | null
+          resume_evaluation: Json | null
           resume_score: number | null
           resume_url: string | null
           rubric_version: number | null
           score_factors: Json | null
           score_rationale: string | null
           scored_at: string | null
-          screening_q_score: number | null
           screening_tier:
             | Database["public"]["Enums"]["screening_tier_enum"]
             | null
@@ -180,16 +180,16 @@ export type Database = {
           candidate_id: string
           created_at?: string
           id?: string
-          interview_score?: number | null
           parsed_data?: Json | null
           rejection_reason?: string | null
+          resume_eligible?: boolean | null
+          resume_evaluation?: Json | null
           resume_score?: number | null
           resume_url?: string | null
           rubric_version?: number | null
           score_factors?: Json | null
           score_rationale?: string | null
           scored_at?: string | null
-          screening_q_score?: number | null
           screening_tier?:
             | Database["public"]["Enums"]["screening_tier_enum"]
             | null
@@ -201,16 +201,16 @@ export type Database = {
           candidate_id?: string
           created_at?: string
           id?: string
-          interview_score?: number | null
           parsed_data?: Json | null
           rejection_reason?: string | null
+          resume_eligible?: boolean | null
+          resume_evaluation?: Json | null
           resume_score?: number | null
           resume_url?: string | null
           rubric_version?: number | null
           score_factors?: Json | null
           score_rationale?: string | null
           scored_at?: string | null
-          screening_q_score?: number | null
           screening_tier?:
             | Database["public"]["Enums"]["screening_tier_enum"]
             | null
@@ -368,6 +368,7 @@ export type Database = {
           location: string | null
           positions: number
           public_slug: string | null
+          resume_threshold: number
           screening_threshold: number
           status: Database["public"]["Enums"]["campaign_status_enum"]
           timezone: string | null
@@ -393,6 +394,7 @@ export type Database = {
           location?: string | null
           positions?: number
           public_slug?: string | null
+          resume_threshold?: number
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null
@@ -418,6 +420,7 @@ export type Database = {
           location?: string | null
           positions?: number
           public_slug?: string | null
+          resume_threshold?: number
           screening_threshold?: number
           status?: Database["public"]["Enums"]["campaign_status_enum"]
           timezone?: string | null
@@ -433,6 +436,7 @@ export type Database = {
           deleted_at: string | null
           email: string
           first_name: string
+          github_url: string | null
           id: string
           last_name: string
           linkedin_url: string | null
@@ -446,6 +450,7 @@ export type Database = {
           deleted_at?: string | null
           email: string
           first_name: string
+          github_url?: string | null
           id?: string
           last_name: string
           linkedin_url?: string | null
@@ -459,6 +464,7 @@ export type Database = {
           deleted_at?: string | null
           email?: string
           first_name?: string
+          github_url?: string | null
           id?: string
           last_name?: string
           linkedin_url?: string | null
@@ -751,10 +757,61 @@ export type Database = {
           },
         ]
       }
+      resume_evidence_cache: {
+        Row: {
+          cache_key: string
+          campaign_id: string
+          created_at: string
+          extracted_evidence: Json
+          model: string
+          prompt_version: string
+          raw_model_output: string
+          resume_text_hash: string
+          rubric_version: number | null
+          rules_version: string
+          system_fingerprint: string | null
+        }
+        Insert: {
+          cache_key: string
+          campaign_id: string
+          created_at?: string
+          extracted_evidence: Json
+          model: string
+          prompt_version: string
+          raw_model_output: string
+          resume_text_hash: string
+          rubric_version?: number | null
+          rules_version: string
+          system_fingerprint?: string | null
+        }
+        Update: {
+          cache_key?: string
+          campaign_id?: string
+          created_at?: string
+          extracted_evidence?: Json
+          model?: string
+          prompt_version?: string
+          raw_model_output?: string
+          resume_text_hash?: string
+          rubric_version?: number | null
+          rules_version?: string
+          system_fingerprint?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "resume_evidence_cache_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rubric_dimensions: {
         Row: {
           created_at: string
           deleted_at: string | null
+          excluded_from_scoring: boolean
           id: string
           importance: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory: boolean
@@ -769,6 +826,7 @@ export type Database = {
         Insert: {
           created_at?: string
           deleted_at?: string | null
+          excluded_from_scoring?: boolean
           id?: string
           importance?: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory?: boolean
@@ -783,6 +841,7 @@ export type Database = {
         Update: {
           created_at?: string
           deleted_at?: string | null
+          excluded_from_scoring?: boolean
           id?: string
           importance?: Database["public"]["Enums"]["dimension_importance_enum"]
           is_mandatory?: boolean
@@ -810,6 +869,7 @@ export type Database = {
           application_id: string
           audio_url: string | null
           created_at: string
+          dimension_scores: Json | null
           expires_at: string | null
           id: string
           overall_rationale: string | null
@@ -820,6 +880,7 @@ export type Database = {
           scored_at: string | null
           sent_at: string | null
           status: Database["public"]["Enums"]["screening_response_status_enum"]
+          topic_state: Json | null
           transcript: Json
           updated_at: string
         }
@@ -828,6 +889,7 @@ export type Database = {
           application_id: string
           audio_url?: string | null
           created_at?: string
+          dimension_scores?: Json | null
           expires_at?: string | null
           id?: string
           overall_rationale?: string | null
@@ -838,6 +900,7 @@ export type Database = {
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
+          topic_state?: Json | null
           transcript?: Json
           updated_at?: string
         }
@@ -846,6 +909,7 @@ export type Database = {
           application_id?: string
           audio_url?: string | null
           created_at?: string
+          dimension_scores?: Json | null
           expires_at?: string | null
           id?: string
           overall_rationale?: string | null
@@ -856,6 +920,7 @@ export type Database = {
           scored_at?: string | null
           sent_at?: string | null
           status?: Database["public"]["Enums"]["screening_response_status_enum"]
+          topic_state?: Json | null
           transcript?: Json
           updated_at?: string
         }
@@ -874,7 +939,6 @@ export type Database = {
           campaign_id: string
           created_at: string
           id: string
-          is_required: boolean
           prompt: string
           sort_order: number
           updated_at: string
@@ -883,7 +947,6 @@ export type Database = {
           campaign_id: string
           created_at?: string
           id?: string
-          is_required?: boolean
           prompt: string
           sort_order?: number
           updated_at?: string
@@ -892,7 +955,6 @@ export type Database = {
           campaign_id?: string
           created_at?: string
           id?: string
-          is_required?: boolean
           prompt?: string
           sort_order?: number
           updated_at?: string
@@ -1098,7 +1160,6 @@ export type Database = {
         | "interview_scheduled"
         | "interview_completed"
         | "interview_scored"
-        | "reference_check"
         | "manager_review"
         | "final_interview_scheduling"
         | "screening_expired"
@@ -1128,7 +1189,13 @@ export type Database = {
         | "responded"
         | "scored"
         | "expired"
-      screening_tier_enum: "strong" | "moderate" | "weak" | "no_match"
+      screening_tier_enum:
+        | "strong"
+        | "moderate"
+        | "weak"
+        | "no_match"
+        | "eligible"
+        | "ineligible"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1273,7 +1340,6 @@ export const Constants = {
         "interview_scheduled",
         "interview_completed",
         "interview_scored",
-        "reference_check",
         "manager_review",
         "final_interview_scheduling",
         "screening_expired",
@@ -1307,7 +1373,14 @@ export const Constants = {
         "scored",
         "expired",
       ],
-      screening_tier_enum: ["strong", "moderate", "weak", "no_match"],
+      screening_tier_enum: [
+        "strong",
+        "moderate",
+        "weak",
+        "no_match",
+        "eligible",
+        "ineligible",
+      ],
     },
   },
 } as const

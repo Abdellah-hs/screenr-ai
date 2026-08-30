@@ -9,7 +9,7 @@ import {
   attachSnapshots,
   summarizeProctoring,
   type ProctoringEvent,
-  type ProctoringSnapshot,
+  type StoredProctoringSnapshot,
   type VisionObservation,
 } from "@/lib/proctoring/incidents";
 import {
@@ -22,11 +22,13 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import {
   deleteProctoringSnapshots,
+  fetchCandidateById,
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
   getProctoringSnapshotSignedUrls,
-  type InterviewCandidateContext,
 } from "@/lib/data/candidates";
+import { assertCampaignActiveById } from "./campaign-guards";
+import { assertInterviewRescoreAllowed } from "@/lib/rules/interview-scoring";
 import { runInterviewScoring } from "./interview-scoring";
 import {
   fetchInterviewSessionByApplicationId,
@@ -40,10 +42,6 @@ import {
   type InterviewSessionStatus,
   type InterviewTranscriptTurn,
 } from "@/lib/data/interview-sessions";
-import {
-  buildInterviewInstructions,
-  type InterviewResume,
-} from "@/lib/services/interview";
 import {
   createInterviewRoomGrant,
   type InterviewRoomGrant,
@@ -167,26 +165,6 @@ function assertCampaignAcceptingInterview(status: CampaignStatus): void {
   }
 }
 
-/** Map the parsed résumé + candidate name into the interviewer's reference shape. */
-function toInterviewResume(ctx: InterviewCandidateContext): InterviewResume | null {
-  const fullName = [ctx.candidate_first_name, ctx.candidate_last_name]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  const r = ctx.resume;
-  if (!r) return fullName ? { fullName } : null;
-
-  const resumeName = [r.first_name, r.last_name].filter(Boolean).join(" ").trim();
-  return {
-    fullName: fullName || resumeName || undefined,
-    headline: r.headline,
-    summary: r.summary,
-    skills: r.skills,
-    experience: r.experience,
-    education: r.education,
-  };
-}
-
 export interface InterviewPageContext {
   application_id: string;
   campaign_title: string;
@@ -249,16 +227,15 @@ export async function startCandidateInterview(token: string): Promise<InterviewR
   await ensureInterviewSession(application_id, expires_at, db);
   await markInterviewStarted(application_id, db);
 
-  const instructions = buildInterviewInstructions({
-    jobTitle: ctx.campaign_title,
-    resume: toInterviewResume(ctx),
-    persona: ctx.interview_persona,
-  });
-
   // The candidate's video is never recorded or stored: it exists only as a live
   // LiveKit track, which the agent worker samples in-memory for proctoring and
   // discards. There is deliberately no egress here.
-  return createInterviewRoomGrant({ applicationId: application_id, instructions });
+  //
+  // The interviewer's instructions are not built here either — they used to
+  // ride room metadata, which LiveKit delivers to every participant, so the
+  // candidate could read the campaign's interviewing stance before a word was
+  // said. The worker fetches them from `/api/agent/interview/instructions`.
+  return createInterviewRoomGrant({ applicationId: application_id });
 }
 
 /**
@@ -349,7 +326,7 @@ async function tryRecordProctoring(
   applicationId: string,
   rawEvents: unknown,
   observations: VisionObservation[],
-  snapshots: ProctoringSnapshot[],
+  snapshots: StoredProctoringSnapshot[],
   db: SupabaseDb,
 ): Promise<void> {
   const noBrowserReport = rawEvents === undefined || rawEvents === null;
@@ -412,7 +389,7 @@ async function tryRecordProctoring(
  */
 async function tryPruneSnapshots(
   applicationId: string,
-  snapshots: ProctoringSnapshot[],
+  snapshots: StoredProctoringSnapshot[],
   orphanedKeys: string[],
   db: SupabaseDb,
 ): Promise<void> {
@@ -506,4 +483,74 @@ export async function getInterviewSession(
     .filter((k): k is string => typeof k === "string");
 
   return { ...row, snapshot_urls: await getProctoringSnapshotSignedUrls(keys) };
+}
+
+/**
+ * Re-score a completed AI interview against the campaign's current rubric.
+ *
+ * The recruiter-triggered mirror of `rescoreCandidateResume`, and it exists for
+ * two reasons. Interviews scored before 2026-08-28 came from a scorer that
+ * asked the model for numbers and ignored the recruiter's rubric entirely, and
+ * this is the only way to move one onto the current rules. And a rubric edited
+ * after an interview was sat should be applicable to it without making the
+ * candidate sit another.
+ *
+ * **Evidence refresh only — the application's pipeline state never changes.**
+ * `mode: "rescore"` stops `runInterviewScoring` before the rule layer, so a
+ * candidate already in `manager_review` is not pushed back through it.
+ *
+ * Unlike the screening equivalent this does NOT refuse an already-scored
+ * interview: re-scoring one is the entire point. What it refuses is a closed
+ * application, which `assertInterviewRescoreAllowed` owns.
+ */
+export async function rescoreInterview(
+  applicationId: string,
+): Promise<{ overall_score: number }> {
+  uuidSchema.parse(applicationId);
+  const userId = await requireUserId();
+
+  checkRateLimit(userId, {
+    name: "interview-rescore",
+    maxRequests: 15,
+    windowMs: 5 * 60 * 1000,
+  });
+
+  // No `db` argument, so this runs on the recruiter's cookie client and RLS
+  // scopes it to their own campaigns. The ownership check below is belt and
+  // braces on top of that, not the only guard.
+  const ctx = await fetchInterviewScoringContext(applicationId);
+  if (!ctx || ctx.owner_user_id !== userId) {
+    throw new Error("Application not found or access denied");
+  }
+
+  const application = await fetchCandidateById(applicationId, userId);
+  if (!application) throw new Error("Application not found or access denied");
+  assertInterviewRescoreAllowed(application.status as ApplicationState);
+
+  // Re-scoring is processing, so the campaign freeze rule applies — the same
+  // rule the resume and screening re-scores run under.
+  await assertCampaignActiveById(ctx.campaign_id, userId);
+
+  if (!ctx.description) {
+    throw new Error(
+      "Campaign is missing a job description — can't score without context.",
+    );
+  }
+
+  const session = await fetchInterviewSessionByApplicationId(applicationId);
+  if (!session || session.status !== "completed") {
+    throw new Error("There is no completed interview to re-score.");
+  }
+
+  return runInterviewScoring({
+    applicationId,
+    campaignId: ctx.campaign_id,
+    candidateId: ctx.candidate_id,
+    ownerUserId: userId,
+    description: ctx.description,
+    resumeSummary: ctx.resume_summary,
+    persona: ctx.interview_persona,
+    automationMode: ctx.automation_mode,
+    mode: "rescore",
+  });
 }

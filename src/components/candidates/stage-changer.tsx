@@ -1,13 +1,22 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition, type ReactNode } from "react";
 import { updateCandidateStage } from "@/lib/actions/candidates";
 import {
   formatApplicationState as formatStateLabel,
   type ApplicationState,
 } from "@/lib/constants";
 import { recruiterStageOptions } from "@/lib/rules/manual-stage-change";
-import { Modal, ModalFooter, ModalHeader, Textarea } from "@/components/ui";
+import {
+  AnchoredMenu,
+  MenuNote,
+  MENU_ITEM,
+  MENU_LABEL,
+  Modal,
+  ModalFooter,
+  ModalHeader,
+  Textarea,
+} from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 const FAILURE_STATES: ApplicationState[] = [
@@ -25,21 +34,37 @@ function stateTone(state: ApplicationState): string {
   if (state === "new" || state === "archived") {
     return "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]";
   }
-  return "text-[#0369A1] bg-[#F0F9FF] border-[#BAE6FD]";
+  return "text-[#2563EB] bg-[#EFF6FF] border-[#BFDBFE]";
 }
 
 export function StageChanger({
   applicationId,
   currentState,
+  trigger = "chip",
+  leadingItems,
 }: {
   applicationId: string;
   currentState: ApplicationState;
+  /**
+   * `chip` — the state itself, clickable, for a detail page.
+   * `menu` — a "…" row-actions button, for a table row where the state already
+   *   has its own column and a second copy of it would be noise.
+   * `action` — a full-width button in the decision rail, where the state is
+   *   already named above it and what is wanted is somewhere to press.
+   * `bar` — the same button, sized to its label, for the pinned decision bar
+   *   where it sits in a row beside the other actions.
+   */
+  trigger?: "chip" | "menu" | "action" | "bar";
+  /** Rows rendered above the "Move to" group — a row menu is rarely only
+   *  about the state machine. */
+  leadingItems?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState<ApplicationState | null>(null);
   const [rationale, setRationale] = useState("");
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   // Only legal next-states a recruiter may actually set are offered: the state
   // machine's legal transitions minus system-produced states (screening_completed,
@@ -80,7 +105,67 @@ export function StageChanger({
 
   return (
     <div className="relative">
+      {trigger === "menu" ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Row actions"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-[#9CA3AF] transition-colors duration-150 cursor-pointer hover:bg-[#F3F4F6] hover:text-[#4B5563] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <svg
+            className="h-4 w-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="5" r="1" />
+            <circle cx="12" cy="12" r="1" />
+            <circle cx="12" cy="19" r="1" />
+          </svg>
+        </button>
+      ) : trigger === "action" || trigger === "bar" ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => !isTerminal && setOpen((o) => !o)}
+          disabled={isTerminal}
+          aria-haspopup={isTerminal ? undefined : "menu"}
+          aria-expanded={isTerminal ? undefined : open}
+          title={
+            isTerminal
+              ? "This is a terminal state — no further transitions"
+              : "Move this application to another stage"
+          }
+          className={cn(
+            "flex min-h-11 items-center justify-center gap-2 rounded-lg border px-4 text-[13px] font-semibold transition-colors duration-150",
+            trigger === "action" ? "w-full" : "w-max whitespace-nowrap",
+            isTerminal
+              ? "cursor-default border-[#E5E7EB] bg-[#F9FAFB] text-[#9CA3AF]"
+              : "cursor-pointer border-[#D1D5DB] bg-white text-[#374151] hover:bg-[#F9FAFB] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+          )}
+        >
+          {isTerminal ? "No moves left from here" : "Move to another stage"}
+          {!isTerminal && (
+            <svg
+              className={cn("h-3.5 w-3.5 transition-transform duration-200", open && "rotate-180")}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="m19 9-7 7-7-7" />
+            </svg>
+          )}
+        </button>
+      ) : (
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => !isTerminal && setOpen((o) => !o)}
         disabled={isTerminal}
@@ -88,11 +173,11 @@ export function StageChanger({
         aria-expanded={isTerminal ? undefined : open}
         title={isTerminal ? "This is a terminal state — no further transitions" : "Change stage"}
         className={cn(
-          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-all duration-200",
+          "inline-flex items-center gap-1.5 px-2.5 py-0.5 text-xs font-medium border rounded-md transition-colors duration-150",
           stateTone(currentState),
           isTerminal
             ? "cursor-default"
-            : "cursor-pointer hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1",
+            : "cursor-pointer hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1",
         )}
       >
         {formatStateLabel(currentState)}
@@ -107,37 +192,47 @@ export function StageChanger({
           </svg>
         )}
       </button>
+      )}
 
-      {open && !isTerminal && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div
-            role="menu"
-            className="absolute top-full left-0 mt-1 z-20 min-w-[200px] bg-white border border-[#E5E7EB] rounded-lg py-1 shadow-lg"
-          >
-            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#9CA3AF]">
-              Move to
-            </p>
+      {/* Portalled rather than absolutely positioned: this chip renders inside
+          table cells and scroll regions, where an absolute menu is clipped by
+          the first ancestor with an overflow. */}
+      <AnchoredMenu
+        open={open && (!isTerminal || Boolean(leadingItems))}
+        onClose={() => setOpen(false)}
+        anchorRef={triggerRef}
+        align={trigger === "menu" || trigger === "bar" ? "right" : "left"}
+        matchTriggerWidth={trigger === "action"}
+      >
+        {leadingItems && <div onClick={() => setOpen(false)}>{leadingItems}</div>}
+
+        {!isTerminal && (
+          <>
+            <p className={MENU_LABEL}>Move to</p>
             {nextStates.map((state) => (
               <button
                 key={state}
                 type="button"
                 role="menuitem"
                 onClick={() => pickTarget(state)}
-                className="w-full text-left px-3 py-1.5 text-xs text-[#4B5563] cursor-pointer transition-colors hover:bg-[#F9FAFB] focus-visible:outline-none focus-visible:bg-[#F9FAFB]"
+                className={MENU_ITEM}
               >
                 {formatStateLabel(state)}
               </button>
             ))}
-          </div>
-        </>
-      )}
+            <MenuNote>
+              Every manual move asks for a written reason and lands in the
+              transition log.
+            </MenuNote>
+          </>
+        )}
+      </AnchoredMenu>
 
       <Modal open={target !== null} onClose={closeModal}>
         {target && (
           <>
             <ModalHeader>
-              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+              <h2 className="text-lg font-semibold text-[#111827]">
                 Change candidate stage
               </h2>
               <p className="mt-1 text-sm text-[#6B7280]">
@@ -178,7 +273,7 @@ export function StageChanger({
                 type="button"
                 onClick={handleConfirm}
                 disabled={isPending || rationale.trim().length === 0}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer transition-colors hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer transition-colors hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isPending ? "Saving…" : "Confirm change"}
               </button>

@@ -18,10 +18,39 @@ import {
   realtimeTrace,
 } from "@/lib/realtime/interview-diagnostics";
 import { createProctoringCollector } from "@/lib/proctoring/collector";
+import {
+  CALL_LANGUAGES,
+  CALL_LANGUAGE_LABELS,
+  DEFAULT_CALL_LANGUAGE,
+  SCREENING_CALL_BACKSTOP_MINUTES,
+  type CallLanguage,
+} from "@/lib/constants";
+import {
+  Assurance,
+  Body,
+  CandidateShell,
+  Deadline,
+  formatClock,
+  Heading,
+  Icon,
+  ShellIcon,
+  SHELL_PRIMARY,
+  SHELL_SECONDARY,
+  type ShellTone,
+} from "@/components/candidate/candidate-shell";
+import { cn } from "@/lib/utils";
 
 interface VoiceScreeningProps {
   token: string;
   campaignTitle: string;
+  /**
+   * How many questions the campaign asks. Quoted before the candidate starts,
+   * because it is the one thing about the call's shape that is actually
+   * guaranteed: the close guard will not let the interviewer finish while a
+   * topic is still unasked. A DURATION is not guaranteed and is no longer
+   * quoted here.
+   */
+  questionCount: number;
   /** ISO deadline after which the link expires (surfaced to the candidate). */
   expiresAt?: string;
 }
@@ -38,77 +67,275 @@ type Status =
 const STATUS_LABEL: Record<Status, string> = {
   idle: "Ready when you are",
   connecting: "Connecting…",
-  live: "Live — the interviewer can hear you",
+  live: "Live, the interviewer can hear you",
   review: "Review before you submit",
   submitting: "Saving your responses…",
   done: "All done",
   error: "Something went wrong",
 };
 
-const STATUS_DOT: Record<Status, string> = {
-  idle: "bg-[#94A3B8]",
-  connecting: "bg-amber-500 animate-pulse",
-  live: "bg-green-500",
-  review: "bg-[#0369A1]",
-  submitting: "bg-amber-500 animate-pulse",
-  done: "bg-green-500",
-  error: "bg-red-500",
+const STATUS_TONE: Record<Status, ShellTone> = {
+  idle: "idle",
+  connecting: "busy",
+  live: "live",
+  review: "info",
+  submitting: "busy",
+  done: "live",
+  error: "idle",
 };
-
-/** Hard cap on the live call. When it hits 0 the call is ended and the
- *  candidate is taken to the review step to submit. */
-const CALL_SECONDS = 5 * 60;
 
 /** LiveKit publishes live transcription segments on this text-stream topic. */
 const TRANSCRIPTION_TOPIC = "lk.transcription";
 
-function formatClock(total: number): string {
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+/**
+ * The interviewer telling us it has finished — every topic covered, goodbye
+ * said. Published by the agent worker over the data channel once its closing
+ * speech has actually played out.
+ *
+ * It carries no content, only the fact, and it cannot be used to fake a
+ * submission: the server finalizes from the transcript the WORKER reported and
+ * refuses a response with no candidate speech. Must stay in sync with
+ * `SCREENING_FINISHED_TOPIC` in agents/screening/src/channel.ts.
+ */
+const SCREENING_FINISHED_TOPIC = "screening.finished";
+
+/**
+ * Data-channel topic carrying the per-answer countdown.
+ *
+ * The worker sends REMAINING milliseconds, not a deadline, and this component
+ * anchors the countdown to the moment the packet arrived — so a candidate whose
+ * system clock is minutes out still sees the right number.
+ *
+ * Display only. Nothing here decides when the interviewer moves on; that is the
+ * worker's timer against the app's ledger, and it runs identically for a
+ * candidate whose tab is in the background rendering nothing. Must stay in sync
+ * with `SCREENING_ANSWER_TOPIC` in agents/screening/src/channel.ts.
+ */
+const SCREENING_ANSWER_TOPIC = "screening.answer";
+
+/**
+ * The one packet that travels browser -> worker: the candidate saying they have
+ * finished answering. Mirrors `SCREENING_DONE_TOPIC` in
+ * agents/screening/src/channel.ts.
+ *
+ * It exists so the countdown can be honest. Without it the worker has to guess
+ * from a pause whether an answer is over, and a wrong guess either spends a
+ * topic while somebody is still thinking or leaves them staring at fifty
+ * seconds they cannot skip. It carries no content — the transcript is what the
+ * worker reported and the app chooses every question — so the most it can do is
+ * end the sender's own answer early, which is the entire point of it.
+ */
+const SCREENING_DONE_TOPIC = "screening.done";
+
+/** Below this the counter turns amber. Enough time to land a sentence. */
+const ANSWER_LOW_MS = 15_000;
+
+/** Heroicons outline microphone. The one mark this whole page is built around. */
+const MIC_PATH =
+  "M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z";
+
+// ─── Why the call would not start ────────────────────────────────────────────
+
+/**
+ * What stopped the call, in terms the candidate can act on.
+ *
+ * The video interview keeps the same shape (`classifyStartFailure`) and for the
+ * same reason: a raw `NotAllowedError` under a Try again button says nothing
+ * about the padlock in the address bar. Screening needs its own copy rather
+ * than the interview's — there is no camera at this stage, so a sentence about
+ * one would send a candidate hunting for a problem they do not have.
+ */
+type ScreeningFailureKind = "insecure" | "permission" | "interviewer" | "unknown";
+
+interface ScreeningFailure {
+  title: string;
+  body: string;
+  /** Amber for something the candidate can fix, red for something we broke. */
+  tone: "warn" | "bad";
+  /** Whether "Try again" can plausibly work without them leaving the page first. */
+  retry: boolean;
 }
 
-function formatDeadline(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+const FAILURE: Record<Exclude<ScreeningFailureKind, "unknown">, ScreeningFailure> = {
+  insecure: {
+    title: "This page isn't on a secure connection",
+    body: "Browsers only allow the microphone over a secure connection. Open the link again from the email we sent you. The address should start with https.",
+    tone: "bad",
+    retry: false,
+  },
+  permission: {
+    title: "We can't hear you yet",
+    body: "Your browser is blocking the microphone. Open the padlock in the address bar, set the microphone to Allow, then try again.",
+    tone: "warn",
+    retry: true,
+  },
+  interviewer: {
+    title: "Something went wrong at our end",
+    body: "The interviewer didn't join the call. This was not your connection and it won't count against you. Your link stays valid.",
+    tone: "bad",
+    retry: true,
+  },
+};
 
-const PRIMARY_BTN =
-  "px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
+/**
+ * Reads the DOM exception *name*, not its message: the names are specified and
+ * stable across browsers, the messages are neither and are localised.
+ */
+function classifyScreeningFailure(
+  err: unknown,
+  kind?: ScreeningFailureKind,
+): ScreeningFailure {
+  if (kind && kind !== "unknown") return FAILURE[kind];
+
+  const name = err instanceof Error ? err.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError") return FAILURE.permission;
+
+  return {
+    title: "We couldn't start the call",
+    body:
+      err instanceof Error && err.message
+        ? `${err.message} Your link is still valid. Please try again.`
+        : "Something interrupted the connection. Your link is still valid. Please try again.",
+    tone: "bad",
+    retry: true,
+  };
+}
 
 /**
  * Candidate-facing voice screening, on LiveKit since the migration: the server
- * action opens a room (agent instructions live in its metadata, out of the
- * candidate's reach), this component joins with mic audio, and the server-side
- * agent worker runs the interview and reports the transcript to the app as
- * the call progresses. The browser never assembles or submits transcript
- * content anymore — on "Submit responses" it sends only the token, and the
- * server finalizes from the agent-reported draft.
+ * action opens a room carrying nothing but the application id, this component
+ * joins with mic audio, and the server-side agent worker — which fetches its
+ * own interviewer instructions from the app, because room metadata is
+ * delivered to every participant including this browser — runs the interview
+ * and reports the transcript as the call progresses. The browser never
+ * assembles or submits transcript content: on "Submit responses" it sends only
+ * the token, and the server finalizes from the agent-reported draft.
  *
  * What the client still does: live captions + a response counter from the
- * room's transcription streams (display only), a hard 5-minute countdown, and
- * the review / re-record step (a re-record simply opens a fresh room; the new
- * draft overwrites the old).
+ * room's transcription streams (display only), the PER-ANSWER countdown the
+ * worker publishes on `screening.answer`, and the review / re-record step (a
+ * re-record simply opens a fresh room; the new draft overwrites the old).
+ *
+ * **There is no call-level clock, and the one timer here is not one.** This
+ * used to run a hard cut sized from the campaign's topic count, against a
+ * `screeningCallMinutes` that no longer exists — a guillotine that ended a call
+ * mid-sentence and scored every unreached topic 0. The budget lives on each
+ * question instead, so the only timer left is `SCREENING_CALL_BACKSTOP_MINUTES`:
+ * a failure bound for a dead worker or an abandoned tab, never ticking, never
+ * rendered, and never approached by a call that is behaving.
+ *
+ * It renders in `CandidateShell`, the same employer-branded card as the video
+ * interview, deliberately: the two are the same promise at different lengths,
+ * and a candidate who does the screening should recognise the interview.
  */
+/**
+ * The stage element, and the reason this page is not just the interview page
+ * with the video cut out: a voice call gives a candidate nothing to look at, so
+ * the disc has to carry the whole "something is happening" signal that the
+ * self-view carries next door. Hence the ring, which the interview has no need
+ * of. `motion-safe:` because a pulsing disc is exactly what a reduced-motion
+ * setting is asking us not to do.
+ */
+function MicDisc({ listening }: { listening: boolean }) {
+  return (
+    <div className="mb-5 flex justify-center">
+      <span
+        className={cn(
+          "relative flex items-center justify-center rounded-full",
+          listening ? "h-24 w-24" : "h-[88px] w-[88px]",
+        )}
+      >
+        <span
+          className={cn(
+            "absolute inset-0 rounded-full motion-safe:animate-ping",
+            listening ? "bg-[#BBF7D0]" : "bg-[#DBEAFE]",
+          )}
+          aria-hidden="true"
+        />
+        <span
+          className={cn(
+            "relative flex h-full w-full items-center justify-center rounded-full",
+            listening ? "bg-ink text-white" : "bg-[#EFF6FF] text-primary",
+          )}
+        >
+          <Icon
+            className={listening ? "h-[38px] w-[38px]" : "h-9 w-9"}
+            d={MIC_PATH}
+          />
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export default function VoiceScreening({
   token,
   campaignTitle,
+  questionCount,
   expiresAt,
 }: VoiceScreeningProps) {
+  // The invisible backstop. Never displayed, never counted down, and never
+  // reached by a call that is behaving: it exists for the worker that dies
+  // mid-call and the tab left open in an empty room, both of which otherwise
+  // bill an OpenAI Realtime session by the minute forever.
+  const backstopMs = SCREENING_CALL_BACKSTOP_MINUTES * 60_000;
   const [status, setStatus] = useState<Status>("idle");
+  // `error` is the inline line on the review step (a submit that failed, where
+  // the call itself was fine). `failure` is the whole-screen dead end before
+  // the call ever ran. They are different problems and read differently.
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ScreeningFailure | null>(null);
   // Counts the candidate's *own* spoken turns — the call is only submittable
   // once they've answered something. Display-only; the server re-checks
   // against the agent-reported transcript.
   const [responseCount, setResponseCount] = useState(0);
-  const [secondsLeft, setSecondsLeft] = useState(CALL_SECONDS);
   const [timedOut, setTimedOut] = useState(false);
   // Live caption of the interviewer's current/last spoken question.
   const [caption, setCaption] = useState("");
+  // The per-answer countdown. Null whenever nothing is being timed — before the
+  // candidate starts speaking, and between questions — because a clock ticking
+  // at somebody deciding what to say is the pressure this design removed.
+  const [answerMs, setAnswerMs] = useState<number | null>(null);
+  const [answerExpired, setAnswerExpired] = useState(false);
+  // True while the budget is STOPPED because the interviewer is talking. The
+  // counter stays on screen standing still: the minute has not started and has
+  // not been taken away, and removing it instead meant the countdown was
+  // visible for about four seconds a question and absent the rest of the call.
+  const [answerPaused, setAnswerPaused] = useState(false);
+  /**
+   * The language the interview will be held in, chosen here rather than in the
+   * call.
+   *
+   * It used to be the interviewer's decision, from the candidate's first
+   * answer — and the model got there first: given their name and a summary of
+   * their CV it inferred one and greeted them in it, before they had said a
+   * word. Asked before the room is even created, it is a fact by the time the
+   * interviewer opens its mouth.
+   */
+  const [language, setLanguage] = useState<CallLanguage>(DEFAULT_CALL_LANGUAGE);
+  /**
+   * They have pressed "I'm done" on the answer currently on screen.
+   *
+   * Cleared when a fresh minute arrives, so the button comes back for the next
+   * question. Held so a second press cannot send a second packet — the worker
+   * ignores one, but a button that stays live after doing its job reads as one
+   * that did nothing.
+   */
+  const [answerEnded, setAnswerEnded] = useState(false);
+  // The clock, as one object. A ref rather than state so an arriving packet
+  // does not re-render, and so the ticker below can read it without
+  // re-subscribing.
+  //
+  // One field, not two: this was a deadline ref and a frozen-value ref with a
+  // comment saying they were mutually exclusive — an invariant two assignment
+  // sites had to maintain and the ticker had to re-derive, when a clock is
+  // simply "this much left, as of then, running or not".
+  const answerClockRef = useRef<{ remainingMs: number; at: number; paused: boolean } | null>(
+    null,
+  );
+  // Whether the counter is currently on screen, so its appearance and
+  // disappearance can be logged without logging every tick.
+  const shownRef = useRef(false);
   // True when the browser is blocking audio autoplay. Without a user gesture,
   // attaching the agent's track plays nothing — so we surface a tap-to-enable
   // button rather than leaving the candidate in silence.
@@ -117,7 +344,7 @@ export default function VoiceScreening({
   const roomRef = useRef<Room | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const wasLiveRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Segment ids of the candidate's finalized turns (segments stream in
   // revisions; a Set keeps the count exact).
   const candidateSegmentsRef = useRef<Set<string>>(new Set());
@@ -127,6 +354,11 @@ export default function VoiceScreening({
   const agentPresentRef = useRef(false);
   const agentAudioRef = useRef(false);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set when the interviewer says it has covered everything. It is what tells
+  // the Disconnected handler that the agent leaving is the END of the call
+  // rather than a drop — without it, a completed interview lands the candidate
+  // on "start over" with their whole call behind them.
+  const finishedRef = useRef(false);
   // Proctoring buffer. Screening is voice-only, so tab focus is the ONLY signal
   // available here — there is no camera to watch and nothing server-side to
   // corroborate it with. It exists because this is the stage a candidate has
@@ -141,7 +373,7 @@ export default function VoiceScreening({
   // exactly once on teardown without re-subscribing every render).
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) clearTimeout(timerRef.current);
       clearWatchdog();
       roomRef.current?.disconnect();
     };
@@ -176,7 +408,7 @@ export default function VoiceScreening({
 
   function stopTimer() {
     if (timerRef.current) {
-      clearInterval(timerRef.current);
+      clearTimeout(timerRef.current);
       timerRef.current = null;
     }
   }
@@ -188,24 +420,62 @@ export default function VoiceScreening({
     }
   }
 
-  // Start the 5-minute countdown. Computes remaining time from a fixed deadline
-  // each tick, so a throttled/backgrounded tab can't drift the clock.
+  // Tick the per-answer countdown while the call is live. One interval for the
+  // whole call, reading the anchor each tick, so an arriving packet never has
+  // to tear down and rebuild a timer.
+  useEffect(() => {
+    if (status !== "live") {
+      answerClockRef.current = null;
+      setAnswerMs(null);
+      setAnswerExpired(false);
+      setAnswerPaused(false);
+      setAnswerEnded(false);
+      return;
+    }
+    const id = setInterval(() => {
+      const clock = answerClockRef.current;
+      const raw =
+        clock === null
+          ? null
+          : clock.paused
+            ? clock.remainingMs
+            : Math.max(0, clock.remainingMs - (Date.now() - clock.at));
+      // Quantised to the second, because the second is all that is ever drawn:
+      // the counter renders `Math.ceil(answerMs / 1000)` and compares against a
+      // whole-second threshold. Storing raw milliseconds at 4Hz re-rendered the
+      // whole call screen four times a second on a candidate's phone, three of
+      // them byte-identical. React bails out on the unchanged value instead.
+      const next = raw === null ? null : Math.ceil(raw / 1000) * 1000;
+      setAnswerPaused(clock?.paused === true);
+      // Only the appearance and the disappearance are logged, never the ticks:
+      // at four a second a per-tick line would bury the two moments that
+      // actually explain what the candidate saw.
+      const wasShown = shownRef.current;
+      const isShown = next !== null;
+      if (wasShown !== isShown) {
+        shownRef.current = isShown;
+        realtimeTrace(
+          "voice-screening",
+          isShown ? "countdown shown" : "countdown hidden",
+          isShown ? { seconds: Math.ceil((next ?? 0) / 1000) } : undefined,
+        );
+      }
+      setAnswerMs(next);
+    }, 250);
+    return () => clearInterval(id);
+  }, [status]);
+
+  // Arm the backstop. One timer, no ticking, and nothing rendered from it: the
+  // candidate must not be able to feel a clock, because the entire point of
+  // moving the budget onto each answer is that they are no longer racing one.
   function startTimer() {
     stopTimer();
-    const deadline = Date.now() + CALL_SECONDS * 1000;
-    setSecondsLeft(CALL_SECONDS);
-    timerRef.current = setInterval(() => {
-      const remain = Math.max(0, Math.round((deadline - Date.now()) / 1000));
-      setSecondsLeft(remain);
-      if (remain <= 0) {
-        stopTimer();
-        handleTimeUp();
-      }
-    }, 250);
+    timerRef.current = setTimeout(handleTimeUp, backstopMs);
   }
 
-  // Hard cap reached: end the call and move to review so the candidate can
-  // still submit what the agent captured.
+  // The backstop fired, which means something went wrong rather than that the
+  // interview ran long. End the call and move to review, so whatever the agent
+  // did capture can still be submitted.
   function handleTimeUp() {
     setTimedOut(true);
     teardown();
@@ -273,16 +543,14 @@ export default function VoiceScreening({
     // Over plain-http (e.g. a LAN IP), navigator.mediaDevices is undefined and
     // LiveKit throws a cryptic "reading 'getUserMedia'" — surface the real cause.
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setError(
-        "Your browser can't access the microphone on this page. It needs a secure connection — open this link over https, or on this computer use http://localhost:3000.",
-      );
+      setFailure(FAILURE.insecure);
       setStatus("error");
       return;
     }
     setError(null);
+    setFailure(null);
     setStatus("connecting");
     setResponseCount(0);
-    setSecondsLeft(CALL_SECONDS);
     setTimedOut(false);
     setCaption("");
     setAudioBlocked(false);
@@ -291,8 +559,11 @@ export default function VoiceScreening({
     agentPresentRef.current = false;
     agentAudioRef.current = false;
     clearWatchdog();
+    // Set when we already know why the throw below happened; the classifier
+    // only guesses for the failures we cannot name at the throw site.
+    let kind: ScreeningFailureKind | undefined;
     try {
-      const grant = await startCandidateVoiceScreening(token);
+      const grant = await startCandidateVoiceScreening(token, language);
 
       const room = new Room();
       roomRef.current = room;
@@ -322,11 +593,71 @@ export default function VoiceScreening({
       room.on(RoomEvent.Disconnected, () => {
         if (roomRef.current) {
           teardown();
+          // A finished interview is not a drop. The interviewer leaving after
+          // its goodbye is the normal ending, and sending the candidate back to
+          // "start over" there would discard a completed call in front of them.
+          if (finishedRef.current) return;
           setStatus((s) =>
             s === "review" || s === "submitting" || s === "done" ? s : "idle",
           );
         }
       });
+
+      // The interviewer reporting that every topic is covered and the goodbye
+      // is said. The call ends here and the answers go in — no button, because
+      // an interview a candidate walks away from without submitting is one
+      // nobody ever scores.
+      room.on(
+        RoomEvent.DataReceived,
+        (payload: Uint8Array, _p?: unknown, _k?: unknown, topic?: string) => {
+          // One line per packet. Data packets are rare (a topic change, the
+          // end of the interview), and without this a countdown that never
+          // appears is indistinguishable from one that never arrived.
+          realtimeTrace("voice-screening", "data packet", { topic });
+
+          if (topic === SCREENING_ANSWER_TOPIC) {
+            try {
+              const packet = JSON.parse(new TextDecoder().decode(payload)) as {
+                remainingMs?: number | null;
+                expired?: boolean;
+                paused?: boolean;
+              };
+              const remainingMs =
+                typeof packet.remainingMs === "number" ? packet.remainingMs : null;
+              // Paused means the interviewer is talking: the number stands
+              // still rather than ticking down through their turn. Anchored to
+              // arrival, never to an absolute deadline — a candidate whose
+              // system clock is wrong still sees the right number.
+              const previous = answerClockRef.current;
+              answerClockRef.current =
+                remainingMs === null
+                  ? null
+                  : { remainingMs, at: Date.now(), paused: packet.paused === true };
+              setAnswerExpired(packet.expired === true);
+              // A fresh minute is a new question, so the button comes back. The
+              // heartbeat re-sends the SAME clock every five seconds, so this
+              // has to key on the number going UP rather than on merely
+              // arriving — otherwise the button reappears mid-answer, seconds
+              // after they pressed it.
+              if (remainingMs !== null && (previous === null || remainingMs > previous.remainingMs)) {
+                setAnswerEnded(false);
+              }
+              realtimeTrace("voice-screening", "answer clock", packet);
+            } catch {
+              // A malformed clock packet costs a stale number on screen and
+              // nothing else. It must never take down the data handler that
+              // also carries the end-of-interview signal.
+            }
+            return;
+          }
+
+          if (topic !== SCREENING_FINISHED_TOPIC || finishedRef.current) return;
+          finishedRef.current = true;
+          realtimeTrace("voice-screening", "interviewer finished; submitting");
+          teardown();
+          void submit();
+        },
+      );
 
       // Live transcription segments, published by the agent for both sides of
       // the conversation. Candidate turns drive the response counter; agent
@@ -363,9 +694,8 @@ export default function VoiceScreening({
       try {
         await room.localParticipant.setMicrophoneEnabled(true);
       } catch {
-        throw new Error(
-          "We couldn't turn on your microphone. Please allow microphone access in your browser and try again.",
-        );
+        kind = "permission";
+        throw new Error("The microphone could not be turned on.");
       }
 
       // The "Start interview" click is a live user gesture — use it to unlock
@@ -385,7 +715,7 @@ export default function VoiceScreening({
       if (!agentAudioRef.current) {
         watchdogRef.current = setTimeout(() => {
           if (agentAudioRef.current) return;
-          const { reason, message, devHint } = diagnoseAgentSilence({
+          const { reason, devHint } = diagnoseAgentSilence({
             agentPresent: agentPresentRef.current,
             agentAudio: agentAudioRef.current,
           });
@@ -393,7 +723,9 @@ export default function VoiceScreening({
             `[voice-screening] interviewer silent after ${AGENT_JOIN_TIMEOUT_MS}ms (reason=${reason}). ${devHint}`,
           );
           teardown();
-          setError(message);
+          // Both silence reasons are ours, and neither is worth explaining to
+          // the candidate — the console keeps the distinction for us.
+          setFailure(FAILURE.interviewer);
           setStatus("error");
         }, AGENT_JOIN_TIMEOUT_MS);
       }
@@ -403,7 +735,7 @@ export default function VoiceScreening({
       startTimer();
     } catch (e) {
       teardown();
-      setError(e instanceof Error ? e.message : "Failed to start the call.");
+      setFailure(classifyScreeningFailure(e, kind));
       setStatus("error");
     }
   }
@@ -420,19 +752,49 @@ export default function VoiceScreening({
     setStatus("review");
   }
 
+  /**
+   * "I'm done" — end this answer now instead of waiting out the countdown.
+   *
+   * The counter is only fair because it runs its whole length, and the worker
+   * therefore will not end a barely-started answer on a pause. That is the
+   * right default and it costs somebody who genuinely finished in eight words
+   * the rest of their minute, staring at a clock with nothing to do. This is
+   * the way out, and it is why the default can be generous.
+   *
+   * Best-effort by design: the packet carries nothing, and if it never arrives
+   * the countdown simply runs to zero and the call moves on by itself. So a
+   * failure here is a slower answer, never a lost one — which is why it is not
+   * surfaced to the candidate.
+   */
+  function endAnswer() {
+    const room = roomRef.current;
+    if (!room || answerEnded) return;
+    setAnswerEnded(true);
+    void room.localParticipant
+      ?.publishData(new TextEncoder().encode("{}"), {
+        reliable: true,
+        topic: SCREENING_DONE_TOPIC,
+      })
+      .catch(() => {
+        // Nothing to tell them: their minute is still running and still
+        // visible, and it ends the answer on its own.
+      });
+  }
+
   // Discard the captured call and let the candidate record again from scratch.
   // Starting again opens a fresh room; the agent's new report overwrites the
   // previous draft server-side.
   function reRecord() {
     teardown();
     setResponseCount(0);
-    setSecondsLeft(CALL_SECONDS);
     setTimedOut(false);
     setCaption("");
     setAudioBlocked(false);
     candidateSegmentsRef.current = new Set();
     wasLiveRef.current = false;
+    finishedRef.current = false;
     setError(null);
+    setFailure(null);
     setStatus("idle");
   }
 
@@ -471,185 +833,459 @@ export default function VoiceScreening({
   const review = status === "review";
   const submitting = status === "submitting";
   const hasResponses = responseCount > 0;
-  const lowTime = secondsLeft <= 60;
+  const onStage = live || connecting;
+
+  const shell = {
+    label: STATUS_LABEL[status],
+    tone: STATUS_TONE[status],
+    // No clock. A countdown told the candidate to hurry on a call where
+    // hurrying costs them evidence, and it was the visible half of a budget
+    // that now lives per answer instead.
+    clock: undefined,
+    clockUrgent: false,
+  };
 
   if (status === "done") {
     return (
-      <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50">
-          <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
+      <CandidateShell title="Voice screening" role={campaignTitle}>
+        <div className="text-center">
+          <ShellIcon tone="good">
+            <Icon d="m4.5 12.75 6 6 9-13.5" strokeWidth={2.2} />
+          </ShellIcon>
+          <h2 className="mb-2.5 font-heading text-[26px] font-semibold tracking-[-0.015em] text-ink">
+            Thanks, that&apos;s everything
+          </h2>
+          <p className="mx-auto mb-6 max-w-[52ch] text-[15px] leading-[1.65] text-[#4B5563]">
+            Your answers for{" "}
+            <strong className="font-semibold text-ink">{campaignTitle}</strong> have
+            been submitted. The hiring team will be in touch by email.
+          </p>
+          <div className="mx-auto max-w-[52ch] rounded-xl border border-[#E5E7EB] bg-[#F9FAFB] px-[18px] py-4 text-left">
+            <p className="mb-1.5 text-[13px] font-semibold text-ink">
+              What happens next
+            </p>
+            <p className="text-[13px] leading-[1.6] text-[#6B7280]">
+              A person on the hiring team reads your transcript alongside your
+              application. You&apos;ll hear from them either way, usually within
+              a week.
+            </p>
+          </div>
         </div>
-        <h2 className="mb-2 text-lg font-semibold text-[#111827]">Thanks — that&apos;s everything</h2>
-        <p className="text-sm text-[#6B7280]">
-          Your responses for <strong>{campaignTitle}</strong> have been recorded. The hiring
-          team will be in touch by email.
-        </p>
-      </div>
+      </CandidateShell>
+    );
+  }
+
+  // A missed deadline is not a rejection, and a candidate staring at a dead
+  // link will assume it was one unless told otherwise.
+  //
+  // Only before they start. A deadline that rolls over mid-call must not
+  // swallow a finished one: someone who was still talking keeps their review
+  // step and their Submit button.
+  if (expired && (status === "idle" || status === "error")) {
+    return (
+      <CandidateShell title="Voice screening" role={campaignTitle}>
+        <ShellIcon tone="bad">
+          <Icon d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+        </ShellIcon>
+        <Heading>This link has expired</Heading>
+        <Body>
+          Screening links stay open for seven days. Nothing you did is lost, and
+          this does not count against you. Reply to the email we sent you and a
+          person will send a fresh link.
+        </Body>
+      </CandidateShell>
+    );
+  }
+
+  if (status === "error") {
+    // Never a dead end: a status of "error" with nothing classified still owes
+    // the candidate a sentence and a way to try again.
+    const shown = failure ?? classifyScreeningFailure(null);
+    return (
+      <CandidateShell title="Voice screening" role={campaignTitle} status={shell}>
+        <ShellIcon tone={shown.tone}>
+          <Icon d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+        </ShellIcon>
+        <Heading>{shown.title}</Heading>
+        <Body>{shown.body}</Body>
+        {shown.retry && (
+          <button type="button" onClick={start} className={SHELL_PRIMARY}>
+            Try again
+          </button>
+        )}
+      </CandidateShell>
     );
   }
 
   return (
-    <div className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`inline-block h-2.5 w-2.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
-          <span className="text-sm font-medium text-[#0C4A6E]" role="status" aria-live="polite">
-            {STATUS_LABEL[status]}
-          </span>
-        </div>
-        {live && (
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm font-semibold tabular-nums ${
-              lowTime ? "bg-red-50 text-red-600" : "bg-[#F0F9FF] text-[#0369A1]"
-            }`}
-            role="timer"
-            aria-label={`${secondsLeft} seconds remaining`}
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {formatClock(secondsLeft)}
-          </span>
-        )}
-      </div>
-
-      {status === "idle" && !expired && (
+    <CandidateShell title="Voice screening" role={campaignTitle} status={shell}>
+      {status === "idle" && (
         <>
-          <p className="text-sm text-[#6B7280]">
-            This is a short spoken interview for <strong>{campaignTitle}</strong> — about{" "}
-            <strong>5 minutes</strong>. When you start, allow microphone access and the
-            interviewer will greet you and ask a few questions. Speak naturally — you can take
-            your time, and you&apos;ll be able to review before submitting.
-          </p>
+          <ShellIcon tone="neutral">
+            <Icon d={MIC_PATH} />
+          </ShellIcon>
 
-          {/* Pre-call environment notice. */}
-          <div className="flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="note">
-            <svg className="mt-0.5 h-4 w-4 shrink-0 text-[#B45309]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-            <p className="text-xs leading-relaxed text-[#92400E]">
-              <strong>Find a quiet room before you start.</strong> Background noise makes it
-              harder for the interviewer to understand you. Use a quiet space with no chatter or
-              music, and headphones with a mic if you have them.
+          <Heading>A short spoken interview</Heading>
+          {/* No duration is quoted. The call is paced one answer at a time and
+              ends when the interviewer has covered its topics, so a number of
+              minutes was a promise this page had no way to keep. The QUESTION
+              COUNT is kept because it is the one thing about the call's shape
+              that IS guaranteed: the close guard will not let the interviewer
+              finish while a topic is still unasked. */}
+          <Body>
+            When you start, allow microphone access. The interviewer will greet
+            you and ask{" "}
+            <strong className="font-semibold text-ink">
+              {questionCount} {questionCount === 1 ? "question" : "questions"}
+            </strong>
+            . Speak naturally and take your time.
+          </Body>
+
+          {/* Three blocks, in the order a candidate needs them: what we promise,
+              what they have to do, then the one choice they have to make. The
+              promises are said before the call rather than after, because these
+              are the three things a candidate is most likely to be anxious
+              about and answering them afterwards is answering them too late. */}
+          <div className="mx-auto mb-3.5 w-full max-w-[56ch] rounded-xl border border-[#E5E7EB] bg-white px-[17px] py-[15px]">
+            <p className="mb-3 text-[13px] font-semibold text-ink">
+              What to expect
+            </p>
+            <ul className="flex flex-col gap-[11px]">
+              <Assurance>
+                Nothing is recorded. Only a written transcript is kept.
+              </Assurance>
+              {/* The interviewer submits for them when it signs off, so "nothing
+                  is sent until you press submit" would be a promise this page
+                  breaks a few minutes later. */}
+              <Assurance>
+                When the interviewer says goodbye the call ends and your answers
+                go in. There is nothing to press.
+              </Assurance>
+              <Assurance>
+                A person reads everything before any decision is made.
+              </Assurance>
+            </ul>
+          </div>
+
+          {/* Monitoring is disclosed before consent, not discovered after it,
+              the same rule the video interview holds to. Tab focus is the only
+              signal this stage has, and it is still one a candidate is entitled
+              to know about before agreeing to be watched by it. */}
+          <div
+            role="note"
+            className="mx-auto mb-6 w-full max-w-[56ch] rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-[17px] py-[15px]"
+          >
+            <p className="mb-3 flex items-center gap-[9px] text-[13px] font-semibold text-[#92400E]">
+              <Icon
+                className="h-4 w-4 shrink-0"
+                d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
+              />
+              Before you start
+            </p>
+            <p className="text-[13px] leading-[1.65] text-[#92400E]">
+              Find a quiet room with no chatter or music, and use headphones
+              with a mic if you have them. Background noise makes it harder for
+              the interviewer to understand you. Please stay on this tab for the
+              whole call:{" "}
+              <strong className="font-semibold">
+                leaving it is noted for the hiring team.
+              </strong>
             </p>
           </div>
+
+          {/* Asked before the room exists, so the interviewer is TOLD the
+              language rather than guessing one from a name and a CV. Two
+              buttons rather than a select: there are two options, both are one
+              word, and a select hides one of them behind a tap.
+
+              Left on plain white rather than boxed like the two blocks above
+              it, so the only thing on this screen the candidate has to DECIDE
+              reads as part of the action zone with the Start button, not as a
+              third thing to read. */}
+          <fieldset className="mx-auto mb-6 w-full max-w-[56ch]">
+            <legend className="mb-[9px] text-[13px] font-semibold text-ink">
+              Which language would you like the interview in?
+            </legend>
+            <div className="flex gap-[9px]">
+              {CALL_LANGUAGES.map((option) => {
+                const selected = option === language;
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setLanguage(option)}
+                    className={cn(
+                      "min-h-[46px] flex-1 rounded-xl border px-4 text-[15px] font-medium transition-colors duration-150",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
+                      selected
+                        ? "border-ink bg-ink text-white"
+                        : "cursor-pointer border-[#E5E7EB] bg-white text-[#374151] hover:border-[#D1D5DB] hover:bg-[#F9FAFB]",
+                    )}
+                  >
+                    {CALL_LANGUAGE_LABELS[option]}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-[9px] text-[13px] leading-[1.55] text-[#6B7280]">
+              The whole call will be in the language you pick. It cannot be
+              changed once you start.
+            </p>
+          </fieldset>
+
+          <button type="button" onClick={start} className={SHELL_PRIMARY}>
+            <Icon className="h-[18px] w-[18px]" d={MIC_PATH} strokeWidth={2} />
+            Start interview
+          </button>
+          <Deadline expiresAt={expiresAt} />
         </>
       )}
 
-      {expired && status !== "submitting" && (
-        <p className="text-sm text-red-600" role="alert">
-          This link has expired. Please contact the hiring team for a new one.
-        </p>
-      )}
-
-      {expiresAt && !expired && (status === "idle" || review) && (
-        <p className="text-xs text-[#6B7280]">
-          Please complete by <strong>{formatDeadline(expiresAt)}</strong>.
-        </p>
-      )}
-
-      {/* Autoplay unlock prompt — shown only when the browser is holding back
-          the interviewer's audio until an explicit tap. */}
-      {(live || connecting) && audioBlocked && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-3" role="alert">
-          <p className="text-xs leading-relaxed text-[#92400E]">
-            <strong>Sound is blocked by your browser.</strong> Tap to hear the interviewer.
+      {connecting && (
+        <>
+          <MicDisc listening={false} />
+          <p className="mb-1.5 text-center text-[17px] font-semibold text-ink">
+            Connecting you now
           </p>
+          <p className="mx-auto max-w-[52ch] text-center text-sm leading-[1.6] text-[#6B7280]">
+            If your browser asks for the microphone, choose{" "}
+            <strong className="font-semibold text-[#374151]">Allow</strong>. The
+            interviewer will say hello first.
+          </p>
+        </>
+      )}
+
+      {live && <MicDisc listening />}
+
+      {/* Autoplay unlock prompt. The call keeps running while this shows — the
+          captions below carry the question, so nothing is missed by tapping
+          late, which is the one thing this banner has to say. */}
+      {onStage && audioBlocked && (
+        <div className="mb-4">
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-3 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-[15px] py-[13px]"
+          >
+            <p className="text-[13px] leading-[1.55] text-[#92400E]">
+              <strong className="font-semibold">
+                Sound is blocked by your browser.
+              </strong>{" "}
+              Tap to hear the interviewer.
+            </p>
+            <button
+              type="button"
+              onClick={enableSound}
+              className="min-h-10 shrink-0 cursor-pointer rounded-lg bg-[#B45309] px-3 text-[13px] font-semibold text-white transition-colors duration-150 hover:bg-[#92400E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B45309] focus-visible:ring-offset-2"
+            >
+              Enable sound
+            </button>
+          </div>
+          <p className="mt-2 text-center text-[13px] leading-[1.55] text-[#9CA3AF]">
+            The call keeps running while this shows. The captions carry the
+            question, so nothing is missed if you tap late.
+          </p>
+        </div>
+      )}
+
+      {live && (
+        <>
+          {/* Live captions of the interviewer's questions — a lifeline if the
+              audio lags or cuts out, and the only thing on screen carrying words
+              while someone is being asked something. */}
+          <div className="mb-4 overflow-hidden rounded-[14px] border border-[#E5E7EB]">
+            <p className="border-b border-[#F3F4F6] bg-[#F9FAFB] px-[15px] py-[9px] text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+              Interviewer
+            </p>
+            <p
+              aria-live="polite"
+              className="min-h-[88px] px-[22px] py-5 text-lg leading-[1.6] text-ink"
+            >
+              {caption || (
+                <span className="text-[#9CA3AF]">
+                  Listening… the interviewer&apos;s questions appear here as they
+                  speak.
+                </span>
+              )}
+            </p>
+          </div>
+
+          {/* The per-answer countdown, shown whenever a question is
+              outstanding — including before the candidate has said anything,
+              because the silence fallback is a real deadline and hiding it
+              would remove the warning rather than the pressure. Amber under
+              fifteen seconds; at zero it stops being a number and becomes an
+              instruction, because at that point the honest thing to show is
+              what the call is about to do.
+
+              It is the ONLY counter on this screen. A separate "wrapping up"
+              countdown was tried and removed: the last question's minute is
+              the candidate's, and a second clock appearing the moment they
+              stopped talking read as being hurried off a call they had not
+              finished. The interview now ends on the goodbye, with nothing
+              counting down to it. */}
+          {answerMs !== null && (
+            <div
+              className={cn(
+                "mb-4 flex items-center justify-between rounded-[14px] border px-[15px] py-[11px] transition-colors duration-150",
+                !answerPaused && (answerExpired || answerMs <= ANSWER_LOW_MS)
+                  ? "border-[#FDE68A] bg-[#FFFBEB]"
+                  : "border-[#E5E7EB] bg-[#F9FAFB]",
+              )}
+            >
+              <span className="flex flex-col gap-0.5">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]">
+                  Your answer
+                </span>
+                {/* A number standing still with no explanation reads as broken,
+                    which is the one way a paused counter is worse than none. */}
+                {answerPaused && (
+                  <span className="text-[11px] leading-none text-[#9CA3AF]">
+                    starts when they finish asking
+                  </span>
+                )}
+              </span>
+              <span
+                aria-live="off"
+                className={cn(
+                  "text-[15px] font-semibold tabular-nums",
+                  answerPaused
+                    ? "text-[#9CA3AF]"
+                    : answerExpired || answerMs <= ANSWER_LOW_MS
+                      ? "text-[#92400E]"
+                      : "text-ink",
+                )}
+              >
+                {formatClock(Math.ceil(answerMs / 1000))}
+              </span>
+            </div>
+          )}
+
+          {/* Only while the minute is actually theirs: not while the
+              interviewer is still asking, not once it has run out, and not
+              twice. The worker will not end a barely-started answer on a pause
+              — that is what stops a thinking pause spending a topic — so this
+              is how somebody who really has finished skips the wait. */}
+          {answerMs !== null && !answerPaused && !answerExpired && !answerEnded && (
+            <button
+              type="button"
+              onClick={endAnswer}
+              className={cn(
+                SHELL_SECONDARY,
+                "mb-4 min-h-[44px] w-full text-[14px] font-medium",
+              )}
+            >
+              I&apos;m done with this answer
+            </button>
+          )}
+
+          {answerEnded && !answerExpired && (
+            <p
+              aria-live="polite"
+              className="mb-4 text-center text-[13px] leading-[1.55] text-[#6B7280]"
+            >
+              Thanks. Moving on to the next question.
+            </p>
+          )}
+
+          {answerExpired && !answerPaused && (
+            <p
+              aria-live="polite"
+              className="mb-4 text-center text-[13px] leading-[1.55] text-[#92400E]"
+            >
+              Time&apos;s up. Moving on to the next question.
+            </p>
+          )}
+
+          <p className="mb-5 text-center text-[13px] text-[#6B7280]">
+            {hasResponses
+              ? `${responseCount} ${responseCount === 1 ? "response" : "responses"} captured so far.`
+              : "Nothing captured yet. The interviewer will start the questions."}
+          </p>
+
           <button
             type="button"
-            onClick={enableSound}
-            className="shrink-0 rounded-lg bg-[#B45309] px-3 py-1.5 text-xs font-medium text-white cursor-pointer hover:bg-[#92400E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B45309] focus-visible:ring-offset-2 transition-colors duration-200"
+            onClick={finish}
+            className={cn(SHELL_SECONDARY, "min-h-[54px] text-base")}
           >
-            Enable sound
+            I&apos;m finished
           </button>
-        </div>
-      )}
-
-      {/* Live captions of the interviewer's questions — a lifeline if the audio
-          lags or cuts out. */}
-      {(live || connecting) && (
-        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#0369A1]">
-            Interviewer
+          <p className="mt-3 text-center text-[13px] leading-[1.55] text-[#9CA3AF]">
+            No timer on the call itself. Each question gets about a minute,
+            counting down from when the interviewer finishes asking it.
           </p>
-          <p className="min-h-[1.5rem] text-sm leading-relaxed text-[#0C4A6E]" aria-live="polite">
-            {caption || (
-              <span className="text-[#6B7280]">
-                Listening… the interviewer&apos;s questions will appear here as they speak.
-              </span>
-            )}
-          </p>
-        </div>
-      )}
-
-      {live && hasResponses && (
-        <p className="text-xs text-[#6B7280]">{responseCount} responses captured so far.</p>
+        </>
       )}
 
       {review && (
-        <div className="rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] p-4">
-          {timedOut && (
-            <p className="mb-1 text-sm font-medium text-[#0C4A6E]">
-              Your 5 minutes are up.
-            </p>
-          )}
+        <>
+          <ShellIcon tone="info">
+            <Icon d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </ShellIcon>
+
+          {timedOut && <Heading>The call ended</Heading>}
+
           {hasResponses ? (
-            <p className="text-sm text-[#0C4A6E]">
-              We captured <strong>{responseCount}</strong> spoken{" "}
-              {responseCount === 1 ? "response" : "responses"}. Submit when you&apos;re
-              ready, or re-record if you&apos;d like another take.
-            </p>
+            <>
+              {!timedOut && <Heading>That&apos;s the interview done</Heading>}
+              <p className="mx-auto mb-[22px] max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
+                We captured{" "}
+                <strong className="font-semibold text-ink">
+                  {responseCount} spoken{" "}
+                  {responseCount === 1 ? "response" : "responses"}
+                </strong>
+                . Submit when you&apos;re ready, or take it again. Nothing has
+                been sent yet.
+              </p>
+            </>
           ) : (
-            <p className="text-sm text-[#0C4A6E]">
-              We didn&apos;t catch any spoken answers on that call. Please re-record before
-              submitting.
-            </p>
+            <>
+              {!timedOut && <Heading>We didn&apos;t catch any answers</Heading>}
+              <p className="mx-auto mb-[22px] max-w-[52ch] text-center text-[15px] leading-[1.6] text-[#4B5563]">
+                That usually means the microphone wasn&apos;t picking you up.
+                Please re-record before submitting. An empty submission would
+                leave the team nothing to read.
+              </p>
+            </>
           )}
+
+          <div className="flex flex-col items-center gap-2.5">
+            {/* An empty call is never submittable: a blank transcript reaching
+                the team helps nobody, least of all the candidate. */}
+            {hasResponses && (
+              <button type="button" onClick={submit} className={SHELL_PRIMARY}>
+                Submit responses
+              </button>
+            )}
+            <button type="button" onClick={reRecord} className={SHELL_SECONDARY}>
+              Re-record
+            </button>
+          </div>
+          <Deadline expiresAt={expiresAt} />
+        </>
+      )}
+
+      {submitting && (
+        <div className="py-[26px] text-center">
+          <span
+            className="mb-[18px] inline-block h-[34px] w-[34px] rounded-full border-[3px] border-[#E5E7EB] border-t-ink motion-safe:animate-spin"
+            aria-hidden="true"
+          />
+          <p className="mb-1.5 text-[17px] font-semibold text-ink">
+            Saving your responses…
+          </p>
+          <p className="text-sm text-[#6B7280]">Don&apos;t close this page.</p>
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {!live && !review && !submitting && (
-          <button type="button" onClick={start} disabled={connecting || expired} className={PRIMARY_BTN}>
-            {connecting ? "Connecting…" : status === "error" ? "Try again" : "Start interview"}
-          </button>
-        )}
-        {live && (
-          <button type="button" onClick={finish} className={PRIMARY_BTN}>
-            I&apos;m finished
-          </button>
-        )}
-        {review && hasResponses && (
-          <button type="button" onClick={submit} className={PRIMARY_BTN}>
-            Submit responses
-          </button>
-        )}
-        {review && (
-          <button
-            type="button"
-            onClick={reRecord}
-            className="px-4 py-2 text-sm font-medium text-[#0C4A6E] bg-white border border-[#BAE6FD] rounded-lg cursor-pointer hover:bg-[#F0F9FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 transition-colors duration-200"
-          >
-            Re-record
-          </button>
-        )}
-        {submitting && (
-          <button type="button" disabled className={PRIMARY_BTN}>
-            Saving…
-          </button>
-        )}
-      </div>
-
       {error && (
-        <p className="text-sm text-red-600" role="alert">
+        <p className="mt-4 text-center text-[13px] text-[#B91C1C]" role="alert">
           {error}
         </p>
       )}
 
       {/* Interviewer audio sink. */}
       <audio ref={audioRef} autoPlay />
-    </div>
+    </CandidateShell>
   );
 }

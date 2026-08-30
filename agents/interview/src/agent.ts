@@ -3,21 +3,30 @@
  *
  * A standalone LiveKit Agents process (NOT part of the Next.js app), forked
  * from the screening worker. The app opens a room per interview attempt
- * (`createInterviewRoomGrant`) with the résumé-grounded interviewer
- * instructions in the room metadata; LiveKit dispatches this worker into the
- * room, where it runs the conversation over OpenAI Realtime and reports every
- * transcript turn back to the app's interview agent API route. The worker never
- * touches application state — it produces evidence (the transcript); the app's
- * rules decide everything else.
+ * (`createInterviewRoomGrant`) carrying the application id in room metadata;
+ * LiveKit dispatches this worker into the room, where it FETCHES its
+ * résumé-grounded interviewer instructions from the app, runs the conversation
+ * over OpenAI Realtime, and reports every transcript turn back to the app's
+ * interview agent API route. The worker never touches application state — it
+ * produces evidence (the transcript); the app's rules decide everything else.
+ *
+ * The instructions are fetched rather than read off the room because LiveKit
+ * delivers room metadata to every participant: while they rode in metadata, the
+ * candidate's own browser received the condensed copy of their résumé and the
+ * campaign's interviewing stance on join. Metadata now carries the application
+ * id alone.
  *
  * The candidate publishes camera + mic. This worker drives the spoken
- * conversation off the audio track; the camera feed is present in the room for
- * recording + proctoring, which are handled in later phases (frame sampling +
- * vision analysis) rather than here.
+ * conversation off the audio track; the camera feed is sampled for proctoring by
+ * `vision.ts`, kept strictly out of the Realtime session. The interview is NOT
+ * recorded — frames are scored in memory and dropped, and the only images that
+ * ever persist are the annotated stills behind a confirmed proctoring finding.
  *
  * Env (see .env.example): LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
  * (read by the agents CLI), OPENAI_API_KEY (Realtime), SCREENR_APP_ORIGIN +
- * AGENT_API_SECRET (transcript reporting).
+ * AGENT_API_SECRET (fetching instructions and reporting transcript, proctoring
+ * and snapshots — the worker cannot run an interview without them any more,
+ * where before they only cost it the evidence).
  *
  * Run: `pnpm dev` (hot-reload against LiveKit Cloud) or `pnpm start`.
  */
@@ -44,10 +53,18 @@ interface TranscriptTurn {
   at: string;
 }
 
-/** Mirrors `InterviewRoomMetadata` in the app (src/lib/services/livekit.ts). */
+/**
+ * Mirrors `InterviewRoomMetadata` in the app (src/lib/services/livekit.ts).
+ *
+ * `instructions` is the LEGACY field: the app stopped publishing it on
+ * 2026-08-24 because room metadata is candidate-visible. It is still read as a
+ * fallback so this worker runs against an app deployed either side of that
+ * change — which is what makes "restart the workers first" a safe rollout. Once
+ * the app is deployed, this field is dead and can be deleted.
+ */
 interface InterviewRoomMetadata {
   application_id: string;
-  instructions: string;
+  instructions?: string;
 }
 
 // Must be a Realtime model the OPENAI_API_KEY can actually access. This account
@@ -61,10 +78,12 @@ function parseMetadata(raw: string | undefined): InterviewRoomMetadata | null {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw) as Partial<InterviewRoomMetadata>;
-    if (typeof data.application_id !== "string" || typeof data.instructions !== "string") {
-      return null;
-    }
-    return { application_id: data.application_id, instructions: data.instructions };
+    if (typeof data.application_id !== "string") return null;
+    return {
+      application_id: data.application_id,
+      instructions:
+        typeof data.instructions === "string" ? data.instructions : undefined,
+    };
   } catch {
     return null;
   }
@@ -109,6 +128,42 @@ async function postToApp(path: string, label: string, body: unknown): Promise<vo
     }
   } catch (err) {
     console.error(`${label} failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Fetch this interview's instructions from the app.
+ *
+ * Deliberately NOT routed through `postToApp`: everything there is a
+ * best-effort report whose loss costs a recruiter some evidence, and nothing in
+ * it throws. This is the opposite — without instructions there is no interview
+ * to run, so the caller fails loudly rather than improvising questions against
+ * a rubric nobody chose.
+ */
+async function fetchInstructions(applicationId: string): Promise<string | null> {
+  const origin = process.env.SCREENR_APP_ORIGIN;
+  const secret = process.env.AGENT_API_SECRET;
+  if (!origin || !secret) {
+    console.error(
+      "SCREENR_APP_ORIGIN / AGENT_API_SECRET not configured; cannot fetch instructions",
+    );
+    return null;
+  }
+
+  try {
+    const url = `${origin}/api/agent/interview/instructions?application_id=${encodeURIComponent(applicationId)}`;
+    const res = await fetch(url, { headers: { authorization: `Bearer ${secret}` } });
+    if (!res.ok) {
+      console.error(`instructions fetch failed (${res.status}) for ${applicationId}`);
+      return null;
+    }
+    const data = (await res.json()) as { instructions?: unknown };
+    return typeof data.instructions === "string" && data.instructions.length > 0
+      ? data.instructions
+      : null;
+  } catch (err) {
+    console.error("instructions fetch failed:", err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
@@ -165,11 +220,24 @@ export default defineAgent({
     await ctx.connect();
 
     // Only run in rooms the app created for an interview; metadata carries the
-    // application id + interviewer instructions and is set server-side only.
+    // application id, and is set server-side only.
     const meta = parseMetadata(ctx.room.metadata);
     if (!meta || !ctx.room.name?.startsWith("interview-")) {
       console.warn(`not an interview room (${ctx.room.name}); leaving`);
       return;
+    }
+
+    // Fetch first, fall back to metadata for an app deployed before the
+    // instructions moved off the room. Failing here is loud on purpose:
+    // silence is the one outcome the candidate cannot recover from on their own.
+    const instructions =
+      (await fetchInstructions(meta.application_id)) ?? meta.instructions ?? null;
+    if (!instructions) {
+      console.error(
+        `no interviewer instructions for ${meta.application_id} — the candidate would hear ` +
+          `silence. Check SCREENR_APP_ORIGIN / AGENT_API_SECRET.`,
+      );
+      throw new Error(`no instructions for application ${meta.application_id}`);
     }
 
     // Print the model in use so a stale worker is obvious: `dev` mode does NOT
@@ -193,7 +261,87 @@ export default defineAgent({
       llm: new openai.realtime.RealtimeModel({
         model: REALTIME_MODEL,
         voice: REALTIME_VOICE,
+        turnDetection: {
+          // The plugin's own defaults, restated so the one changed line below
+          // reads as a change rather than as a whole configuration arriving at
+          // once. Keep them in step with DEFAULT_TURN_DETECTION if the plugin
+          // moves.
+          type: "semantic_vad",
+          eagerness: "medium",
+          // TRUE here, unlike screening. This interviewer improvises its own
+          // questions from the candidate's CV, so nothing else is going to
+          // speak for it — the app pushes the screening conversation, and
+          // there is no equivalent to push this one.
+          create_response: true,
+          // **The interviewer is never cut off mid-question.**
+          //
+          // A candidate talking over a question is far more often a cough, a
+          // backchannel, or somebody else in the room than an answer — and
+          // with auto-reply on, reading one of those as a turn costs the
+          // question outright. The response is CANCELLED partway through, the
+          // cough is committed as user input, and OpenAI then generates a
+          // reply to IT. The interviewer abandons what it was asking and
+          // answers a cough. Against a budget of about five questions in ten
+          // minutes, that is a fifth of the interview, and the rubric
+          // dimension the lost question would have evidenced is graded on
+          // whatever else happened to come up.
+          //
+          // Screening reaches the same setting from a different failure (a
+          // stamped topic scored on a cough) and a re-drivable conversation.
+          // Nothing re-drives this one: a question lost here is simply lost.
+          //
+          // **It has to be done HERE, on OpenAI's own turn detection.** The
+          // framework's `allowInterruptions` OPTION is silently forced back to
+          // `true` for a RealtimeModel with server-side turn detection
+          // (agents/voice/agent_activity.ts), so passing it reads as a
+          // guarantee and provides none. See the handle setter below for the
+          // other half.
+          interrupt_response: false,
+        },
       }),
+    });
+
+    /**
+     * Claim every turn as uninterruptible — whoever created it.
+     *
+     * `interrupt_response: false` above is necessary and not sufficient: it
+     * stops OPENAI cancelling its own response, and does nothing about the
+     * FRAMEWORK, which runs its own interruption on top. `onInputSpeechStarted`
+     * calls `activity.interrupt()` unconditionally on every
+     * `input_speech_started`, and the only thing that stops it is
+     * `currentSpeech.interrupt(false)` THROWING, which that caller wraps in a
+     * try/catch. The framework anticipates it — its own comment there reads
+     * "this is going to raise when allow_interruptions is False".
+     *
+     * The screening worker sets this on the handle `generateReply` hands back,
+     * which it can because it speaks only when the app tells it to. Here the
+     * model starts its own turns, so most handles are created inside the
+     * framework and never surface to us. `SpeechCreated` is emitted
+     * synchronously at construction, before the speech task is created, so a
+     * listener is the one place that catches every path — the greeting, each
+     * auto-reply, and a tool response.
+     *
+     * Expect one framework error line per attempt, worded as though it were
+     * impossible ("this should never happen!"). It is expected here; it is the
+     * sound of a question surviving a cough.
+     *
+     * A candidate who talks over a question is not silently ignored so much as
+     * not heard: while an uninterruptible turn is playing the framework feeds
+     * silence to the model in place of their audio
+     * (`discardAudioIfUninterruptible`, default true), so those words reach no
+     * transcript. That is the right trade with auto-reply on — audio that DID
+     * get through would be committed as a user turn and answered as soon as the
+     * question finished, which is the failure this setting exists to prevent.
+     * Their answer proper, once the question has finished playing, is
+     * unaffected.
+     */
+    session.on(voice.AgentSessionEventTypes.SpeechCreated, (ev) => {
+      try {
+        ev.speechHandle.allowInterruptions = false;
+      } catch {
+        // The setter refuses a handle that has already been interrupted. There
+        // is nothing left to protect, and the turn is over either way.
+      }
     });
 
     // Every finalized conversation item (agent or candidate) becomes one
@@ -241,7 +389,7 @@ export default defineAgent({
       await reportVisionObservations(meta.application_id, vision.observations());
     });
 
-    const agent = new voice.Agent({ instructions: meta.instructions });
+    const agent = new voice.Agent({ instructions });
 
     // If the Realtime session can't open (e.g. a model the key can't access),
     // the candidate would otherwise just sit in a silent room. Fail loudly here

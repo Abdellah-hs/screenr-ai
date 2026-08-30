@@ -194,3 +194,68 @@ export async function fetchApplicationTimeline(
 
   return (data ?? []) as unknown as TransitionRow[];
 }
+
+// ─── Campaign history ────────────────────────────────────────────────────────
+
+export interface CampaignHistoryEntry {
+  id: string;
+  toState: string;
+  fromState: string | null;
+  actor: string;
+  rationale: string | null;
+  candidateName: string;
+  at: string;
+}
+
+/**
+ * The most recent transitions across a campaign's applications — the campaign
+ * page's history rail.
+ *
+ * `application_transitions` is the only append-only record of anything having
+ * happened, and it is per-application, so a "campaign history" is that log read
+ * across the campaign rather than a second log. Ownership is enforced by the
+ * caller (the page has already resolved the campaign through
+ * `fetchCampaignById`), and RLS on the table repeats the check. SELECT-only.
+ */
+export async function fetchCampaignHistory(
+  campaignId: string,
+  limit = 6,
+): Promise<CampaignHistoryEntry[]> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("application_transitions")
+    .select(
+      "id, from_state, to_state, actor, rationale, created_at, applications!inner(campaign_id, candidates(first_name, last_name))",
+    )
+    .eq("applications.campaign_id", campaignId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error || !data) return [];
+
+  return (
+    data as unknown as Array<{
+      id: string;
+      from_state: string | null;
+      to_state: string;
+      actor: string;
+      rationale: string | null;
+      created_at: string;
+      applications: {
+        candidates: { first_name: string | null; last_name: string | null } | null;
+      };
+    }>
+  ).map((row) => ({
+    id: row.id,
+    toState: row.to_state,
+    fromState: row.from_state,
+    actor: row.actor,
+    rationale: row.rationale,
+    candidateName:
+      `${row.applications.candidates?.first_name ?? ""} ${
+        row.applications.candidates?.last_name ?? ""
+      }`.trim() || "A candidate",
+    at: row.created_at,
+  }));
+}

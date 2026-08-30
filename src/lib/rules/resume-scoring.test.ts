@@ -3,239 +3,213 @@ import {
   evaluateResumeScoringOutcome,
   assertResumeRescoreAllowed,
   type CampaignScoringConfig,
-  type ResumeScoreResult,
 } from "./resume-scoring";
-
-function makeResult(overrides: Partial<ResumeScoreResult> = {}): ResumeScoreResult {
-  return {
-    overall_score: 80,
-    tier: "strong",
-    rationale: "Solid match",
-    factors: [],
-    ...overrides,
-  };
-}
+import {
+  buildDeterministicResumeScore,
+  type DeterministicResumeScoreResult,
+  type EvidenceLevel,
+  type ResumeCriterion,
+  type ValidatedResumeEvidence,
+} from "@/lib/resume-scoring";
 
 function makeConfig(overrides: Partial<CampaignScoringConfig> = {}): CampaignScoringConfig {
   return {
     id: "campaign-1",
     description: "Senior engineer",
     automation_mode: "fully_auto",
-    screening_threshold: 70,
+    resume_threshold: 70,
     screening_criteria: [],
     ...overrides,
   };
 }
 
+/**
+ * Build a real deterministic result from evidence levels rather than hand-
+ * writing the result object. The rule is only meaningful against results the
+ * scorer can actually produce — a hand-built "eligible with a null ranking"
+ * would test a state that cannot exist.
+ */
+function makeResult(
+  entries: { label: string; priority: ResumeCriterion["priority"]; level: EvidenceLevel }[],
+): DeterministicResumeScoreResult {
+  const criteria: ResumeCriterion[] = entries.map((e, i) => ({
+    id: `c${i}`,
+    label: e.label,
+    priority: e.priority,
+  }));
+
+  const validated: ValidatedResumeEvidence = {
+    criteria: entries.map((e) => ({
+      criterion_label: e.label,
+      evidence_level: e.level,
+      reported_evidence_level: e.level,
+      evidence_items: [],
+      extracted_relevant_months: null,
+      notes: null,
+    })),
+    extraction_summary: "Summary.",
+    warnings: [],
+  };
+
+  return buildDeterministicResumeScore(validated, criteria);
+}
+
 describe("evaluateResumeScoringOutcome", () => {
-  describe("human_in_loop mode", () => {
-    it("routes to screening_review_pending regardless of how high the score is", () => {
+  describe("must-have gate", () => {
+    it("rejects an ineligible candidate in fully_auto mode", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "weak" },
+        { label: "Communication", priority: "nice_to_have", level: "very_strong" },
+      ]);
+
+      const decision = evaluateResumeScoringOutcome(result, makeConfig());
+
+      expect(decision.toState).toBe("rejected");
+      expect(decision.rationale).toContain("React");
+      expect(decision.disposition).toEqual({
+        code: "LOW_SCORE",
+        description: "Failed must-have criteria: React",
+      });
+    });
+
+    it("rejects an ineligible candidate in HITL mode too — a gate is not a review call", () => {
+      const result = makeResult([{ label: "React", priority: "must_have", level: "not_present" }]);
+
       const decision = evaluateResumeScoringOutcome(
-        makeResult({ overall_score: 99 }),
-        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 50 }),
+        result,
+        makeConfig({ automation_mode: "human_in_loop" }),
+      );
+
+      expect(decision.toState).toBe("rejected");
+    });
+
+    it("names every failed must-have in the rationale", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "weak" },
+        { label: "SQL", priority: "must_have", level: "partial" },
+        { label: "Docker", priority: "must_have", level: "strong" },
+      ]);
+
+      const decision = evaluateResumeScoringOutcome(result, makeConfig());
+
+      expect(decision.rationale).toContain("React");
+      expect(decision.rationale).toContain("SQL");
+      expect(decision.rationale).not.toContain("Docker");
+    });
+
+    it("does not reject on a weak nice-to-have — only must-haves gate", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "strong" },
+        { label: "Docker", priority: "nice_to_have", level: "not_present" },
+      ]);
+
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 0 }));
+
+      expect(decision.toState).toBe("screening_approved");
+    });
+
+    it("cannot be reached past by a perfect nice-to-have score", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "partial" }, // 55, below 60
+        { label: "Docker", priority: "nice_to_have", level: "very_strong" }, // 100
+        { label: "Testing", priority: "nice_to_have", level: "very_strong" }, // 100
+      ]);
+
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 0 }));
+
+      expect(decision.toState).toBe("rejected");
+    });
+  });
+
+  describe("human_in_loop mode", () => {
+    it("routes an eligible candidate to review however high they rank", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "very_strong" },
+        { label: "Docker", priority: "nice_to_have", level: "very_strong" },
+      ]);
+
+      const decision = evaluateResumeScoringOutcome(
+        result,
+        makeConfig({ automation_mode: "human_in_loop", resume_threshold: 50 }),
       );
 
       expect(decision.toState).toBe("screening_review_pending");
       expect(decision.rationale).toContain("awaiting recruiter review (HITL mode)");
     });
 
-    it("routes to screening_review_pending even when the score is below threshold", () => {
+    it("routes an eligible candidate to review even when they rank below threshold", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "strong" },
+        { label: "Docker", priority: "nice_to_have", level: "not_present" },
+      ]);
+
       const decision = evaluateResumeScoringOutcome(
-        makeResult({ overall_score: 10 }),
-        makeConfig({ automation_mode: "human_in_loop", screening_threshold: 70 }),
+        result,
+        makeConfig({ automation_mode: "human_in_loop", resume_threshold: 70 }),
       );
 
       expect(decision.toState).toBe("screening_review_pending");
-      expect(decision.rationale).toContain("HITL mode");
     });
   });
 
   describe("fully_auto mode", () => {
-    it("routes to screening_approved when score is above threshold", () => {
-      const decision = evaluateResumeScoringOutcome(
-        makeResult({ overall_score: 85 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
-      );
+    it("approves when the ranking score clears the threshold", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "strong" },
+        { label: "Docker", priority: "nice_to_have", level: "very_strong" }, // 100
+      ]);
 
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
+
+      // (80 + 100) / 2 = 90 — the must-have counts toward the ranking too.
       expect(decision.toState).toBe("screening_approved");
-      expect(decision.rationale).toContain("passed");
+      expect(decision.rationale).toContain("ranking score 90");
     });
 
-    it("routes to screening_approved when score equals threshold (boundary)", () => {
-      const decision = evaluateResumeScoringOutcome(
-        makeResult({ overall_score: 70 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
-      );
+    it("rejects an eligible candidate who ranks below the threshold", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "strong" },
+        { label: "Docker", priority: "nice_to_have", level: "weak" }, // ranking 25
+      ]);
 
-      expect(decision.toState).toBe("screening_approved");
-    });
-
-    it("routes to rejected when score is below threshold", () => {
-      const decision = evaluateResumeScoringOutcome(
-        makeResult({ overall_score: 40 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 70 }),
-      );
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
 
       expect(decision.toState).toBe("rejected");
       expect(decision.rationale).toContain("below threshold");
-    });
-  });
-
-  describe("mandatory-criteria knockout gate", () => {
-    // A criterion + its paired factor (factors are index-aligned to criteria
-    // per the scoring prompt contract). Helper keeps the AAA blocks readable.
-    function withCriteria(
-      criteria: { label: string; is_mandatory: boolean; min_score?: number }[],
-      factorScores: number[],
-    ) {
-      return {
-        config: makeConfig({
-          automation_mode: "fully_auto",
-          screening_threshold: 70,
-          screening_criteria: criteria.map((c, i) => ({
-            id: `crit-${i}`,
-            label: c.label,
-            weight: Math.round(100 / criteria.length),
-            is_mandatory: c.is_mandatory,
-            // Per-dimension fail line. Defaults to 30 so existing assertions
-            // (which were written against the old fixed line) still hold.
-            min_score: c.min_score ?? 30,
-          })),
-        }),
-        result: makeResult({
-          overall_score: 85, // comfortably clears threshold — isolates the gate
-          factors: criteria.map((c, i) => ({
-            name: c.label,
-            weight: Math.round(100 / criteria.length),
-            score: factorScores[i],
-          })),
-        }),
-      };
-    }
-
-    it("rejects when a mandatory criterion scores below the fail line, even though overall clears the threshold", () => {
-      const { config, result } = withCriteria(
-        [
-          { label: "React", is_mandatory: true },
-          { label: "Communication", is_mandatory: false },
-        ],
-        [20, 95],
-      );
-
-      const decision = evaluateResumeScoringOutcome(result, config);
-
-      expect(decision.toState).toBe("rejected");
-      expect(decision.rationale).toContain("React");
-      // The code is a structured field now, not a tag spliced into the prose.
       expect(decision.disposition?.code).toBe("LOW_SCORE");
-      expect(decision.disposition?.description).toContain("React");
     });
 
-    it("approves when every mandatory criterion clears the fail line and overall passes", () => {
-      const { config, result } = withCriteria(
-        [
-          { label: "React", is_mandatory: true },
-          { label: "Communication", is_mandatory: false },
-        ],
-        [80, 40],
-      );
+    it("approves an eligible candidate with no nice-to-haves at all", () => {
+      const result = makeResult([{ label: "React", priority: "must_have", level: "strong" }]);
 
-      const decision = evaluateResumeScoringOutcome(result, config);
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 70 }));
 
       expect(decision.toState).toBe("screening_approved");
     });
 
-    it("does not trip on a low score for a non-mandatory criterion", () => {
-      const { config, result } = withCriteria(
-        [
-          { label: "React", is_mandatory: true },
-          { label: "Nice-to-have", is_mandatory: false },
-        ],
-        [90, 5],
-      );
+    it("approves exactly at the threshold", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "strong" },
+        { label: "Docker", priority: "nice_to_have", level: "partial" }, // ranking 55
+      ]);
 
-      const decision = evaluateResumeScoringOutcome(result, config);
-
-      expect(decision.toState).toBe("screening_approved");
-    });
-
-    it("treats a mandatory score exactly at the fail line as a pass (boundary)", () => {
-      const { config, result } = withCriteria(
-        [{ label: "React", is_mandatory: true }],
-        [30],
-      );
-
-      const decision = evaluateResumeScoringOutcome(result, config);
-
-      expect(decision.toState).toBe("screening_approved");
-    });
-
-    it("applies the gate in human_in_loop mode too — a hard fail is a hard fail", () => {
-      const { config, result } = withCriteria(
-        [{ label: "React", is_mandatory: true }],
-        [12],
-      );
-
-      const decision = evaluateResumeScoringOutcome(result, {
-        ...config,
-        automation_mode: "human_in_loop",
-      });
-
-      expect(decision.toState).toBe("rejected");
-      expect(decision.rationale).toContain("React");
-    });
-
-    it("still routes to review_pending in HITL when mandatory criteria pass", () => {
-      const { config, result } = withCriteria(
-        [{ label: "React", is_mandatory: true }],
-        [88],
-      );
-
-      const decision = evaluateResumeScoringOutcome(result, {
-        ...config,
-        automation_mode: "human_in_loop",
-      });
-
-      expect(decision.toState).toBe("screening_review_pending");
-    });
-
-    it("evaluates the gate before the overall threshold (gate wins on the rationale)", () => {
-      const { config, result } = withCriteria(
-        [{ label: "React", is_mandatory: true }],
-        [10],
-      );
-      // Drag overall below threshold too — both paths reject, but the gate
-      // must own the rationale so the reason surfaces as the required failure.
-      const lowOverall = makeResult({ ...result, overall_score: 40 });
-
-      const decision = evaluateResumeScoringOutcome(lowOverall, config);
-
-      expect(decision.toState).toBe("rejected");
-      expect(decision.rationale).toContain("React");
-    });
-
-    it("falls through to normal threshold logic when no factor is paired to a mandatory criterion (malformed AI output)", () => {
-      const config = makeConfig({
-        automation_mode: "fully_auto",
-        screening_threshold: 70,
-        screening_criteria: [{ id: "c1", label: "React", weight: 100, is_mandatory: true, min_score: 30 }],
-      });
-      const result = makeResult({ overall_score: 85, factors: [] });
-
-      const decision = evaluateResumeScoringOutcome(result, config);
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 55 }));
 
       expect(decision.toState).toBe("screening_approved");
     });
   });
 
   describe("rationale shape", () => {
-    it("includes the overall score and the threshold numerically", () => {
-      const decision = evaluateResumeScoringOutcome(
-        makeResult({ overall_score: 63 }),
-        makeConfig({ automation_mode: "fully_auto", screening_threshold: 75 }),
-      );
+    it("states the ranking score and threshold numerically", () => {
+      const result = makeResult([
+        { label: "React", priority: "must_have", level: "strong" },
+        { label: "Docker", priority: "nice_to_have", level: "partial" },
+      ]);
 
-      expect(decision.rationale).toContain("Resume score 63");
+      const decision = evaluateResumeScoringOutcome(result, makeConfig({ resume_threshold: 75 }));
+
+      // React strong (80) + Docker partial (55), averaged over both = 68.
+      expect(decision.rationale).toContain("ranking score 68");
       expect(decision.rationale).toContain("threshold 75");
     });
   });

@@ -3,6 +3,8 @@ import { decodeStatusSelection } from "@/lib/rules/campaign-status";
 import { MANAGER_REJECTION_CODES } from "@/lib/rules/manager-review";
 import {
   AI_AUDIT_STAGE_VALUES,
+  CALL_LANGUAGES,
+  DEFAULT_SCORE_THRESHOLD,
   MAX_POOL_NOTES_LENGTH,
   MAX_POOL_TAGS,
   MAX_POOL_TAG_LENGTH,
@@ -28,6 +30,10 @@ export const campaignFormSchema = z.object({
   deadline_enforced: z.boolean(),
   location: z.string().max(200).nullable(),
   automation_mode: z.enum(automationModeValues),
+  // Two stages, two bars. A resume score ranks CVs against a rubric and a
+  // screening score grades spoken answers, so one number cannot set the
+  // auto-reject line for both.
+  resume_threshold: z.number().int().min(0).max(100),
   screening_threshold: z.number().int().min(0).max(100),
   interview_persona: z.enum(interviewPersonaValues),
   // AI-interview availability config (PRD 3.5.6). Slots are generated from the
@@ -40,6 +46,15 @@ export const campaignFormSchema = z.object({
 // Standalone status validator for the bulk status changer (a quick status set
 // outside the full edit form). Campaign status is freely settable, so this just
 // guards that the value is a real status.
+/**
+ * The candidate's language choice, as it arrives from their own browser.
+ *
+ * It reaches the interviewer's instructions, so it is parsed as a closed enum
+ * and never as text: a free-string language would let a candidate write their
+ * own directive into the prompt.
+ */
+export const callLanguageSchema = z.enum(CALL_LANGUAGES);
+
 export const campaignStatusSchema = z.enum(campaignStatusValues);
 
 // The 5-option status dropdown value (real statuses + the `active_no_intake` UI
@@ -116,6 +131,7 @@ export const availabilityRuleSchema = z
  */
 export function parseCampaignFormData(formData: FormData) {
   const rawPositions = parseInt(formData.get("positions") as string);
+  const rawResumeThreshold = parseInt(formData.get("resume_threshold") as string);
   const rawThreshold = parseInt(formData.get("screening_threshold") as string);
   const rawSlotMinutes = parseInt(formData.get("interview_slot_minutes") as string);
   const rawHorizon = parseInt(formData.get("interview_booking_horizon_days") as string);
@@ -134,7 +150,16 @@ export function parseCampaignFormData(formData: FormData) {
     deadline_enforced: formData.get("deadline_enforced") === "true",
     location: (formData.get("location") as string) || null,
     automation_mode: (formData.get("automation_mode") as string) || "human_in_loop",
-    screening_threshold: Number.isNaN(rawThreshold) ? 70 : Math.min(100, Math.max(0, rawThreshold)),
+    // 70 is the fallback for both, matching the column defaults. Before the
+    // split the DB defaulted to 50 while this parser sent 70, so a campaign
+    // created through the form and one created any other way rejected at
+    // different bars.
+    resume_threshold: Number.isNaN(rawResumeThreshold)
+      ? DEFAULT_SCORE_THRESHOLD
+      : Math.min(100, Math.max(0, rawResumeThreshold)),
+    screening_threshold: Number.isNaN(rawThreshold)
+      ? DEFAULT_SCORE_THRESHOLD
+      : Math.min(100, Math.max(0, rawThreshold)),
     interview_persona: (formData.get("interview_persona") as string) || "neutral",
     interview_slot_minutes: Number.isNaN(rawSlotMinutes) ? null : rawSlotMinutes,
     interview_timezone: (formData.get("interview_timezone") as string)?.trim() || null,
@@ -164,7 +189,25 @@ export function parseCampaignFormData(formData: FormData) {
     z.array(availabilityRuleSchema)
   );
 
-  return { ...data, rubrics, slaTimers, reviewers, availabilityRules };
+  // Screening questions are staged on the create form and written in the same
+  // transaction as the campaign, so a campaign is never born in the state the
+  // detail page has to warn about ("no questions yet — candidates can't be
+  // approved into screening"). The draft schema allows an empty set: a
+  // recruiter who hasn't written a job description yet can't generate any, and
+  // blocking campaign creation on that is worse than the banner.
+  // `null`, not `[]`, when the form does not carry the field at all — and the
+  // distinction is load-bearing on the edit path, where an empty array means
+  // "the recruiter removed the last question" and must wipe the set, while an
+  // absent field means "this form does not manage questions" and must leave
+  // them alone. Collapsing the two would let any caller that forgets the field
+  // silently delete a campaign's whole question set.
+  const rawScreeningQuestions = formData.get("screening_questions_json");
+  const screeningQuestions =
+    rawScreeningQuestions === null
+      ? null
+      : safeParseJsonArray(rawScreeningQuestions as string, screeningQuestionsDraftSchema);
+
+  return { ...data, rubrics, slaTimers, reviewers, availabilityRules, screeningQuestions };
 }
 
 function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
@@ -180,6 +223,37 @@ function safeParseJsonArray<T>(json: string | null, schema: z.ZodType<T>): T {
 // ─── AI Generation Validation ───────────────────────────────────────────────
 
 export const aiDescriptionSchema = z.string().min(10, "Description too short for AI generation").max(10000, "Description too long");
+
+/**
+ * Rubric dimension names sent up from the wizard to ground question drafting.
+ *
+ * Generation-only and never persisted — these are names the recruiter is still
+ * editing in an unsaved draft, so they arrive from the client rather than from
+ * a row we own. Blank entries are dropped rather than rejected: a half-typed
+ * dimension on screen is a normal state to press "draft questions" in, and
+ * failing the whole call over one empty row would be the wizard blocking itself.
+ */
+export const rubricDimensionSuggestionSchema = z
+  .array(z.string().trim().max(200))
+  .max(50)
+  .transform((names) => names.filter((n) => n.length > 0));
+
+/**
+ * The rubric + questions a coverage check reads.
+ *
+ * Both arrive from the client because the wizard holds them before either is
+ * saved. Nothing here is persisted or scored — it is a configuration check —
+ * so the bounds exist to keep a prompt from being stuffed, not to protect a
+ * write. Blank entries pass through: the service drops them, and the two
+ * empty cases (no rubric, no questions) are answers in their own right rather
+ * than errors.
+ */
+export const screeningCoverageInputSchema = z.object({
+  dimensions: z
+    .array(z.object({ id: z.string().max(100), name: z.string().trim().max(200) }))
+    .max(50),
+  questions: z.array(z.object({ prompt: z.string().trim().max(2000) })).max(50),
+});
 
 // Inputs for the AI job-description assist. All grounding fields are optional
 // except the title; "improve" additionally requires a non-empty current draft.
@@ -244,7 +318,6 @@ const applicationStateValues = [
   "interview_scheduled",
   "interview_completed",
   "interview_scored",
-  "reference_check",
   "manager_review",
   "final_interview_scheduling",
   "screening_expired",
@@ -294,12 +367,18 @@ export const campaignIdsSchema = z
 export const screeningQuestionSchema = z.object({
   id: z.string().optional(),
   prompt: z.string().min(10, "Question is too short").max(1000, "Question is too long"),
-  is_required: z.boolean(),
 });
 
 export const screeningQuestionsArraySchema = z
   .array(screeningQuestionSchema)
   .min(1, "At least one question is required")
+  .max(15, "Too many questions");
+
+// Same shape, but empty is legal. `saveScreeningQuestions` refuses an empty set
+// because wiping a live campaign's questions silently breaks the approve gate;
+// creating a campaign without them is a normal, recoverable starting point.
+export const screeningQuestionsDraftSchema = z
+  .array(screeningQuestionSchema)
   .max(15, "Too many questions");
 
 export const screeningAnswerSchema = z.object({

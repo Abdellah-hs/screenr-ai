@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { extractMarkdownWithMarker, MarkerError } from "./marker";
+import { extractMarkdownWithMarker, isUnreadableDocument, MarkerError } from "./marker";
 
 const PDF_MIME = "application/pdf";
 const POLL_INTERVAL_MS = 2000;
-const POLL_MAX_ATTEMPTS = 25;
+const POLL_MAX_ATTEMPTS = 90;
 const CHECK_URL = "https://www.datalab.to/api/v1/convert/check/abc123";
 
 const fetchMock = vi.fn();
@@ -198,6 +198,23 @@ describe("extractMarkdownWithMarker", () => {
     await expect(
       drive(extractMarkdownWithMarker(Buffer.from("x"), PDF_MIME)),
     ).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
+  it("calls the document unreadable only when Marker itself failed the conversion", async () => {
+    // The candidate is told "we couldn't read that file" off the back of this,
+    // so every kind that is OUR side of the wire must answer false.
+    expect(isUnreadableDocument(new MarkerError("conversion_failed", "bad pdf"))).toBe(true);
+
+    for (const kind of [
+      "missing_api_key",
+      "submit_failed",
+      "poll_failed",
+      "timeout",
+      "malformed_response",
+    ] as const) {
+      expect(isUnreadableDocument(new MarkerError(kind, kind))).toBe(false);
+    }
+    expect(isUnreadableDocument(new Error("socket hang up"))).toBe(false);
   });
 
   it("surfaces failures as MarkerError instances", async () => {

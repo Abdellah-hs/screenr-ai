@@ -11,8 +11,14 @@ const Card = forwardRef<HTMLDivElement, CardProps>(
       <div
         ref={ref}
         className={cn(
-          "bg-card text-card-foreground p-6 rounded-xl shadow-md transition-all duration-200",
-          interactive && "cursor-pointer hover:shadow-lg hover:-translate-y-[2px]",
+          // A hairline border carries the edge. Shadow is reserved for things
+          // that genuinely float — dropdowns, modals, toasts — because a 4px
+          // shadow under all nine panels of a campaign page reads as noise.
+          "bg-card text-card-foreground p-6 rounded-xl border border-border shadow-sm",
+          // Hover is colour, not lift: a card that rises under the pointer
+          // shifts everything below it on a scrolling list.
+          interactive &&
+            "cursor-pointer transition-colors duration-150 hover:bg-[#F9FAFB] hover:border-[#D1D5DB]",
           className
         )}
         {...props}

@@ -3,6 +3,7 @@
 import type { ScreeningCriterion, EvaluationRubric } from "@/lib/constants";
 import {
   aiDescriptionSchema,
+  rubricDimensionSuggestionSchema,
   generateDescriptionSchema,
   socialPostSchema,
   type GenerateDescriptionInput,
@@ -17,6 +18,7 @@ import {
   generateSocialPosts as aiGenerateSocialPosts,
   type SocialPosts,
 } from "@/lib/services/openai";
+import { generateQuestionsForRole } from "@/lib/services/screening-questions";
 
 const AI_GEN_LIMIT = { name: "ai-generate", maxRequests: 10, windowMs: 5 * 60 * 1000 };
 
@@ -37,6 +39,36 @@ export async function generateRubricDimensions(
   checkRateLimit(userId, AI_GEN_LIMIT);
   const validatedDescription = aiDescriptionSchema.parse(description);
   return aiGenerateRubricDimensions(validatedDescription, campaignId);
+}
+
+/**
+ * Draft screening questions before the campaign row exists. This is the
+ * create-wizard counterpart to `generateScreeningQuestions(campaignId)` in
+ * `actions/screening-questions.ts`, which reads its inputs back out of the
+ * database and so cannot run before the campaign is saved. Advisory only: it
+ * returns questions for the recruiter to edit, and `createCampaign` persists
+ * them.
+ *
+ * The rubric comes from the caller because the wizard is *holding* it — the
+ * recruiter fills in the screening rubric on the same step, above this editor,
+ * and it lives in the draft. It used to send an empty list on the grounds that
+ * an unsaved campaign has no rubric to look up, which was true of the database
+ * and false of the screen: the questions were drafted blind against the very
+ * rubric their answers were about to be scored on.
+ */
+export async function generateScreeningQuestionsFromDescription(
+  description: string,
+  rubricDimensionNames: string[] = []
+): Promise<{ prompt: string }[]> {
+  const userId = await requireUserId();
+  checkRateLimit(userId, AI_GEN_LIMIT);
+  const validatedDescription = aiDescriptionSchema.parse(description);
+  const names = rubricDimensionSuggestionSchema.parse(rubricDimensionNames);
+
+  return generateQuestionsForRole({
+    jobDescription: validatedDescription,
+    rubricDimensions: names.map((name) => ({ name })),
+  });
 }
 
 /**

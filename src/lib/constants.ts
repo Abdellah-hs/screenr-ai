@@ -1,3 +1,5 @@
+import type { DeterministicResumeScoreResult } from "@/lib/resume-scoring/deterministic";
+
 // ─── Campaign Types ──────────────────────────────────────────────────────────
 
 export type CampaignStatus = "draft" | "active" | "paused" | "closed";
@@ -134,6 +136,11 @@ export interface Campaign {
   /** URL-safe slug for the public apply page (`/apply/<slug>`). */
   public_slug: string | null;
   automation_mode: AutomationMode;
+  /** Pass mark (0-100) for the CV stage. */
+  resume_threshold: number;
+  /** Pass mark (0-100) for the voice-screening stage. Separate from
+   *  `resume_threshold` because the two scores are different kinds of number —
+   *  one ranks CVs against a rubric, the other grades spoken answers. */
   screening_threshold: number;
   interview_persona: InterviewPersona;
   rubrics: EvaluationRubric[];
@@ -193,9 +200,37 @@ export const STATUS_COLORS: Record<CampaignStatus, string> = {
   closed: "bg-red-100 text-red-700",
 };
 
-export const AUTOMATION_MODES: { value: AutomationMode; label: string; description: string }[] = [
-  { value: "fully_auto", label: "Fully Automatic", description: "AI handles the entire pipeline autonomously" },
-  { value: "human_in_loop", label: "Human-in-the-Loop", description: "Manager reviews and approves at each stage" },
+/**
+ * Default pass mark for both scored gates (resume and voice screening) when a
+ * form omits one. Kept here so the campaign wizard, the edit form and the Zod
+ * parser cannot drift apart, and matched to the column defaults in
+ * `20260821120000_split_resume_screening_thresholds.sql`.
+ */
+export const DEFAULT_SCORE_THRESHOLD = 70;
+
+// The mode says whether a rule may act on a score without waiting for a person.
+// It does NOT hand the pipeline to the AI: the AI scores identically in both
+// modes and transitions nobody in either — see "AI Usage Rules" in CLAUDE.md.
+// Copy here used to read "AI handles the entire pipeline autonomously", which
+// described a product this one deliberately is not.
+/**
+ * The two automation modes, as `value` and `label` only.
+ *
+ * There is deliberately no `description` here, unlike `INTERVIEW_PERSONAS`
+ * below. There was one, and nothing rendered it: the wizard writes its own
+ * copy inline, and the only consumer of the constant's version was a settings
+ * component nothing imported. That left two descriptions of one setting, and
+ * the unshipped one had already drifted — it said `fully_auto` means candidates
+ * "advance on your thresholds", omitting that below the resume threshold they
+ * are REJECTED, unseen, which is the highest-consequence thing the mode does.
+ *
+ * Any new surface should render the wizard's wording, not reintroduce a second
+ * one here. Copy that describes a rule belongs next to the control that sets
+ * it, where an author can see the rule it is describing.
+ */
+export const AUTOMATION_MODES: { value: AutomationMode; label: string }[] = [
+  { value: "fully_auto", label: "Fully Automatic" },
+  { value: "human_in_loop", label: "Human-in-the-Loop" },
 ];
 
 export const INTERVIEW_PERSONAS: { value: InterviewPersona; label: string; description: string }[] = [
@@ -257,6 +292,158 @@ export const AI_AUDIT_STAGES: { value: AiAuditStage; label: string }[] = [
   { value: "interview_scoring", label: "Interview scoring" },
 ];
 
+// ─── Voice Screening ────────────────────────────────────────────────────────
+
+/**
+ * How long one ANSWER may take, measured from the candidate's FIRST WORD.
+ *
+ * This is the pacing lever for the whole call (decision 2026-08-24, replacing
+ * the global clock). Every question — a primary topic or a follow-up — gets its
+ * own minute, and the call lasts as long as its questions take.
+ *
+ * **One clock per question, armed when the question has been asked, and it only
+ * ever counts down** (decision 2026-08-25). Speech does not restart it.
+ *
+ * It used to start on the candidate's first word instead, so thinking time was
+ * free — and the counter therefore JUMPED UP when they began speaking, from
+ * whatever the silence fallback had left to a fresh minute. On screen that is a
+ * timer running backwards, which reads as broken however generous it actually
+ * is, and it was reported as a bug by the first person to watch a real call.
+ *
+ * The cost is real and was accepted: seconds spent deciding what to say now
+ * come out of the answer. A minute is generous enough to absorb it — the
+ * competency answer this stage looks for runs 30-45 seconds — and one honest
+ * falling number beats two clocks that are individually correct and jointly
+ * incomprehensible.
+ *
+ * The onset is still recorded (`answerStartedAt`) because "how long they took
+ * to start" is useful evidence on the transcript. It simply no longer moves the
+ * deadline.
+ *
+ * It replaced a fixed call budget that was a guillotine by construction: one
+ * clock over the whole call meant a slow first answer was silently paid for by
+ * the LAST topic, which then went unasked and scored the candidate zero on
+ * whatever the rubric graded it against. A per-answer budget puts the cost of a
+ * rambling answer on that answer, where it belongs, and it cannot reach the
+ * topics behind it.
+ *
+ * A minute is generous rather than tight: the competency answer this stage is
+ * looking for runs 30–45 seconds, so most answers end well inside it and the
+ * budget only ever bites on someone who has genuinely lost the thread.
+ */
+/**
+ * The languages a candidate may hold their screening call in.
+ *
+ * **Chosen by the candidate before the call opens, never by the model.** The
+ * interviewer is given their name and a summary of their CV, and left to decide
+ * it would read those and infer one — which is how a candidate who wanted
+ * English was greeted in French before they had said a word.
+ *
+ * It is a closed set because the value ends up inside the interviewer's own
+ * instructions. Anything a candidate can put in a prompt has to be one of a
+ * fixed list, never text they supplied.
+ */
+export const CALL_LANGUAGES = ["english", "french"] as const;
+
+export type CallLanguage = (typeof CALL_LANGUAGES)[number];
+
+/** What the candidate sees on the pre-call screen, in the language itself. */
+export const CALL_LANGUAGE_LABELS: Record<CallLanguage, string> = {
+  english: "English",
+  french: "Français",
+};
+
+/** The language a call runs in when the candidate has not chosen. */
+export const DEFAULT_CALL_LANGUAGE: CallLanguage = "english";
+
+export const SCREENING_ANSWER_BUDGET_MS = 60_000;
+
+/**
+ * The absolute ceiling on a screening room, in minutes. Nothing quotes it,
+ * nothing displays it, and a normal call never approaches it.
+ *
+ * It is NOT a pacing device — that is `SCREENING_ANSWER_BUDGET_MS`. It is the
+ * safety net for the failures pacing cannot reach: a worker that dies mid-call,
+ * a model that loops without ever closing, a candidate who walks away with the
+ * tab open. Each of those leaves an OpenAI Realtime session billing by the
+ * minute and a candidate with no way out, so a bound has to exist even though
+ * the candidate must never feel one.
+ *
+ * Deliberately far above any real call, and the arithmetic is worth stating
+ * because it is larger than it looks. Eight topics with a follow-up each is
+ * sixteen questions; every one of them may run its full minute AND spend its
+ * grace period, which is twenty-four minutes of answering before the
+ * interviewer has said a word. Thirty is the first round number clear of that
+ * — a bound set below it would start cutting legitimate calls short, which is
+ * the guillotine this whole change removed.
+ *
+ * It also says something the recruiter should hear: an eight-topic rubric is a
+ * twenty-minute conversation in the worst case. The remedy is fewer topics,
+ * which is what `checkScreeningQuestionCoverage` already pushes.
+ *
+ * This is also the constant that retired the old `MAX_SCREENING_CALL_MINUTES <=
+ * INTERVIEW_DURATION_MINUTES` invariant. That bound said the cheap filter must
+ * not outrun the deep stage, which was the right rule while screening had a
+ * fixed length. It no longer has one: the EXPECTED call is
+ * `screeningCallEstimateMinutes` — about seven minutes at five topics, still
+ * comfortably under the interview — and the number below is a failure bound,
+ * not a duration. Asserting a failure bound against a duration would compare
+ * two different kinds of thing and would force the safety net down to a value
+ * where it stopped being a safety net.
+ */
+export const SCREENING_CALL_BACKSTOP_MINUTES = 30;
+
+/**
+ * Roughly how long a screening call covering `topicCount` topics takes — an
+ * ESTIMATE shown to the candidate, never a limit enforced on them.
+ *
+ * The distinction is the entire point of the split. This number appears in the
+ * invitation email and on the pre-call screen so nobody starts a call without
+ * knowing what they are agreeing to; no timer is derived from it, and running
+ * over it costs the candidate nothing. Before 2026-08-24 one function fed both
+ * the copy AND the hard cut, so "about 5 minutes" was a promise and a threat in
+ * the same sentence.
+ *
+ * A minute a topic (the answer budget) plus two for the greeting, the goodbye,
+ * and the follow-ups that land on some topics but not all. The floor stops a
+ * three-topic call advertising itself as shorter than the setup it asks for —
+ * finding a quiet room and sorting out a microphone is not worth doing for
+ * three minutes.
+ */
+export function screeningCallEstimateMinutes(topicCount: number): number {
+  return Math.max(5, topicCount + 2);
+}
+/*
+ * `TWO_FOLLOWUP_TOPIC_LIMIT` and `maxFollowUpsForTopicCount` were REMOVED with
+ * follow-ups themselves (decision 2026-08-27). A screening call is one
+ * question, one answer, the next question — so there is no allowance to size,
+ * and a constant naming a rule that no longer exists is worse than no constant.
+ *
+ * The reasoning they carried is still worth keeping, because it is what a
+ * future probe feature would have to answer: every answer costs the same minute
+ * (`SCREENING_ANSWER_BUDGET_MS`), so a probe is not paid for out of a shared
+ * clock — it is simply one more answer the candidate sits through. At eight
+ * topics, two probes each would be twenty-four questions and a call as long as
+ * the AI interview, which is the wrong shape for a screen.
+ */
+
+/**
+ * How much of the BACKSTOP is held back for covering whatever is still unasked.
+ *
+ * Crossing this line puts the interviewer into wrap-up: no more follow-ups,
+ * raise each remaining topic once, close warmly.
+ *
+ * Since 2026-08-24 this is a last resort rather than the normal shape of the
+ * ending. A call is paced per answer and ends when its topics are covered, so
+ * it should reach its own natural close long before the backstop comes into
+ * view. The reserve still exists because the backstop still exists: if a call
+ * ever does run all the way to `SCREENING_CALL_BACKSTOP_MINUTES`, arriving
+ * there mid-sentence with three topics unasked is strictly worse than arriving
+ * having raised them, and everything unasked when the room closes scores the
+ * candidate zero on whatever the rubric graded it against.
+ */
+export const SCREENING_WRAP_UP_RESERVE_MS = 60_000;
+
 // ─── AI Video Interview ─────────────────────────────────────────────────────
 
 /**
@@ -285,7 +472,22 @@ export const INTERVIEW_TARGET_QUESTIONS = 5;
 // ─── Candidate Types ────────────────────────────────────────────────────────
 
 export type CandidateStage = "applied" | "screening" | "interview" | "final_interview" | "hired" | "rejected";
-export type ScreeningTier = "strong" | "moderate" | "weak" | "no_match";
+/**
+ * The band shown next to a stage score.
+ *
+ * Two vocabularies live here on purpose. Resume screening now returns
+ * `eligible` / `ineligible`, because a must-have gate has no middle: calling
+ * someone who missed a non-negotiable requirement "moderate" invites an
+ * argument about the gate. The four graded values remain for stages that really
+ * are a scale, and for the history already stored under them.
+ */
+export type ScreeningTier =
+  | "strong"
+  | "moderate"
+  | "weak"
+  | "no_match"
+  | "eligible"
+  | "ineligible";
 
 export interface ScoreFactor {
   name: string;
@@ -295,10 +497,22 @@ export interface ScoreFactor {
 
 export interface CandidateScore {
   stage: "resume" | "screening" | "interview";
-  overall: number;
+  /**
+   * Null for an ineligible resume: they failed a must-have, so there is no
+   * ranking score. A number here would be read as "how close they were", which
+   * is the comparison a gate exists to refuse.
+   */
+  overall: number | null;
   tier?: ScreeningTier;
   ai_summary: string;
+  /** Legacy weighted breakdown. Present only on scores from before #? evidence screening. */
   factors: ScoreFactor[];
+  /**
+   * The evidence-based resume evaluation: per-criterion levels, verified quotes,
+   * and every failed must-have. Null for screening/interview scores and for
+   * resume scores produced by the old weighted scorer.
+   */
+  evaluation: DeterministicResumeScoreResult | null;
   scored_at: string;
   /**
    * Version of the stage's evaluation_rubric active when this score was
@@ -358,6 +572,48 @@ export interface Candidate {
   updated_at: string;
 }
 
+/**
+ * A stage score as a LIST needs it: the number and its tier, and nothing of the
+ * evidence behind it.
+ *
+ * The candidates table renders `overall` and `tier` in one cell. It has never
+ * rendered `ai_summary`, `factors`, or `evaluation` — and `evaluation` is the
+ * whole evidence-based resume result, every criterion with its verified quotes.
+ * Loading those to draw a two-digit number meant pulling them out of Postgres
+ * and then serialising them into the RSC payload for a client component that
+ * ignores them.
+ *
+ * A narrower type rather than nulls in the wide one, deliberately. A null
+ * `evaluation` already means something here — "this score came from the old
+ * weighted scorer" — so reusing it for "we did not load it" would make an
+ * absence of evidence indistinguishable from evidence of absence. Reading the
+ * evidence off a list row is now a type error, which is the correct answer:
+ * fetch the candidate.
+ */
+export type CandidateListScore = Pick<CandidateScore, "stage" | "overall" | "tier">;
+
+/**
+ * A candidate as the campaign's candidates table needs them. A structural
+ * subset of `Candidate`, so anything holding a full one can still be passed to
+ * a function that takes this.
+ */
+export type CandidateListRow = Pick<
+  Candidate,
+  | "id"
+  | "campaign_id"
+  | "name"
+  | "email"
+  | "current_title"
+  | "current_company"
+  | "stage"
+  | "status"
+  | "awaiting_human_review"
+  | "is_archived"
+  | "sla"
+  | "applied_at"
+  | "updated_at"
+> & { scores: CandidateListScore[] };
+
 // ─── Candidate Config ───────────────────────────────────────────────────────
 
 export const CANDIDATE_STAGES: { name: string; key: CandidateStage }[] = [
@@ -382,6 +638,8 @@ export const TIER_COLORS: Record<ScreeningTier, string> = {
   moderate: "bg-amber-100 text-amber-700",
   weak: "bg-red-100 text-red-700",
   no_match: "bg-red-200 text-red-800",
+  eligible: "bg-green-100 text-green-700",
+  ineligible: "bg-red-100 text-red-700",
 };
 
 /**
@@ -398,9 +656,38 @@ export const TIER_LABELS: Record<ScreeningTier, string> = {
   moderate: "Potential Match",
   weak: "Weak",
   no_match: "No Match",
+  eligible: "Eligible",
+  ineligible: "Ineligible",
 };
 
 export const STAGE_ORDER: CandidateStage[] = ["applied", "screening", "interview", "final_interview", "hired"];
+
+/**
+ * The two buckets that are an OUTCOME rather than a position in the pipeline.
+ *
+ * `toCandidateStage` folds every terminal application state into one of these,
+ * so they are where a candidate stops being "in play" — which is the split the
+ * overview's rail and its "N in play" figure are both built on.
+ */
+export const TERMINAL_CANDIDATE_STAGES: CandidateStage[] = ["hired", "rejected"];
+
+/** The stages somebody can still be moving through. */
+export const IN_PLAY_CANDIDATE_STAGES: CandidateStage[] = STAGE_ORDER.filter(
+  (stage) => !TERMINAL_CANDIDATE_STAGES.includes(stage),
+);
+
+/**
+ * How many candidates are still moving, given one campaign's stage buckets.
+ *
+ * Derived from {@link IN_PLAY_CANDIDATE_STAGES} rather than written out as a
+ * sum, because a hand-written sum fails SILENTLY when a stage is added: the new
+ * bucket is simply left out, and the figure then disagrees with the total minus
+ * the outcome rows printed on the same card, with nothing to say which is
+ * wrong.
+ */
+export function inPlayCandidateCount(buckets: Record<CandidateStage, number>): number {
+  return IN_PLAY_CANDIDATE_STAGES.reduce((total, stage) => total + (buckets[stage] ?? 0), 0);
+}
 
 // ─── Application State Machine ──────────────────────────────────────────────
 // The DB enum `candidate_stage_enum` is the source of truth for an
@@ -426,7 +713,6 @@ export type ApplicationState =
   | "interview_completed"
   | "interview_scored"
   // Post-interview
-  | "reference_check"
   | "manager_review"
   | "final_interview_scheduling"
   // Failure states — explicit, never silent
@@ -479,10 +765,9 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   interview_scheduling: ["interview_scheduled", "rejected"],
   interview_scheduled: ["interview_completed", "interview_no_show", "rejected"],
   interview_completed: ["interview_scored", "processing_failed", "rejected"],
-  interview_scored: ["reference_check", "manager_review", "rejected"],
+  interview_scored: ["manager_review", "rejected"],
 
   // Post-interview
-  reference_check: ["manager_review", "rejected"],
   manager_review: ["final_interview_scheduling", "hired", "rejected"],
   final_interview_scheduling: ["hired", "rejected"],
 
@@ -491,7 +776,21 @@ export const APPLICATION_STATE_TRANSITIONS: Record<ApplicationState, Application
   screening_expired: ["archived"],
   interview_no_show: ["archived"],
   interview_expired: ["archived"],
-  processing_failed: ["archived"],
+  /**
+   * The one failure state with a way back, because it is the only one that is
+   * OUR fault rather than a fact about the candidate.
+   *
+   * The others record something that happened in the world and cannot be
+   * un-happened: a link ran out, a window closed, somebody did not turn up.
+   * `processing_failed` records that our extractor timed out or a model was
+   * down while a real person's CV sat there unread. When that clears, the
+   * honest state is the one a working ingest would have produced — `new`,
+   * unscored, with the scoring rule still to run.
+   *
+   * `new` is the only edge deliberately. Routing a repair straight to a scored
+   * or approved state would let it skip the rule that owns that decision.
+   */
+  processing_failed: ["new", "archived"],
 
   // Terminal — only `archived` is reachable from them (for housekeeping),
   // and an archive can be undone back to here.
@@ -573,6 +872,33 @@ export function requiresDisposition(toState: ApplicationState): boolean {
 }
 
 /**
+ * Waiting on a person to decide, after the AI has taken it as far as it can.
+ *
+ * - `screening_scored` — the screening threshold advances but no longer
+ *   rejects (2026-08-22), so a below-the-line candidate rests here for a
+ *   person rather than being closed out.
+ * - `interview_scored` — HITL; the recruiter must advance it.
+ * - `manager_review` — a manager owes a decision.
+ *
+ * Surfaced regardless of automation mode: the failure is the same in either, a
+ * scored candidate nobody looks at, waiting on a person who does not know they
+ * are the bottleneck.
+ *
+ * Lives here because three separate readers must agree on it — the
+ * notification bell (`data/notifications.ts`), the campaign list's attention
+ * column (`campaigns/board-view.ts`) and the overview queue
+ * (`overview/decision-queue.ts`). It was three copies with three comments
+ * telling the reader to keep them in step, and they had already drifted:
+ * `screening_scored` reached the first two and was missed by the third, so the
+ * bell counted work the overview never named.
+ */
+export const AWAITING_DECISION_STATES: ApplicationState[] = [
+  "screening_scored",
+  "interview_scored",
+  "manager_review",
+];
+
+/**
  * Collapses a granular `ApplicationState` into one of the six coarse
  * `CandidateStage` buckets the pipeline UI renders (funnel cards, stage
  * pills, the stage badge). Exhaustive by construction: adding a new
@@ -603,7 +929,6 @@ export const APPLICATION_STAGE_BUCKET: Record<ApplicationState, CandidateStage> 
   interview_scheduled: "interview",
   interview_completed: "interview",
   interview_scored: "interview",
-  reference_check: "interview",
 
   manager_review: "final_interview",
   final_interview_scheduling: "final_interview",
@@ -646,9 +971,26 @@ const STAGE_SCORE_FOR: Record<CandidateStage, CandidateScore["stage"] | null> = 
  * resume score can't appear in a screening/interview row. Stage-specific by
  * design (see "Independent Stage Scores" in CLAUDE.md).
  */
-export function pipelineDisplayScore(
-  candidate: Pick<Candidate, "stage" | "scores">,
-): CandidateScore | null {
+/**
+ * Which stage's score a candidate sitting in this bucket shows, or null when
+ * the bucket has no reading of its own — the final human interview is a
+ * person's judgement, and hired/rejected are outcomes rather than sittings.
+ *
+ * The same map `pipelineDisplayScore` selects with, exposed so the candidates
+ * table can decide whether a Score column is worth drawing at all and what to
+ * call it. Reading the one map keeps the two answers from drifting: a column
+ * can never promise a number the selector would never return.
+ *
+ * Takes a `string` on purpose — its callers hold filter pills and URL params,
+ * not a narrowed union, and anything that is not a bucket has no score.
+ */
+export function stageScoreKind(stage: string): CandidateScore["stage"] | null {
+  return STAGE_SCORE_FOR[stage as CandidateStage] ?? null;
+}
+
+export function pipelineDisplayScore<S extends Pick<CandidateScore, "stage">>(
+  candidate: { stage: CandidateStage; scores: readonly S[] },
+): S | null {
   const target = STAGE_SCORE_FOR[candidate.stage];
   if (!target) return null;
   return candidate.scores.find((s) => s.stage === target) ?? null;
@@ -670,7 +1012,7 @@ export interface TalentPoolApplication {
   campaignRemoved: boolean;
   stage: CandidateStage;
   /** Stage-appropriate score (resume/screening/…), or null if none yet. */
-  score: { overall: number; stage: CandidateScore["stage"]; tier: ScreeningTier | null } | null;
+  score: { overall: number | null; stage: CandidateScore["stage"]; tier: ScreeningTier | null } | null;
   appliedAt: string;
 }
 

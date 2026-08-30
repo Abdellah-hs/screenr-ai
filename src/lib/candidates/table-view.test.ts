@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { Candidate } from "@/lib/constants";
+import { pipelineDisplayScore } from "@/lib/constants";
+import type { Candidate, CandidateScore, CandidateStage } from "@/lib/constants";
 import {
   candidateStageCounts,
+  candidateTableColumns,
   selectCandidates,
   type CandidateTableView,
 } from "./table-view";
@@ -25,6 +27,20 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
     applied_at: "2026-08-01T09:00:00.000Z",
     updated_at: "2026-08-10T09:00:00.000Z",
     ...overrides,
+  };
+}
+
+function score(stage: CandidateScore["stage"]): CandidateScore {
+  return {
+    stage,
+    overall: 71,
+    tier: "strong",
+    ai_summary: "",
+    factors: [],
+    evaluation: null,
+    scored_at: "2026-08-14T08:57:00.000Z",
+    rubric_version: 3,
+    current_rubric_version: 3,
   };
 }
 
@@ -183,6 +199,7 @@ describe("selectCandidates — sorting", () => {
         // `tier` is optional and never null on the domain type — omitted.
         ai_summary: "",
         factors: [],
+        evaluation: null,
         scored_at: "2026-08-10T09:00:00.000Z",
         rubric_version: null,
         current_rubric_version: null,
@@ -267,5 +284,88 @@ describe("candidateStageCounts", () => {
 
   it("reports zero overdue when no campaign SLA is configured", () => {
     expect(candidateStageCounts([candidate({ sla: null })]).overdue).toBe(0);
+  });
+});
+
+describe("candidateTableColumns — the Stage column", () => {
+  it("draws the Stage column only in the mixed 'all' list", () => {
+    expect(candidateTableColumns("all").stage).toBe(true);
+  });
+
+  it("drops it once every visible row shares a stage", () => {
+    for (const filter of ["applied", "screening", "interview", "final_interview"]) {
+      expect(candidateTableColumns(filter).stage).toBe(false);
+    }
+  });
+
+  it("drops it under the flag filters too, where the rows also read alike", () => {
+    expect(candidateTableColumns("pending_review").stage).toBe(false);
+    expect(candidateTableColumns("archived").stage).toBe(false);
+  });
+});
+
+describe("candidateTableColumns — the Score column", () => {
+  it("names the stage in the header instead of tagging every row", () => {
+    expect(candidateTableColumns("applied").scoreHeader).toBe("Resume score");
+    expect(candidateTableColumns("screening").scoreHeader).toBe("Screening score");
+    expect(candidateTableColumns("interview").scoreHeader).toBe("Interview score");
+  });
+
+  it("drops the column for a stage that produces no score of its own", () => {
+    for (const filter of ["final_interview", "hired", "rejected"]) {
+      expect(candidateTableColumns(filter).scoreHeader).toBeNull();
+    }
+  });
+
+  it("drops it in the 'all' list, where the numbers are not comparable", () => {
+    expect(candidateTableColumns("all").scoreHeader).toBeNull();
+  });
+
+  it("drops it for archived, which spans the whole pipeline", () => {
+    expect(candidateTableColumns("archived").scoreHeader).toBeNull();
+  });
+
+  it("shows the resume score for the awaiting-review queue", () => {
+    // Everyone awaiting review sits in `screening_review_pending`, which
+    // buckets as Applied — so the rows do share a stage, and it scores.
+    expect(candidateTableColumns("pending_review").scoreHeader).toBe("Resume score");
+  });
+
+  it("only draws a column where a score could actually appear", () => {
+    // The column must never promise a number `pipelineDisplayScore` would
+    // never return, or every cell renders a named absence instead.
+    const stages: CandidateStage[] = [
+      "applied",
+      "screening",
+      "interview",
+      "final_interview",
+      "hired",
+      "rejected",
+    ];
+
+    for (const stage of stages) {
+      const scored = pipelineDisplayScore({
+        stage,
+        scores: [
+          score("resume"),
+          score("screening"),
+          score("interview"),
+        ],
+      });
+
+      expect(candidateTableColumns(stage).scoreHeader !== null).toBe(scored !== null);
+    }
+  });
+});
+
+describe("candidateTableColumns — the pending-review flag", () => {
+  it("hides the flag when it is the filter itself", () => {
+    expect(candidateTableColumns("pending_review").pendingFlag).toBe(false);
+  });
+
+  it("keeps it everywhere else, where it still distinguishes rows", () => {
+    for (const filter of ["all", "applied", "screening", "archived"]) {
+      expect(candidateTableColumns(filter).pendingFlag).toBe(true);
+    }
   });
 });

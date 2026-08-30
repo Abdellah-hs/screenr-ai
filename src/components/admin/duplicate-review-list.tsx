@@ -78,9 +78,13 @@ export function DuplicateReviewList({
   }
 
   return (
-    <div className="space-y-4">
+    // A column that fits its parent, so only the CARDS scroll. The notice is
+    // deliberately outside that scroller: it reports what just happened to a
+    // card, and resolving one near the bottom of a long queue would otherwise
+    // fire a confirmation several screens above where the person is looking.
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {notice && (
-        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-sm text-[#065F46]">
+        <div className="shrink-0 flex items-start gap-2.5 p-3 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] text-sm text-[#065F46]">
           <svg
             className="w-4 h-4 mt-0.5 shrink-0"
             fill="none"
@@ -110,21 +114,27 @@ export function DuplicateReviewList({
           <p className="text-[#6B7280]">No duplicates to review — the queue is clear.</p>
         </div>
       ) : (
-        items.map((item) => (
-          <DuplicateCard
-            key={item.flag.id}
-            item={item}
-            disabled={isPending}
-            onResolve={(decision) => openResolution(item, decision)}
-          />
-        ))
+        // `pr-1` keeps the hairline scrollbar off the cards' right edge, and
+        // `pb-1` stops the last one sitting flush against the cut. The empty
+        // state stays outside: there is nothing to scroll, and a scroller
+        // around it would strand its centred illustration at the top.
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-1 pr-1">
+          {items.map((item) => (
+            <DuplicateCard
+              key={item.flag.id}
+              item={item}
+              disabled={isPending}
+              onResolve={(decision) => openResolution(item, decision)}
+            />
+          ))}
+        </div>
       )}
 
       <Modal open={active !== null} onClose={closeModal}>
         {active && (
           <>
             <ModalHeader>
-              <h2 className="text-lg font-semibold text-[#0C4A6E]">
+              <h2 className="text-lg font-semibold text-[#111827]">
                 {active.decision === "approved"
                   ? "Merge duplicate records?"
                   : "Keep records separate?"}
@@ -181,7 +191,7 @@ export function DuplicateReviewList({
                 type="button"
                 onClick={handleConfirm}
                 disabled={isPending || rationale.trim().length === 0}
-                className="px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer transition-colors hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer transition-colors hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isPending
                   ? "Saving…"
@@ -245,7 +255,7 @@ function DuplicateCard({
           type="button"
           onClick={() => onResolve("approved")}
           disabled={disabled}
-          className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#0369A1] rounded-lg cursor-pointer transition-colors hover:bg-[#0C4A6E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 px-4 py-2 text-sm font-medium text-white bg-[#111827] rounded-lg cursor-pointer transition-colors hover:bg-[#1F2937] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Merge into existing
         </button>
@@ -253,7 +263,7 @@ function DuplicateCard({
           type="button"
           onClick={() => onResolve("rejected")}
           disabled={disabled}
-          className="flex-1 px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer transition-colors hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0369A1] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex-1 px-4 py-2 text-sm font-medium text-[#4B5563] bg-white border border-[#D1D5DB] rounded-lg cursor-pointer transition-colors hover:bg-[#F9FAFB] hover:text-[#111827] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Keep separate
         </button>

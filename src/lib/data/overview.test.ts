@@ -11,9 +11,9 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   fetchActiveCampaignsLite,
   fetchPipelineStageCounts,
-  fetchHiredCount,
   fetchExpiringScreeningLinks,
   fetchRecentOutcomes,
+  fetchDecisionQueueRows,
 } from "./overview";
 
 beforeEach(() => {
@@ -79,7 +79,7 @@ describe("fetchPipelineStageCounts", () => {
 
     const result = await fetchPipelineStageCounts("user-1");
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       buckets: {
         applied: 2,
         screening: 1,
@@ -92,6 +92,37 @@ describe("fetchPipelineStageCounts", () => {
     });
   });
 
+  // The rail called the whole `rejected` bucket "Rejected" while the decision
+  // queue named the lapsed half of it "nobody was rejected" — one screen, two
+  // claims about the same people.
+  it("separates people somebody rejected from people who just ran out", async () => {
+    terminal.mockResolvedValue({
+      data: [
+        { status: "rejected" },
+        { status: "screening_expired" },
+        { status: "interview_no_show" },
+        { status: "processing_failed" },
+        { status: "archived" },
+      ],
+      error: null,
+    });
+
+    const result = await fetchPipelineStageCounts("user-1");
+
+    expect(result).toMatchObject({ rejectedOutright: 1, closedOut: 4 });
+  });
+
+  it("always splits the rejected bucket back into itself", async () => {
+    terminal.mockResolvedValue({
+      data: [{ status: "rejected" }, { status: "archived" }, { status: "hired" }],
+      error: null,
+    });
+
+    const { buckets, rejectedOutright, closedOut } = await fetchPipelineStageCounts("u");
+
+    expect(rejectedOutright + closedOut).toBe(buckets.rejected);
+  });
+
   it("returns zeroed buckets on a query error", async () => {
     terminal.mockResolvedValue({ data: null, error: { message: "boom" } });
 
@@ -100,31 +131,100 @@ describe("fetchPipelineStageCounts", () => {
     expect(result).toEqual({
       buckets: { applied: 0, screening: 0, interview: 0, final_interview: 0, hired: 0, rejected: 0 },
       total: 0,
+      rejectedOutright: 0,
+      closedOut: 0,
     });
   });
 });
 
-describe("fetchHiredCount", () => {
-  // from("applications").select(.., {count}).eq("status").eq("campaigns.user_id").is(...)
+describe("fetchDecisionQueueRows", () => {
+  // from("applications").select().in("status").eq("campaigns.user_id").is("campaigns.deleted_at")
   const terminal = vi.fn();
+  let selected = "";
+
   beforeEach(() => {
+    selected = "";
     mockFrom.mockReturnValue({
-      select: () => ({ eq: () => ({ eq: () => ({ is: terminal }) }) }),
+      select: (columns: string) => {
+        selected = columns;
+        return { in: () => ({ eq: () => ({ is: terminal }) }) };
+      },
     });
   });
 
-  it("returns the exact hired count", async () => {
-    terminal.mockResolvedValue({ count: 4, error: null });
+  function queueRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "a1",
+      campaign_id: "c1",
+      status: "interview_scored",
+      updated_at: "2026-08-20T10:00:00.000Z",
+      resume_score: 70,
+      screening_tier: "eligible",
+      candidates: { first_name: "Jane", last_name: "Doe" },
+      campaigns: { title: "AI Engineer", status: "active" },
+      screening_question_responses: { overall_score: 75, status: "scored" },
+      interview_sessions: { scores: { overall_score: 61 } },
+      ...overrides,
+    };
+  }
 
-    expect(await fetchHiredCount("user-1")).toBe(4);
+  it("reads each stage score from the row that actually holds it", async () => {
+    terminal.mockResolvedValue({ data: [queueRow()], error: null });
+
+    const [row] = await fetchDecisionQueueRows("user-1");
+
+    expect(row).toMatchObject({
+      resumeScore: 70,
+      resumeTier: "eligible",
+      screeningScore: 75,
+      interviewScore: 61,
+    });
   });
 
-  it("returns 0 when the count is null or errors", async () => {
-    terminal.mockResolvedValue({ count: null, error: null });
-    expect(await fetchHiredCount("user-1")).toBe(0);
+  // `applications.screening_q_score` and `applications.interview_score` exist
+  // in the schema and are written by nothing, so selecting them returned null
+  // for every candidate in the group headed "Scored".
+  it("does not read the two application columns nothing writes", async () => {
+    terminal.mockResolvedValue({ data: [], error: null });
 
-    terminal.mockResolvedValue({ count: null, error: { message: "boom" } });
-    expect(await fetchHiredCount("user-1")).toBe(0);
+    await fetchDecisionQueueRows("user-1");
+
+    expect(selected).not.toContain("screening_q_score");
+    expect(selected).not.toContain("interview_score");
+  });
+
+  it("treats an unscored screening response as no screening score", async () => {
+    terminal.mockResolvedValue({
+      data: [
+        queueRow({
+          screening_question_responses: { overall_score: 75, status: "completed" },
+        }),
+      ],
+      error: null,
+    });
+
+    const [row] = await fetchDecisionQueueRows("user-1");
+
+    expect(row.screeningScore).toBeNull();
+  });
+
+  it("survives an application with neither a screening response nor a session", async () => {
+    terminal.mockResolvedValue({
+      data: [
+        queueRow({ screening_question_responses: null, interview_sessions: null }),
+      ],
+      error: null,
+    });
+
+    const [row] = await fetchDecisionQueueRows("user-1");
+
+    expect(row).toMatchObject({ screeningScore: null, interviewScore: null });
+  });
+
+  it("returns [] on a query error", async () => {
+    terminal.mockResolvedValue({ data: null, error: { message: "boom" } });
+
+    expect(await fetchDecisionQueueRows("user-1")).toEqual([]);
   });
 });
 

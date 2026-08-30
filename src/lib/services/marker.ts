@@ -20,8 +20,23 @@ import { z } from "zod/v4";
 
 const MARKER_API_URL = "https://www.datalab.to/api/v1/convert";
 const POLL_INTERVAL_MS = 2000;
-// ~50s of polling, comfortably inside the 60s Vercel Pro Server Action limit.
-const POLL_MAX_ATTEMPTS = 25;
+/**
+ * ~3 minutes of polling.
+ *
+ * It was 25 attempts (~50s), sized against "the 60s Vercel Server Action
+ * limit" — a bound that stopped applying when resume ingest moved into
+ * `after()`, which runs on the route's own `maxDuration` (300s on the apply
+ * page) rather than inside the candidate's request. So the budget was capping
+ * Marker at a third of the time actually available, and a long CV — many
+ * pages, scanned, or simply queued behind other jobs on Datalab's side — timed
+ * out on a conversion that would have finished.
+ *
+ * The cost of that timeout is not a retry: {@link MarkerErrorKind} `timeout`
+ * ends the ingest, so the application is never created and nobody sees the
+ * candidate. Waiting three minutes in a background task is cheap; losing an
+ * applicant is not.
+ */
+const POLL_MAX_ATTEMPTS = 90;
 
 export type MarkerErrorKind =
   | "missing_api_key"
@@ -39,6 +54,22 @@ export class MarkerError extends Error {
     this.name = "MarkerError";
     this.kind = kind;
   }
+}
+
+/**
+ * Was this failure the DOCUMENT's fault, or ours?
+ *
+ * Only `conversion_failed` is the document: Marker read it, tried, and said it
+ * could not convert this file. Every other kind is our side of the wire — no
+ * API key, an HTTP error, a body we could not parse, or a conversion that
+ * outran {@link POLL_MAX_ATTEMPTS}.
+ *
+ * The distinction is candidate-facing, which is why it lives here rather than
+ * in a caller's `catch`. Telling somebody their CV is unreadable because our
+ * extractor gave up sends them away to fix a file that was never broken.
+ */
+export function isUnreadableDocument(err: unknown): boolean {
+  return err instanceof MarkerError && err.kind === "conversion_failed";
 }
 
 export interface MarkerResult {

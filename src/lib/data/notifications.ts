@@ -1,5 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
-import { toCandidateStage, SLA_STAGES, type SlaStage, type SlaTimer } from "@/lib/constants";
+import {
+  toCandidateStage,
+  SLA_STAGES,
+  AWAITING_DECISION_STATES,
+  type SlaStage,
+  type SlaTimer,
+} from "@/lib/constants";
 import {
   applicationSlaStatus,
   slaStageFor,
@@ -128,23 +134,11 @@ export async function fetchExpiredInterviewNotifications(
     .sort((a, b) => b.expired_count - a.expired_count);
 }
 
-/**
- * The post-interview states where an application is waiting on a **person**:
- * `interview_scored` (HITL — the recruiter must advance it) and `manager_review`
- * (a manager owes a decision).
- *
- * Both are surfaced regardless of automation mode, because the failure they
- * guard against is the same in either: a scored interview that nobody looks at.
- * Under `human_in_loop` the application rests at `interview_scored` by design;
- * under `fully_auto` it lands in `manager_review` on its own. Neither state sent
- * any signal before, so a finished interview could sit indefinitely with the
- * candidate waiting and nobody aware they were the bottleneck.
- */
-const AWAITING_DECISION_STATES = ["interview_scored", "manager_review"] as const;
 
 /**
- * Campaigns owned by `userId` with applications parked in a post-interview
- * human-decision state. Grouped one row per campaign, busiest first. SELECT-only.
+ * Campaigns owned by `userId` with applications parked in a state that is
+ * waiting on a human decision. Grouped one row per campaign, busiest first.
+ * SELECT-only.
  */
 export async function fetchAwaitingDecisionNotifications(
   userId: string,
@@ -153,7 +147,7 @@ export async function fetchAwaitingDecisionNotifications(
   const { data, error } = await supabase
     .from("applications")
     .select("campaign_id, campaigns!inner(title, user_id, deleted_at)")
-    .in("status", [...AWAITING_DECISION_STATES])
+    .in("status", AWAITING_DECISION_STATES)
     .eq("campaigns.user_id", userId)
     .is("campaigns.deleted_at", null);
 

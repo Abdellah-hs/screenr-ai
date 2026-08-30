@@ -1,29 +1,13 @@
+import Link from "next/link";
 import {
   DISPOSITION_LABELS,
   TRANSITION_ACTOR_LABELS,
   formatApplicationState,
-  type TransitionActor,
 } from "@/lib/constants";
 import type { ActivityTimeline, TimelineEntry } from "@/lib/rules/transition-timeline";
-
-/**
- * The candidate's full history, read straight off the append-only transitions
- * log (PRD 3.6.3), with overrides shown beside the automated decision they
- * reversed (PRD 3.7.2).
- *
- * A server component: the data never changes without a page action, so there
- * is nothing here to hydrate. It also keeps `hoursInCurrentState` — which is
- * computed from the server's clock — from disagreeing with itself after
- * hydration.
- */
-
-const actorTone: Record<TransitionActor, string> = {
-  // Automated steps are the background hum of the pipeline; a person acting is
-  // the thing worth finding when you scan this list, so only that one is inked.
-  system: "text-[#6B7280] bg-[#F3F4F6] border-[#E5E7EB]",
-  ai: "text-[#7C3AED] bg-[#F5F3FF] border-[#DDD6FE]",
-  recruiter: "text-[#0369A1] bg-[#F0F9FF] border-[#BAE6FD]",
-};
+import { eventLabel } from "@/lib/campaigns/detail-view";
+import { ActorMark, actorFromTransition } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 /** Rounded, human duration: "3 days", "6 hours", "under an hour". */
 function formatDuration(hours: number): string {
@@ -36,127 +20,172 @@ function formatDuration(hours: number): string {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
 
+/**
+ * The candidate's full history, read straight off the append-only transitions
+ * log (PRD 3.6.3), with overrides shown beside the automated decision they
+ * reversed (PRD 3.7.2).
+ *
+ * A server component: the data never changes without a page action, so there
+ * is nothing here to hydrate.
+ *
+ * The header does not report time-in-current-state. Each entry already carries
+ * its own "after N hours in X", so a single figure up top restated the last of
+ * them in a place that looked like a fact about the whole history.
+ */
+
+
 function formatWhen(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
-    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
 }
 
-export function ActivityTimelinePanel({ timeline }: { timeline: ActivityTimeline }) {
-  const { entries, hoursInCurrentState } = timeline;
+export function ActivityTimelinePanel({
+  timeline,
+  auditHref,
+  density = "rail",
+}: {
+  timeline: ActivityTimeline;
+  auditHref?: string;
+  /**
+   * `rail` — 352px beside the evidence, where the list scrolls inside itself.
+   * `page` — at the foot of the evidence column, at full measure. The history
+   * is the compliance record, so at full measure it is shown whole: a scroll
+   * region inside a scrolling page hides entries from anyone who does not
+   * discover the inner scrollbar.
+   */
+  density?: "rail" | "page";
+}) {
+  const { entries } = timeline;
+  const wide = density === "page";
 
   return (
-    <div className="bg-white rounded-xl border border-[#E5E7EB] p-5">
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
-          <h3 className="text-sm font-semibold text-[#0C4A6E]">Activity</h3>
-          <p className="text-xs text-[#6B7280] mt-0.5">
-            Every state change on this application, in order, with who caused it
-            and why. Append-only — nothing here can be edited or removed.
-          </p>
-        </div>
-        {hoursInCurrentState !== null && (
-          <span
-            className="shrink-0 rounded-md border border-[#E5E7EB] bg-[#F9FAFB] px-2 py-1 text-[11px] font-medium text-[#6B7280]"
-            title="Time since the last transition — the number SLA breaches are measured against"
+    <section className="overflow-hidden rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+      <div
+        className={cn(
+          "flex items-center justify-between gap-3 border-b border-[#F3F4F6]",
+          wide ? "px-6 py-4" : "px-[18px] py-3.5",
+        )}
+      >
+        <h2
+          className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6B7280]"
+          title="Every state change on this application, append-only — nothing here can be edited or removed."
+        >
+          History · {entries.length}
+        </h2>
+        {auditHref && (
+          <Link
+            href={auditHref}
+            className="text-xs font-semibold text-primary hover:underline"
           >
-            {formatDuration(hoursInCurrentState)} in this state
-          </span>
+            Audit log
+          </Link>
         )}
       </div>
 
       {entries.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-[#E5E7EB] bg-[#F9FAFB] px-4 py-8 text-center">
-          <p className="text-sm text-[#6B7280]">No recorded activity yet.</p>
-          <p className="mt-1 text-xs text-[#9CA3AF]">
-            The first entry appears when this application changes state.
-          </p>
-        </div>
+        <p
+          className={cn(
+            "py-8 text-center text-[13px] text-[#6B7280]",
+            wide ? "px-6" : "px-[18px]",
+          )}
+        >
+          Nothing has moved yet. The first entry appears when this application
+          changes state.
+        </p>
       ) : (
-        <ol className="relative space-y-0">
+        <ol
+          className={cn(
+            wide ? "px-6 py-5" : "max-h-[340px] overflow-y-auto px-[18px] py-4",
+          )}
+        >
           {entries.map((entry, index) => (
             <TimelineRow
               key={entry.id}
               entry={entry}
               isLast={index === entries.length - 1}
+              wide={wide}
             />
           ))}
         </ol>
       )}
-    </div>
+    </section>
   );
 }
 
-function TimelineRow({ entry, isLast }: { entry: TimelineEntry; isLast: boolean }) {
+function TimelineRow({
+  entry,
+  isLast,
+  wide = false,
+}: {
+  entry: TimelineEntry;
+  isLast: boolean;
+  wide?: boolean;
+}) {
   const isOverride = entry.overrides !== null;
+  // One step up at full measure. 11px type set against an 820px column reads
+  // as a footnote, and the history is evidence like everything above it.
+  const body = wide ? "text-[13px]" : "text-xs";
+  const meta = wide ? "text-xs" : "text-[11px]";
 
   return (
-    <li className="relative flex gap-3 pb-5 last:pb-0">
-      {/* Spine — drawn per row rather than as one absolute element so it stops
-          cleanly at the final entry instead of trailing past it. */}
-      {!isLast && (
-        <span
-          className="absolute left-[7px] top-4 bottom-0 w-px bg-[#E5E7EB]"
-          aria-hidden="true"
+    <li className={cn("flex", wide ? "gap-3.5" : "gap-3")}>
+      <div className="flex flex-none flex-col items-center">
+        {/* The actor mark, not a dot. A rule firing and a person deciding must
+            never look the same in a history — that distinction is the whole
+            claim this product makes about how it treats candidates. */}
+        <ActorMark
+          actor={actorFromTransition(entry.actor)}
+          size={wide ? "md" : "sm"}
+          className={isOverride ? "ring-2 ring-[#FDE68A]" : undefined}
         />
-      )}
+        {!isLast && (
+          <span className="my-[5px] w-px flex-1 bg-[#E5E7EB]" aria-hidden="true" />
+        )}
+      </div>
 
-      <span
-        className={`relative z-10 mt-1 h-[15px] w-[15px] shrink-0 rounded-full border-2 bg-white ${
-          isOverride
-            ? "border-[#D97706]"
-            : entry.actor === "recruiter"
-              ? "border-[#0369A1]"
-              : "border-[#D1D5DB]"
-        }`}
-        aria-hidden="true"
-      />
-
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-[#111827]">
-            {formatApplicationState(entry.toState)}
-          </span>
-          <span
-            className={`inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${
-              actorTone[entry.actor]
-            }`}
-          >
+      <div className={`min-w-0 flex-1 ${isLast ? "" : "pb-3.5"}`}>
+        {/* Separated rather than case-folded. Lower-casing the event to make it
+            read as a sentence turned "CV scored, waiting for approval" into
+            "cv scored…", and there is no case surgery that knows an acronym
+            from an ordinary word. */}
+        <p className={cn("mb-0.5 leading-[1.5] text-ink", body)}>
+          <strong className="font-semibold">
             {TRANSITION_ACTOR_LABELS[entry.actor]}
-          </span>
+          </strong>
+          <span className="mx-1 text-[#D1D5DB]">·</span>
+          {eventLabel(entry.toState)}
           {isOverride && (
-            <span className="inline-flex rounded-md border border-[#FDE68A] bg-[#FFFBEB] px-1.5 py-0.5 text-[10px] font-medium text-[#B45309]">
+            <span className="ml-1.5 rounded bg-[#FFFBEB] px-1.5 py-px text-[10px] font-semibold text-[#B45309]">
               Override
             </span>
           )}
-        </div>
+        </p>
 
-        <p className="mt-0.5 text-xs text-[#9CA3AF]">
-          {entry.fromState && (
+        <p className={cn("text-[#6B7280]", meta)}>
+          {formatWhen(entry.at)}
+          {entry.actor === "ai" && " · advisory"}
+          {entry.hoursInPreviousState !== null && entry.fromState && (
             <>
-              from {formatApplicationState(entry.fromState)}
-              {entry.hoursInPreviousState !== null && (
-                <> · after {formatDuration(entry.hoursInPreviousState)}</>
-              )}
-              {" · "}
+              {" "}
+              · after {formatDuration(entry.hoursInPreviousState)} in{" "}
+              {formatApplicationState(entry.fromState)}
             </>
           )}
-          {formatWhen(entry.at)}
         </p>
 
         {entry.rationale && (
-          <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-[#FAFAFA] px-2.5 py-1.5 text-xs leading-relaxed text-[#4B5563]">
+          <p className={cn("mt-1.5 whitespace-pre-wrap rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] px-2.5 py-2 leading-[1.5] text-[#374151]", meta)}>
             {entry.rationale}
           </p>
         )}
 
         {entry.disposition && (
-          <p className="mt-1.5 text-xs text-[#6B7280]">
-            <span className="font-medium text-[#374151]">
+          <p className={cn("mt-1.5 text-[#6B7280]", meta)}>
+            <span className="font-semibold text-[#374151]">
               {DISPOSITION_LABELS[entry.disposition.code]}
             </span>
             {entry.disposition.description &&
@@ -170,13 +199,13 @@ function TimelineRow({ entry, isLast }: { entry: TimelineEntry; isLast: boolean 
             without the decision it reversed is how a reasonable call starts to
             look arbitrary six months later. */}
         {entry.overrides && (
-          <div className="mt-2 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-2">
-            <p className="text-[11px] font-medium text-[#92400E]">
+          <div className="mt-1.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-2">
+            <p className={cn("font-semibold text-[#92400E]", meta)}>
               Reversed an automated decision:{" "}
               {formatApplicationState(entry.overrides.toState)}
             </p>
             {entry.overrides.rationale && (
-              <p className="mt-0.5 text-[11px] leading-relaxed text-[#B45309]">
+              <p className={cn("mt-0.5 leading-[1.5] text-[#B45309]", meta)}>
                 {entry.overrides.rationale}
               </p>
             )}

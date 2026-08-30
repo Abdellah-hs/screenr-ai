@@ -20,6 +20,12 @@ const mockFindCandidateByEmail = vi.fn();
 const mockFindCandidateByPhone = vi.fn();
 const mockFlagDuplicateCandidate = vi.fn();
 
+const mockVerifyCampaignOwnership = vi.fn();
+
+vi.mock("@/lib/data/campaigns", () => ({
+  verifyCampaignOwnership: (...args: unknown[]) => mockVerifyCampaignOwnership(...args),
+}));
+
 vi.mock("@/lib/data/duplicate-flags", () => ({
   findCandidateByEmail: (...args: unknown[]) => mockFindCandidateByEmail(...args),
   findCandidateByPhone: (...args: unknown[]) => mockFindCandidateByPhone(...args),
@@ -29,10 +35,12 @@ vi.mock("@/lib/data/duplicate-flags", () => ({
 import {
   upsertCandidate,
   saveResumeScore,
+  fetchCandidatesByCampaignId,
   fetchInterviewContextByApplicationId,
   fetchInterviewScoringContext,
 } from "./candidates";
 import type { ParsedResumeData } from "@/lib/services/openai";
+import type { DeterministicResumeScoreResult } from "@/lib/resume-scoring";
 
 const baseResume: ParsedResumeData & { email: string } = {
   document_type: "cv",
@@ -156,22 +164,43 @@ describe("upsertCandidate", () => {
 });
 
 describe("saveResumeScore", () => {
+  function makeResult(
+    overrides: Partial<DeterministicResumeScoreResult> = {},
+  ): DeterministicResumeScoreResult {
+    return {
+      eligible: true,
+      ranking_score: 84,
+      tier: "eligible",
+      criteria: [
+        {
+          id: "c1",
+          label: "React",
+          priority: "must_have",
+          evidence_level: "strong",
+          score: 80,
+          evidence_items: [],
+          extracted_relevant_months: null,
+          notes: null,
+        },
+      ],
+      failed_must_haves: [],
+      validation_warnings: [],
+      ...overrides,
+    };
+  }
+
   const validArgs = {
     applicationId: "app-1",
     campaignId: "camp-1",
     candidateId: "cand-1",
-    score: 84,
-    tier: "strong" as const,
+    result: makeResult(),
     rationale: "Strong React + TypeScript fit; led similar systems.",
-    factors: [
-      { name: "React", weight: 0.6, score: 90 },
-      { name: "TypeScript", weight: 0.4, score: 75 },
-    ],
     rubricVersion: 2,
     audit: {
       model: "gpt-4o-mini",
-      promptVersion: "v1_resume_scoring",
-      rawOutput: '{"overall_score":84,"tier":"strong","rationale":"Strong React + TypeScript fit; led similar systems.","factors":[]}',
+      promptVersion: "v3_resume_evidence",
+      rawOutput: '{"criteria":[],"extraction_summary":"..."}',
+      systemFingerprint: "fp_abc123",
       inputSnapshot: { criteria_count: 2, criteria_labels: ["React", "TypeScript"] },
     },
   };
@@ -185,7 +214,8 @@ describe("saveResumeScore", () => {
     expect(mockApplicationsUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         resume_score: 84,
-        screening_tier: "strong",
+        resume_eligible: true,
+        screening_tier: "eligible",
         score_rationale: validArgs.rationale,
       }),
     );
@@ -196,12 +226,59 @@ describe("saveResumeScore", () => {
         candidate_id: "cand-1",
         stage: "resume_scoring",
         model: "gpt-4o-mini",
-        prompt_version: "v1_resume_scoring",
+        prompt_version: "v3_resume_evidence",
         raw_output: validArgs.audit.rawOutput,
         parsed_score: 84,
         rationale: validArgs.rationale,
-        action_taken: "scored",
+        action_taken: "scored_eligible",
       }),
+    );
+  });
+
+  it("writes a null ranking score and the ineligible tier for a failed must-have", async () => {
+    await saveResumeScore({
+      ...validArgs,
+      result: makeResult({
+        eligible: false,
+        ranking_score: null,
+        tier: "ineligible",
+        failed_must_haves: [
+          {
+            criterion_label: "React",
+            evidence_level: "weak",
+            score: 25,
+            minimum_score: 60,
+            reason: "React did not reach the required minimum evidence score.",
+          },
+        ],
+      }),
+    });
+
+    expect(mockApplicationsUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resume_score: null,
+        resume_eligible: false,
+        screening_tier: "ineligible",
+      }),
+    );
+    expect(mockAuditInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ parsed_score: null, action_taken: "scored_ineligible" }),
+    );
+  });
+
+  it("clears the legacy weighted factors so a re-score cannot render stale weights", async () => {
+    await saveResumeScore(validArgs);
+
+    expect(mockApplicationsUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ score_factors: null }),
+    );
+  });
+
+  it("persists the full evaluation so the decision is auditable", async () => {
+    await saveResumeScore(validArgs);
+
+    expect(mockApplicationsUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ resume_evaluation: validArgs.result }),
     );
   });
 
@@ -408,5 +485,61 @@ describe("interview context reads", () => {
 
       expect(ctx?.interview_persona).toBe("socratic");
     });
+  });
+});
+
+
+/**
+ * A dropped connection and an empty campaign are not the same fact, and the
+ * caller cannot tell them apart from an empty array. Swallowing the error here
+ * rendered a funnel of confident zeros over a campaign that had candidates.
+ */
+describe("fetchCandidatesByCampaignId", () => {
+  function stubQuery(result: { data: unknown; error: unknown }) {
+    mockVerifyCampaignOwnership.mockResolvedValue(true);
+    mockFrom.mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({ order: () => Promise.resolve(result) }),
+      }),
+    }));
+  }
+
+  it("throws when the query fails, instead of reporting an empty campaign", async () => {
+    stubQuery({
+      data: null,
+      error: { message: "TypeError: fetch failed", code: "" },
+    });
+
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
+      /could not load candidates/i,
+    );
+  });
+
+  it("carries the underlying message, so the log says what actually broke", async () => {
+    stubQuery({
+      data: null,
+      error: { message: "read ECONNRESET", code: "PGRST301" },
+    });
+
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
+      /ECONNRESET[\s\S]*PGRST301/,
+    );
+  });
+
+  it("still returns an empty list for a campaign that genuinely has nobody", async () => {
+    stubQuery({ data: [], error: null });
+
+    // The distinction the throw exists to preserve: this one is an answer.
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).resolves.toEqual([]);
+  });
+
+  it("refuses a campaign the user does not own before running any query", async () => {
+    mockVerifyCampaignOwnership.mockResolvedValue(false);
+    mockFrom.mockReset();
+
+    await expect(fetchCandidatesByCampaignId("camp-1", "user-1")).rejects.toThrow(
+      /access denied/i,
+    );
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 });

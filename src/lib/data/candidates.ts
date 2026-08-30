@@ -6,6 +6,7 @@ import type { SupabaseDb } from "@/lib/supabase/types";
 import { transitionApplication } from "@/lib/data/transitions";
 import { verifyCampaignOwnership } from "@/lib/data/campaigns";
 import { AUTO_ARCHIVABLE_STATES } from "@/lib/rules/auto-archive";
+import type { DeterministicResumeScoreResult } from "@/lib/resume-scoring";
 import type {
   ApplicationState,
   AutomationMode,
@@ -21,7 +22,6 @@ import {
 } from "@/lib/data/duplicate-flags";
 
 type CandidateStageEnum = Database["public"]["Enums"]["candidate_stage_enum"];
-type ScreeningTierEnum = Database["public"]["Enums"]["screening_tier_enum"];
 
 export async function uploadResumeToStorage(campaignId: string, filename: string, fileBuffer: Buffer, db?: SupabaseDb): Promise<string> {
   const supabase = db ?? (await createClient());
@@ -161,6 +161,7 @@ export async function upsertCandidate(
       email: structuredData.email,
       phone: structuredData.phone || null,
       linkedin_url: structuredData.linkedin_url || null,
+      github_url: structuredData.github_url || null,
       portfolio_url: structuredData.portfolio_url || null,
       location: structuredData.location || null,
     });
@@ -275,23 +276,32 @@ export async function fetchCandidatesByCampaignId(campaignId: string, userId: st
   }
   const supabase = await createClient();
 
+  // Named columns, not `*`. The wide row carries `parsed_data` (the whole
+  // parsed CV), `resume_evaluation` (every criterion's verified quotes) and
+  // `score_factors` — and the table renders a name, a stage, one number and a
+  // date. `parsed_data` stays because the title and company columns are read
+  // out of it; the other two do not, so they no longer leave the database or
+  // get serialised into the payload sent to the browser.
   const { data, error } = await supabase
     .from("applications")
     .select(`
-      *,
+      id,
+      campaign_id,
+      status,
+      created_at,
+      updated_at,
+      parsed_data,
+      resume_score,
+      screening_tier,
+      scored_at,
       candidates (
         id,
         first_name,
         last_name,
-        email,
-        phone,
-        location
+        email
       ),
       screening_question_responses (
         overall_score,
-        overall_rationale,
-        scored_at,
-        rubric_version,
         status
       )
     `)
@@ -299,8 +309,68 @@ export async function fetchCandidatesByCampaignId(campaignId: string, userId: st
     .order("created_at", { ascending: false });
 
   if (error) {
-    console.error("Error fetching candidates:", error);
-    return [];
+    // Throw rather than return []. An empty array is a real answer — "this
+    // campaign has nobody in it" — and a transport failure is not that answer.
+    // Returning [] made the two indistinguishable, so a dropped connection
+    // rendered a funnel of confident zeros on a campaign with 40 candidates.
+    // Callers that can genuinely live without the list say so themselves: the
+    // candidate page's prev/next stepper already wraps this in `.catch(() => [])`.
+    throw new Error(
+      `Could not load candidates for campaign ${campaignId}: ${error.message}` +
+        (error.code ? ` (${error.code})` : ""),
+    );
+  }
+
+  return data;
+}
+
+/**
+ * The campaign board's pipeline rows: every application in the campaign, cut
+ * down to the six fields the funnel, the SLA banner and the stale-score note
+ * are counted from.
+ *
+ * Separate from `fetchCandidatesByCampaignId` on purpose. That one selects the
+ * whole application row — including `parsed_data` (the entire parsed CV) and
+ * `resume_evaluation` (every criterion's verified quotes) — plus the joined
+ * candidate, because the table renders names and scores. The campaign detail
+ * page rendered none of it: it loaded the same rows in full and read six fields
+ * off each. On a busy campaign that is megabytes of JSON pulled out of Postgres
+ * and parsed to produce a handful of integers.
+ *
+ * No candidate join at all: this page never shows a person, only counts of them.
+ */
+export async function fetchCampaignPipelineRows(campaignId: string, userId: string) {
+  if (!(await verifyCampaignOwnership(campaignId, userId))) {
+    throw new Error("Campaign not found or access denied");
+  }
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("applications")
+    .select(`
+      status,
+      created_at,
+      updated_at,
+      scored_at,
+      resume_score,
+      rubric_version,
+      screening_question_responses (
+        status,
+        overall_score,
+        rubric_version
+      )
+    `)
+    .eq("campaign_id", campaignId);
+
+  if (error) {
+    // Throws for the same reason the full fetch does: an empty pipeline is a
+    // real answer, and a dropped connection is not that answer. Returning []
+    // here would render a funnel of confident zeros on a campaign with 40
+    // candidates in it.
+    throw new Error(
+      `Could not load the pipeline for campaign ${campaignId}: ${error.message}` +
+        (error.code ? ` (${error.code})` : ""),
+    );
   }
 
   return data;
@@ -321,6 +391,7 @@ export async function fetchCandidateById(applicationId: string, userId: string) 
         phone,
         location,
         linkedin_url,
+        github_url,
         portfolio_url
       ),
       screening_question_responses (
@@ -351,6 +422,8 @@ export interface ResumeScoreAuditFields {
   promptVersion: string;
   rawOutput: string;
   inputSnapshot: Json;
+  /** OpenAI backend fingerprint, when the API returned one. */
+  systemFingerprint?: string | null;
 }
 
 /**
@@ -372,10 +445,9 @@ export async function saveResumeScore(args: {
   applicationId: string;
   campaignId: string;
   candidateId: string;
-  score: number;
-  tier: ScreeningTierEnum;
+  /** The deterministic evaluation — the whole auditable result. */
+  result: DeterministicResumeScoreResult;
   rationale: string;
-  factors: { name: string; weight: number; score: number }[];
   rubricVersion: number | null;
   audit: ResumeScoreAuditFields;
 }, db?: SupabaseDb) {
@@ -384,10 +456,19 @@ export async function saveResumeScore(args: {
   const { error: updateError, data: updateData } = await supabase
     .from("applications")
     .update({
-      resume_score: args.score,
-      screening_tier: args.tier,
+      // Null for an ineligible candidate: there is no ranking score to record,
+      // and writing a low number would let a failed gate be read as a near
+      // miss. `scored_at` is what says scoring has run.
+      resume_score: args.result.ranking_score,
+      resume_eligible: args.result.eligible,
+      resume_evaluation: args.result as unknown as Json,
+      screening_tier: args.result.tier,
       score_rationale: args.rationale,
-      score_factors: args.factors as unknown as Json,
+      // The legacy weighted-factor breakdown is superseded by
+      // `resume_evaluation`. Cleared rather than left behind, so a re-scored
+      // application cannot render last run's weights next to this run's
+      // verdict.
+      score_factors: null,
       rubric_version: args.rubricVersion,
       scored_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -412,9 +493,9 @@ export async function saveResumeScore(args: {
     rubric_version: args.rubricVersion != null ? String(args.rubricVersion) : null,
     input_snapshot: args.audit.inputSnapshot,
     raw_output: args.audit.rawOutput,
-    parsed_score: args.score,
+    parsed_score: args.result.ranking_score,
     rationale: args.rationale,
-    action_taken: "scored",
+    action_taken: args.result.eligible ? "scored_eligible" : "scored_ineligible",
   });
 
   if (auditError) {
@@ -462,6 +543,14 @@ export interface ApplicationForResponse {
   campaign_id: string;
   campaign_title: string;
   campaign_status: CampaignStatus;
+  candidate_first_name: string | null;
+  /**
+   * The candidate's parsed resume (null if never ingested). Carried so the
+   * voice interviewer can anchor a probe to their real background — mitigation
+   * #3 in docs/voice-screening.md, which the screening path could not run while
+   * this read returned campaign framing alone.
+   */
+  resume: ParsedResumeData | null;
 }
 
 export async function fetchApplicationForResponse(
@@ -469,14 +558,21 @@ export async function fetchApplicationForResponse(
   db?: SupabaseDb
 ): Promise<ApplicationForResponse | null> {
   const supabase = db ?? (await createClient());
+  // `parsed_data` is on the APPLICATION, not the candidate (CLAUDE.md ->
+  // Entities). Selecting it off the candidate join makes PostgREST reject the
+  // whole query, which reads back as "no such application".
   const { data } = await supabase
     .from("applications")
-    .select("id, campaign_id, campaigns!inner(id, title, status)")
+    .select(
+      "id, campaign_id, parsed_data, campaigns!inner(id, title, status), candidates!inner(first_name)",
+    )
     .eq("id", applicationId)
     .single<{
       id: string;
       campaign_id: string;
+      parsed_data: ParsedResumeData | null;
       campaigns: { id: string; title: string; status: CampaignStatus };
+      candidates: { first_name: string | null };
     }>();
 
   if (!data) return null;
@@ -485,6 +581,8 @@ export async function fetchApplicationForResponse(
     campaign_id: data.campaign_id,
     campaign_title: data.campaigns.title,
     campaign_status: data.campaigns.status,
+    candidate_first_name: data.candidates?.first_name ?? null,
+    resume: data.parsed_data ?? null,
   };
 }
 
@@ -752,13 +850,17 @@ export async function fetchArchivableApplications(
 }
 
 /**
- * The state an application was in immediately before it was archived, read off
- * the transitions log. Un-archive restores exactly this — there is no
- * `previous_status` column, and adding one would duplicate a fact the immutable
- * log already records.
+ * The state an application was in immediately before it last entered
+ * `toState`, read off the transitions log.
+ *
+ * There is no `previous_status` column and there should not be one — it would
+ * duplicate a fact the immutable log already records, and could disagree with
+ * it. The most recent entry wins: an application can enter the same state more
+ * than once, and only the latest arrival describes where it stands now.
  */
-export async function fetchPreArchiveState(
+export async function fetchStateBefore(
   applicationId: string,
+  toState: ApplicationState,
   db?: SupabaseDb,
 ): Promise<string | null> {
   const supabase = db ?? (await createClient());
@@ -766,10 +868,210 @@ export async function fetchPreArchiveState(
     .from("application_transitions")
     .select("from_state, created_at")
     .eq("application_id", applicationId)
-    .eq("to_state", "archived")
+    .eq("to_state", toState)
     .order("created_at", { ascending: false })
     .limit(1);
 
   if (error || !data || data.length === 0) return null;
   return (data[0] as { from_state: string | null }).from_state;
+}
+
+/**
+ * What un-archive restores to. A thin alias so the un-archive path reads as
+ * itself rather than as a generic history query.
+ */
+export async function fetchPreArchiveState(
+  applicationId: string,
+  db?: SupabaseDb,
+): Promise<string | null> {
+  return fetchStateBefore(applicationId, "archived", db);
+}
+
+// ─── Contact-link backfill ──────────────────────────────────────────────────
+//
+// Applications ingested before the deterministic link harvest (see
+// `resume-ingest/contact-links.ts`) carry whatever the extractor happened to
+// read, which for a CV whose contact block is icons is usually nothing. These
+// three functions are the read/write half of the one-shot sweep that repairs
+// them; the sweep itself lives in `resume-ingest/contact-link-backfill.ts`.
+
+/** One application the sweep may be able to repair. */
+export interface IncompleteContactLinkRow {
+  applicationId: string;
+  candidateId: string;
+  /** Storage path, not a URL — the sweep downloads the bytes itself. */
+  resumeUrl: string;
+  parsedData: ParsedResumeData;
+  /** The candidate row's own copy, which may be filled where the parse is not. */
+  candidate: {
+    linkedin_url: string | null;
+    github_url: string | null;
+    portfolio_url: string | null;
+  };
+}
+
+type BackfillJoinRow = {
+  id: string;
+  candidate_id: string;
+  resume_url: string | null;
+  parsed_data: Json | null;
+  candidates: {
+    linkedin_url: string | null;
+    github_url: string | null;
+    portfolio_url: string | null;
+  } | null;
+};
+
+/**
+ * Applications whose parse is missing at least one profile link and that still
+ * have a resume file to re-read.
+ *
+ * The `or` filter is a coarse net — `parsed_data->>'x' IS NULL` is true both
+ * for a JSON null and for an absent key, which is exactly what we want — and
+ * the caller narrows it again in code. Rows with no `resume_url` are excluded
+ * here rather than skipped later: without the file there is nothing to re-read,
+ * so they would be a permanent, silent portion of every run's "failed" count.
+ */
+export async function fetchApplicationsMissingContactLinks(
+  limit: number,
+  db?: SupabaseDb,
+): Promise<IncompleteContactLinkRow[]> {
+  const supabase = db ?? (await createClient());
+
+  const { data, error } = await supabase
+    .from("applications")
+    .select(
+      "id, candidate_id, resume_url, parsed_data, candidates!inner(linkedin_url, github_url, portfolio_url)",
+    )
+    .not("resume_url", "is", null)
+    .not("parsed_data", "is", null)
+    .or(
+      "parsed_data->>linkedin_url.is.null,parsed_data->>github_url.is.null,parsed_data->>portfolio_url.is.null",
+    )
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Could not list applications missing contact links: ${error.message}`);
+  }
+
+  return ((data ?? []) as unknown as BackfillJoinRow[])
+    .filter((row): row is BackfillJoinRow & { resume_url: string } => Boolean(row.resume_url))
+    .map((row) => ({
+      applicationId: row.id,
+      candidateId: row.candidate_id,
+      resumeUrl: row.resume_url,
+      parsedData: row.parsed_data as unknown as ParsedResumeData,
+      candidate: {
+        linkedin_url: row.candidates?.linkedin_url ?? null,
+        github_url: row.candidates?.github_url ?? null,
+        portfolio_url: row.candidates?.portfolio_url ?? null,
+      },
+    }));
+}
+
+/** The stored resume bytes, or null when the object is gone from the bucket. */
+export async function downloadResumeFromStorage(
+  filePath: string,
+  db?: SupabaseDb,
+): Promise<Buffer | null> {
+  const supabase = db ?? (await createClient());
+
+  const { data, error } = await supabase.storage.from("resumes").download(filePath);
+  if (error || !data) return null;
+
+  return Buffer.from(await data.arrayBuffer());
+}
+
+/**
+ * Write recovered links to both places a link lives: the application's parse
+ * (what the candidate file reads first) and the candidate row (the person's
+ * identity across campaigns).
+ *
+ * `parsedData` is written back whole rather than patched in SQL — the caller
+ * has already merged, and a JSONB deep-merge expressed in PostgREST is a
+ * second, untested place for the merge rules to live.
+ */
+/**
+ * Write the result of re-reading a CV that had already been filed.
+ *
+ * Two rows, because a parse lives in two places: the application's
+ * `parsed_data` (what the candidate file reads) and the candidate's own
+ * contact columns (their identity across campaigns).
+ *
+ * The caller has already decided what each candidate field should say — this
+ * only writes it. That split matters here: the merge rule is "a value already
+ * on the row wins", so a recruiter who typed in a phone number while the
+ * application sat in `processing_failed` does not lose it to a retry.
+ *
+ * `parsed_data` IS overwritten whole. Nobody edits it by hand, and a real
+ * reading of the CV is strictly better than the identity-only placeholder the
+ * failure path wrote.
+ */
+export async function saveReprocessedResume(
+  args: {
+    applicationId: string;
+    candidateId: string;
+    parsedData: ParsedResumeData;
+    /**
+     * Only the supplied keys are written — Supabase `.update()` ignores the
+     * rest — so a caller that only harvested links passes only the link
+     * columns and leaves `phone` / `location` alone.
+     */
+    candidate: Partial<{
+      phone: string | null;
+      location: string | null;
+      linkedin_url: string | null;
+      github_url: string | null;
+      portfolio_url: string | null;
+    }>;
+    /** Names the write in the error message: "reprocessed CV", "backfilled links". */
+    label?: string;
+  },
+  db?: SupabaseDb,
+): Promise<void> {
+  const what = args.label ?? "reprocessed CV";
+  const supabase = db ?? (await createClient());
+
+  const { error: appError } = await supabase
+    .from("applications")
+    .update({
+      parsed_data: args.parsedData as unknown as Json,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", args.applicationId);
+
+  if (appError) {
+    throw new Error(
+      `Could not save the ${what} on ${args.applicationId}: ${appError.message}`,
+    );
+  }
+
+  const { error: candidateError } = await supabase
+    .from("candidates")
+    .update(args.candidate)
+    .eq("id", args.candidateId);
+
+  if (candidateError) {
+    throw new Error(
+      `Could not save the ${what} on candidate ${args.candidateId}: ${candidateError.message}`,
+    );
+  }
+}
+
+/**
+ * The contact-link backfill's write. Identical to `saveReprocessedResume`
+ * apart from which candidate columns it carries, so it delegates rather than
+ * keeping a second copy of the two-table write.
+ */
+export async function saveBackfilledContactLinks(
+  args: {
+    applicationId: string;
+    candidateId: string;
+    parsedData: ParsedResumeData;
+    candidate: { linkedin_url: string | null; github_url: string | null; portfolio_url: string | null };
+  },
+  db?: SupabaseDb,
+): Promise<void> {
+  return saveReprocessedResume({ ...args, label: "backfilled links" }, db);
 }

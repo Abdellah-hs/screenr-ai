@@ -129,7 +129,7 @@ export async function encodeSnapshot(
  * frame looks ordinary and is not worth encoding at all.
  *
  * Deliberately NOT the incident vocabulary. Naming the finding is the rule
- * layer's job (`primaryCondition` in the app), and duplicating that judgement
+ * layer's job (`conditionsOf` in the app), and duplicating that judgement
  * here would mean a threshold change on one side silently leaves the worker
  * photographing a condition the rules no longer recognise. All this decides is
  * how often to spend an encode — an approximation is fine, and being wrong

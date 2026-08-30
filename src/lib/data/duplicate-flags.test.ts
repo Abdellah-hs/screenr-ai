@@ -20,6 +20,13 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(() => Promise.resolve(mockSupabase)),
 }));
 
+// A SEPARATE spy from the session client on purpose: the point of these tests
+// is which read/write goes through which client.
+const mockAdminFrom = vi.fn();
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: vi.fn(() => ({ from: mockAdminFrom })),
+}));
+
 import {
   findCandidateByEmail,
   findCandidateByPhone,
@@ -28,6 +35,7 @@ import {
   fetchDuplicateFlagById,
   resolveDuplicateFlag,
   mergeCandidatesTx,
+  fetchOpenDuplicateFlagsWithCandidates,
 } from "./duplicate-flags";
 
 function chainReturn(value: unknown) {
@@ -338,45 +346,180 @@ describe("resolveDuplicateFlag", () => {
 });
 
 describe("mergeCandidatesTx", () => {
-  it("re-points applications and soft-deletes the source candidate", async () => {
-    const updateMock = vi.fn().mockReturnValue({
-      eq: vi.fn().mockResolvedValue({ error: null }),
+  /** Session-client `.update().eq()` — the applications re-point. */
+  function sessionUpdate(result: { error: { message: string } | null }) {
+    const update = vi.fn().mockReturnValue({
+      eq: vi.fn().mockResolvedValue(result),
     });
-
     mockFrom.mockImplementation(() => ({
       select: mockSelect,
       insert: mockInsert,
-      update: updateMock,
+      update,
       delete: mockDelete,
     }));
+    return update;
+  }
+
+  /** Admin-client `.update().eq().select()` — the soft-delete. */
+  function adminUpdate(result: {
+    data: { id: string }[] | null;
+    error: { message: string } | null;
+  }) {
+    const update = vi.fn().mockReturnValue({
+      eq: vi.fn().mockReturnValue({
+        select: vi.fn().mockResolvedValue(result),
+      }),
+    });
+    mockAdminFrom.mockImplementation(() => ({ update }));
+    return update;
+  }
+
+  it("re-points applications and soft-deletes the source candidate", async () => {
+    const appUpdate = sessionUpdate({ error: null });
+    const candUpdate = adminUpdate({ data: [{ id: "source-c" }], error: null });
 
     await mergeCandidatesTx("source-c", "target-c");
 
-    // First update: applications
-    expect(updateMock).toHaveBeenNthCalledWith(
-      1,
+    expect(appUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ candidate_id: "target-c" }),
     );
-
-    // Second update: candidates soft-delete
-    expect(updateMock).toHaveBeenNthCalledWith(
-      2,
+    expect(candUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ deleted_at: expect.any(String) }),
     );
   });
 
-  it("throws when re-pointing applications fails", async () => {
-    const updateMock = vi.fn().mockReturnValue({
-      eq: vi.fn().mockResolvedValue({ error: { message: "fk violation" } }),
-    });
+  it("soft-deletes through the admin client, not the session client", async () => {
+    // Regression: candidates UPDATE is gated on the row having an application
+    // in one of the reader's campaigns, and the re-point above has just moved
+    // every one of them away. On the session client that update matched 0 rows
+    // and still reported success, so the merged-away candidate stayed live and
+    // kept winning findCandidateByEmail for every later applicant.
+    sessionUpdate({ error: null });
+    adminUpdate({ data: [{ id: "source-c" }], error: null });
 
-    mockFrom.mockImplementation(() => ({
-      select: mockSelect,
-      insert: mockInsert,
-      update: updateMock,
-      delete: mockDelete,
-    }));
+    await mergeCandidatesTx("source-c", "target-c");
+
+    expect(mockAdminFrom).toHaveBeenCalledWith("candidates");
+    expect(mockFrom).not.toHaveBeenCalledWith("candidates");
+  });
+
+  it("throws when the soft-delete matches no row", async () => {
+    sessionUpdate({ error: null });
+    adminUpdate({ data: [], error: null });
+
+    await expect(mergeCandidatesTx("source-c", "target-c")).rejects.toThrow(
+      /left candidate source-c live/,
+    );
+  });
+
+  it("throws when re-pointing applications fails", async () => {
+    sessionUpdate({ error: { message: "fk violation" } });
+    adminUpdate({ data: [{ id: "s" }], error: null });
 
     await expect(mergeCandidatesTx("s", "t")).rejects.toThrow("fk violation");
+  });
+});
+
+describe("fetchOpenDuplicateFlagsWithCandidates", () => {
+  function flagRow(over: Record<string, unknown> = {}) {
+    return {
+      id: "flag-1",
+      candidate_id: "new-c",
+      matched_candidate_id: "old-c",
+      match_signals: { email_match: true },
+      status: "open",
+      reviewer_user_id: null,
+      rationale: null,
+      created_at: "2026-08-25T00:00:00.000Z",
+      updated_at: "2026-08-25T00:00:00.000Z",
+      resolved_at: null,
+      ...over,
+    };
+  }
+
+  function candidateRow(id: string, email: string) {
+    return {
+      id,
+      first_name: "Ada",
+      last_name: "Lovelace",
+      email,
+      phone: "+1",
+      created_at: "2026-04-17T00:00:00.000Z",
+    };
+  }
+
+  /** Session client: from("duplicate_review_queue").select().eq().order() */
+  function openFlags(rows: unknown[]) {
+    mockFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          order: vi.fn().mockResolvedValue({ data: rows, error: null }),
+        }),
+      }),
+    }));
+  }
+
+  /** Admin client: from("candidates").select().in() */
+  function visibleCandidates(rows: unknown[]) {
+    const inFn = vi.fn().mockResolvedValue({ data: rows, error: null });
+    mockAdminFrom.mockImplementation(() => ({
+      select: vi.fn().mockReturnValue({ in: inFn }),
+    }));
+    return inFn;
+  }
+
+  it("enriches each open flag with both candidate records", async () => {
+    openFlags([flagRow()]);
+    visibleCandidates([
+      candidateRow("new-c", "new@example.com"),
+      candidateRow("old-c", "old@example.com"),
+    ]);
+
+    const items = await fetchOpenDuplicateFlagsWithCandidates();
+
+    expect(items).toHaveLength(1);
+    expect(items[0].candidate.email).toBe("new@example.com");
+    expect(items[0].matched.email).toBe("old@example.com");
+  });
+
+  it("reads the candidate pair through the admin client", async () => {
+    // Regression: on the session client, candidates SELECT requires an
+    // application in one of the reader's campaigns. A candidate orphaned by a
+    // campaign delete fails that forever, so every flag naming it was dropped
+    // from the queue with no error — 44 of 47 open flags on one live database.
+    openFlags([flagRow()]);
+    const inFn = visibleCandidates([
+      candidateRow("new-c", "new@example.com"),
+      candidateRow("old-c", "old@example.com"),
+    ]);
+
+    await fetchOpenDuplicateFlagsWithCandidates();
+
+    expect(mockAdminFrom).toHaveBeenCalledWith("candidates");
+    expect(mockFrom).not.toHaveBeenCalledWith("candidates");
+    expect(inFn).toHaveBeenCalledWith("id", ["new-c", "old-c"]);
+  });
+
+  it("logs the flag id when a candidate row no longer exists", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    openFlags([flagRow({ id: "orphaned-flag" })]);
+    visibleCandidates([candidateRow("new-c", "new@example.com")]); // old-c gone
+
+    const items = await fetchOpenDuplicateFlagsWithCandidates();
+
+    expect(items).toHaveLength(0);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("1 open flag(s)"), [
+      "orphaned-flag",
+    ]);
+  });
+
+  it("returns an empty queue without querying candidates when no flags are open", async () => {
+    openFlags([]);
+    visibleCandidates([]);
+
+    const items = await fetchOpenDuplicateFlagsWithCandidates();
+
+    expect(items).toEqual([]);
+    expect(mockAdminFrom).not.toHaveBeenCalled();
   });
 });

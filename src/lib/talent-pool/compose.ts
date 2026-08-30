@@ -44,7 +44,7 @@ function readParsed(value: unknown): { headline: string | null; skills: string[]
  * 3.11.2 filter with no field to bind to.
  */
 function bestOf(row: PooledCandidateEvidenceRow): number | null {
-  const scores = [row.resume_score, row.screening_q_score, row.interview_score].filter(
+  const scores = [row.resume_score, row.screening_score, row.interview_score].filter(
     (s): s is number => typeof s === "number",
   );
 

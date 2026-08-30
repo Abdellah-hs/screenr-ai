@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  DECODE_MIN_SCORE,
   INPUT_SIZE,
   PERSON_CLASS_ID,
+  describeCandidates,
+  DIAGNOSTIC_DECODE_FLOOR,
+  decodeFloor,
+  diagnosticDecodeFloor,
+  effectiveFloors,
+  countKept,
   countSignals,
   decodeYoloxOutput,
   frameUsability,
@@ -16,6 +23,13 @@ import {
 
 const NUM_ATTRS = 85;
 const TOTAL_ANCHORS = 52 * 52 + 26 * 26 + 13 * 13; // 3549 at 416px
+
+/**
+ * The rule layer's `VISION_MIN_CONFIDENCE`, restated here because the two
+ * packages deploy separately: a sample the worker reports below this is thrown
+ * away wholesale, so anything this file reports has to clear it.
+ */
+const VISION_MIN_CONFIDENCE = 0.6;
 
 /** COCO ids used below, named so the assertions read as intent. */
 const CELL_PHONE = 67;
@@ -157,6 +171,38 @@ describe("decodeYoloxOutput", () => {
     expect(decodeYoloxOutput(raw, { ratio: 1 })).toEqual([]);
   });
 
+  it("stops at the end of a short tensor instead of reading past it", () => {
+    // Half a tensor: a broken export, not a frame we can partly believe.
+    const full = rawWithAnchor({
+      anchorIndex: 0,
+      offsets: [0.5, 0.5, 0, 0],
+      objectness: 0.9,
+      classId: PERSON_CLASS_ID,
+      classScore: 0.9,
+    });
+    const truncated = full.slice(0, 10 * NUM_ATTRS);
+
+    const detections = decodeYoloxOutput(truncated, { ratio: 1 });
+
+    expect(detections).toHaveLength(1);
+    expect(detections.every((d) => Number.isFinite(d.box[0]))).toBe(true);
+  });
+
+  it("honours a score floor below the default, which the decode gate used to swallow", () => {
+    const raw = rawWithAnchor({
+      anchorIndex: 0,
+      offsets: [0.5, 0.5, 0, 0],
+      objectness: 0.3,
+      classId: PERSON_CLASS_ID,
+      classScore: 0.3, // 0.09 combined — under the 0.2 default
+    });
+
+    expect(decodeYoloxOutput(raw, { ratio: 1 })).toHaveLength(0);
+    expect(
+      decodeYoloxOutput(raw, { ratio: 1, minScore: DECODE_MIN_SCORE / 4 }),
+    ).toHaveLength(1);
+  });
+
   it("returns nothing for a degenerate ratio instead of infinite coordinates", () => {
     const raw = rawWithAnchor({
       anchorIndex: 0,
@@ -234,23 +280,22 @@ describe("countSignals", () => {
     expect(signals.personCount).toBe(0);
   });
 
-  it("reports the weakest counted person, not the strongest", () => {
+  it("counts a clearly-seen second person", () => {
     const signals = countSignals(
       [
         detection(PERSON_CLASS_ID, 0.95, [0, 0, 400, 700]),
-        detection(PERSON_CLASS_ID, 0.51, [600, 0, 1000, 700]),
+        detection(PERSON_CLASS_ID, 0.72, [600, 0, 1000, 700]),
       ],
       frame,
     );
 
     expect(signals.personCount).toBe(2);
-    expect(signals.weakestPersonScore).toBeCloseTo(0.51, 6);
   });
 
-  it("reports full confidence in an empty frame (there is no box to doubt)", () => {
+  it("reports nothing for an empty frame", () => {
     const signals = countSignals([], frame);
 
-    expect(signals).toEqual({ personCount: 0, phoneCount: 0, weakestPersonScore: 1 });
+    expect(signals).toEqual({ personCount: 0, phoneCount: 0 });
   });
 
   it("counts a phone in shot", () => {
@@ -302,6 +347,101 @@ describe("countSignals", () => {
     );
 
     expect(signals.personCount).toBe(0);
+  });
+});
+
+/**
+ * The two person floors, and why they are not the same number.
+ *
+ * Missing the candidate manufactures `person_absent` against somebody sitting
+ * right there. Inventing a second person accuses them of something nobody can
+ * check, because the interview is not recorded. Opposite failures, opposite
+ * biases, and they used to share one threshold plus a confidence cap that
+ * deleted the whole frame when the weaker box was doubtful.
+ */
+describe("selectSignals: the sliding person floor", () => {
+  const frame = { width: 1280, height: 720 };
+  const person = (score: number, box: Detection["box"]): Detection => ({
+    classId: PERSON_CLASS_ID,
+    score,
+    box,
+  });
+
+  it("counts the candidate on a weak box, because missing them accuses them", () => {
+    const kept = selectSignals([person(0.4, [200, 40, 900, 700])], frame);
+
+    expect(countKept(kept)).toEqual({ personCount: 1, phoneCount: 0 });
+  });
+
+  it("does not count a doubtful second person", () => {
+    const kept = selectSignals(
+      [person(0.95, [0, 0, 400, 700]), person(0.45, [600, 0, 1000, 700])],
+      frame,
+    );
+
+    expect(countKept(kept)).toEqual({ personCount: 1, phoneCount: 0 });
+  });
+
+  it("counts a second person who is clearly there", () => {
+    const kept = selectSignals(
+      [person(0.95, [0, 0, 400, 700]), person(0.7, [600, 0, 1000, 700])],
+      frame,
+    );
+
+    expect(countKept(kept)).toEqual({ personCount: 2, phoneCount: 0 });
+  });
+
+  /**
+   * The regression. A doubtful extra person used to poison the sample's
+   * confidence, and the rule layer discards a low-confidence sample WHOLE — so
+   * the phone sitting in the same shot disappeared along with the second person
+   * nobody was sure about, and so did the candidate's own presence.
+   */
+  it("keeps the phone and the candidate when the second person is dropped", () => {
+    const kept = selectSignals(
+      [
+        person(0.95, [0, 0, 400, 700]),
+        person(0.45, [600, 0, 1000, 700]),
+        { classId: CELL_PHONE, score: 0.8, box: [430, 300, 500, 430] },
+      ],
+      frame,
+    );
+
+    expect(countKept(kept)).toEqual({ personCount: 1, phoneCount: 1 });
+  });
+
+  it("grades people best-first regardless of the order they arrive in", () => {
+    const weakFirst = selectSignals(
+      [person(0.45, [600, 0, 1000, 700]), person(0.95, [0, 0, 400, 700])],
+      frame,
+    );
+
+    expect(countKept(weakFirst)).toEqual({ personCount: 1, phoneCount: 0 });
+    expect(weakFirst[0]?.score).toBeCloseTo(0.95, 6);
+  });
+
+  it("never lets an override make an extra person easier to invent", () => {
+    // Tuning the candidate floor down must not drag the stricter floor with it:
+    // "detect more" means "find the candidate more easily", never "accuse more
+    // easily".
+    const kept = selectSignals(
+      [person(0.3, [0, 0, 400, 700]), person(0.3, [600, 0, 1000, 700])],
+      frame,
+      { personMinScore: 0.2, additionalPersonMinScore: 0.2 },
+    );
+
+    expect(countKept(kept).personCount).toBe(1);
+  });
+
+  it("keeps an extra person at least as hard to count as the candidate", () => {
+    // A high override must not leave the second person the EASIER of the two.
+    const kept = selectSignals(
+      [person(0.9, [0, 0, 400, 700]), person(0.7, [600, 0, 1000, 700])],
+      frame,
+      { personMinScore: 0.85 },
+    );
+
+    expect(countKept(kept).personCount).toBe(1);
   });
 });
 
@@ -409,30 +549,184 @@ describe("frameUsability", () => {
 });
 
 describe("observationConfidence", () => {
-  it("trusts an empty frame as much as the frame quality allows", () => {
-    const confidence = observationConfidence(0.9, {
-      personCount: 0,
-      weakestPersonScore: 1,
-    });
-
-    expect(confidence).toBeCloseTo(0.9, 6);
+  it("reports how well the frame could be seen", () => {
+    expect(observationConfidence(0.9)).toBeCloseTo(0.9, 6);
   });
 
-  it("caps confidence at the weakest box the count depends on", () => {
-    const confidence = observationConfidence(1, {
-      personCount: 2,
-      weakestPersonScore: 0.45,
-    });
-
-    expect(confidence).toBeCloseTo(0.45, 6);
+  it("clamps a nonsensical usability into range", () => {
+    expect(observationConfidence(1.4)).toBe(1);
+    expect(observationConfidence(-0.2)).toBe(0);
   });
 
-  it("is limited by frame quality even when the detection was strong", () => {
-    const confidence = observationConfidence(0.3, {
-      personCount: 1,
-      weakestPersonScore: 0.99,
+  /**
+   * The regression this whole area exists for. Detection strength decides what
+   * is COUNTED; it must never decide whether the frame is believed, because the
+   * rule layer reads confidence as a gate and discards the sample below 0.6 —
+   * taking the candidate's own presence with it.
+   */
+  it("does not let a marginal detection sink a well-lit frame", () => {
+    const kept = selectSignals(
+      [{ classId: PERSON_CLASS_ID, score: 0.42, box: [200, 40, 900, 700] }],
+      { width: 1280, height: 720 },
+    );
+
+    expect(countKept(kept).personCount).toBe(1);
+    expect(observationConfidence(0.95)).toBeGreaterThanOrEqual(
+      VISION_MIN_CONFIDENCE,
+    );
+  });
+});
+
+/**
+ * The diagnostic behind "my phone was not detected". Three causes look
+ * identical from outside — scored too low, too small, or never produced — and
+ * they need opposite fixes, so this has to report the raw numbers rather than
+ * a verdict.
+ */
+describe("describeCandidates", () => {
+  const frame = { width: 1000, height: 1000 };
+
+  it("reports the score and frame share of every person and phone", () => {
+    const result = describeCandidates(
+      [
+        detection(PERSON_CLASS_ID, 0.9, [0, 0, 500, 500]),
+        detection(CELL_PHONE, 0.8, [0, 0, 100, 100]),
+      ],
+      frame,
+    );
+
+    expect(result).toEqual([
+      { label: "person", score: 0.9, areaRatio: 0.25 },
+      { label: "phone", score: 0.8, areaRatio: 0.01 },
+    ]);
+  });
+
+  it("keeps a candidate that its floor would reject, which is the point", () => {
+    // 0.31 is below PHONE_MIN_SCORE (0.45). If this were filtered, the log
+    // could never distinguish "scored too low" from "never seen".
+    const result = describeCandidates(
+      [detection(CELL_PHONE, 0.31, [0, 0, 100, 100])],
+      frame,
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].score).toBeLessThan(effectiveFloors().phone);
+  });
+
+  it("counts a remote as a phone, like the counting path does", () => {
+    const result = describeCandidates(
+      [detection(REMOTE, 0.5, [0, 0, 100, 100])],
+      frame,
+    );
+
+    expect(result[0].label).toBe("phone");
+  });
+
+  it("ignores classes the product does not report on", () => {
+    // A laptop is deliberately not a finding, so it must not appear here either
+    // and imply the detector saw something it will act on.
+    expect(
+      describeCandidates([detection(LAPTOP, 0.99, [0, 0, 100, 100])], frame),
+    ).toEqual([]);
+  });
+
+  it("orders strongest first, so the log's first entry is the best evidence", () => {
+    const result = describeCandidates(
+      [
+        detection(CELL_PHONE, 0.2, [0, 0, 100, 100]),
+        detection(PERSON_CLASS_ID, 0.8, [0, 0, 100, 100]),
+      ],
+      frame,
+    );
+
+    expect(result.map((c) => c.score)).toEqual([0.8, 0.2]);
+  });
+});
+
+/**
+ * The floors the diagnostic prints and the counting path applies are one
+ * derivation, so the log can never name a floor that is not in force. These pin
+ * the clamp, which is the part an override can get wrong in the dangerous
+ * direction.
+ */
+describe("effectiveFloors", () => {
+  it("applies the override to the person and phone floors", () => {
+    const floors = effectiveFloors({ personMinScore: 0.25, phoneMinScore: 0.25 });
+
+    expect(floors.person).toBe(0.25);
+    expect(floors.phone).toBe(0.25);
+  });
+
+  it("refuses to lower the extra-person floor, however low the override", () => {
+    // The asymmetry `selectSignals` exists to hold: "detect more" means find
+    // the candidate more easily, never accuse more easily.
+    const floors = effectiveFloors({
+      personMinScore: 0.1,
+      additionalPersonMinScore: 0.1,
     });
 
-    expect(confidence).toBeCloseTo(0.3, 6);
+    expect(floors.additionalPerson).toBe(0.6);
+  });
+
+  it("raises the extra-person floor to match a stricter first-person floor", () => {
+    const floors = effectiveFloors({ personMinScore: 0.8 });
+
+    expect(floors.additionalPerson).toBe(0.8);
+  });
+
+  it("reports the compiled-in defaults when nothing is overridden", () => {
+    expect(effectiveFloors()).toEqual({
+      person: 0.35,
+      additionalPerson: 0.6,
+      phone: 0.45,
+      personArea: 0.015,
+      phoneArea: 0.003,
+    });
+  });
+});
+
+/**
+ * The two decode floors, which used to live inline in the worker — the file
+ * with no test of its own. The production one has already been a bug once (an
+ * override below 0.2 silently did nothing, because this floor runs in front of
+ * every class threshold), which is why it is pinned here.
+ */
+describe("decodeFloor", () => {
+  it("passes undefined through, so no override means the decoder's own default", () => {
+    expect(decodeFloor(undefined)).toBeUndefined();
+  });
+
+  it("lowers the decode floor to match an override below it", () => {
+    // The bug this exists to prevent: at 0.2 the anchor was already gone, so
+    // lowering only a class floor moved a filter nobody could see.
+    expect(decodeFloor(0.05)).toBe(0.05);
+  });
+
+  it("keeps the decode floor where it is when the override is above it", () => {
+    expect(decodeFloor(0.8)).toBe(DECODE_MIN_SCORE);
+  });
+});
+
+describe("diagnosticDecodeFloor", () => {
+  /**
+   * The invariant the diagnostic depends on. Above the production floor it
+   * would report "never produced at all" about a candidate the pipeline
+   * actually decoded — the one reading that sends you tuning the wrong knob,
+   * and exactly the confusion the flag exists to resolve.
+   */
+  it("never sits above the production floor, at any override", () => {
+    for (const override of [undefined, 0.01, 0.05, 0.1, 0.2, 0.35, 0.6, 0.99]) {
+      expect(diagnosticDecodeFloor(override)).toBeLessThanOrEqual(
+        decodeFloor(override) ?? DECODE_MIN_SCORE,
+      );
+    }
+  });
+
+  it("follows an override below its own default down", () => {
+    expect(diagnosticDecodeFloor(0.01)).toBe(0.01);
+  });
+
+  it("stays at its own floor when nothing is overridden", () => {
+    expect(diagnosticDecodeFloor(undefined)).toBe(DIAGNOSTIC_DECODE_FLOOR);
   });
 });

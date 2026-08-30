@@ -191,12 +191,41 @@ describe("summarizeProctoring — vision observations", () => {
     expect(report.incidents).toEqual([]);
   });
 
-  it("ignores a brief glimpse of a second person passing behind", () => {
-    // Two samples = 10s span, below MULTIPLE_PEOPLE_MIN_MS.
+  /**
+   * Changed 2026-08-28, deliberately: this used to assert that two sightings of
+   * a second person raised NOTHING. A real interview where someone appeared on
+   * camera and the report stayed silent is what retired that bar. Two sightings
+   * is now a warning — reported, not treated as proof.
+   */
+  it("flags a second person seen across two consecutive samples", () => {
     const observations = [
       ...samples(1, 2),
       ...samples(2, 2, { startMs: 20_000 }),
       ...samples(1, 2, { startMs: 40_000 }),
+    ];
+
+    const report = summarizeProctoring([], observations);
+
+    expect(report.incidents).toHaveLength(1);
+    expect(report.incidents[0]).toMatchObject({
+      type: "multiple_people",
+      // A brief sighting is never critical on its own — that needs
+      // MULTIPLE_PEOPLE_CRITICAL_MS of continuous presence.
+      severity: "warning",
+    });
+  });
+
+  /**
+   * The bar moved; the invariant under it did not. A run spans first sample to
+   * last, so one frame is always zero-length and cannot clear ANY threshold —
+   * this is what stops a single bad inference accusing a real candidate, and it
+   * is the reason 5s was the floor rather than something lower.
+   */
+  it("still ignores a second person caught in a single frame", () => {
+    const observations = [
+      ...samples(1, 2),
+      ...samples(2, 1, { startMs: 20_000 }),
+      ...samples(1, 2, { startMs: 30_000 }),
     ];
 
     const report = summarizeProctoring([], observations);
@@ -223,6 +252,27 @@ describe("summarizeProctoring — vision observations", () => {
       type: "phone_visible",
       severity: "warning",
       source: "vision",
+    });
+  });
+
+  /**
+   * The point of the 2026-08-28 change, stated as a test: an ordinary glance at
+   * a phone is what a recruiter wants to know about, and a 15s bar reported
+   * only a device parked in view long enough to read from.
+   */
+  it("flags a phone glanced at across two consecutive samples", () => {
+    const observations = [
+      ...samples(1, 2),
+      ...samples(1, 2, { startMs: 20_000, phoneCount: 1 }),
+      ...samples(1, 2, { startMs: 40_000 }),
+    ];
+
+    const report = summarizeProctoring([], observations);
+
+    expect(report.incidents).toHaveLength(1);
+    expect(report.incidents[0]).toMatchObject({
+      type: "phone_visible",
+      severity: "warning",
     });
   });
 
@@ -324,7 +374,24 @@ describe("summarizeProctoring — vision observations", () => {
    * candidate the system was WRONG about, and must not be kept.
    */
   describe("attachSnapshots", () => {
-    function snapshot(atMs: number, condition: VisionIncidentType, key: string) {
+    function snapshot(
+      atMs: number,
+      conditions: VisionIncidentType | VisionIncidentType[],
+      key: string,
+    ) {
+      return {
+        at: new Date(T0 + atMs).toISOString(),
+        conditions: Array.isArray(conditions) ? conditions : [conditions],
+        key,
+      };
+    }
+
+    /** A row written before 2026-08-28, when a still carried one label. */
+    function legacySnapshot(
+      atMs: number,
+      condition: VisionIncidentType,
+      key: string,
+    ) {
       return { at: new Date(T0 + atMs).toISOString(), condition, key };
     }
 
@@ -405,6 +472,37 @@ describe("summarizeProctoring — vision observations", () => {
       expect(orphanedKeys).toEqual([]);
     });
 
+    /**
+     * The whole reason a still now carries every condition its frame satisfied.
+     * One image, two findings — the phone incident used to render with no
+     * picture whenever a second person happened to share the frame, which is
+     * exactly when a recruiter most needs something to check.
+     */
+    it("attaches one still to both incidents its frame depicts", () => {
+      const report = summarizeProctoring([], samples(2, 5, { phoneCount: 1 }));
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        snapshot(5_000, ["multiple_people", "phone_visible"], "camp/app/both.jpg"),
+      ]);
+
+      const byType = Object.fromEntries(
+        withSnaps.incidents.map((i) => [i.type, i.snapshot_key]),
+      );
+      expect(byType.multiple_people).toBe("camp/app/both.jpg");
+      expect(byType.phone_visible).toBe("camp/app/both.jpg");
+      // Serving two findings must not make it look unreferenced and get deleted.
+      expect(orphanedKeys).toEqual([]);
+    });
+
+    it("still attaches a legacy single-label still", () => {
+      const report = summarizeProctoring([], samples(0, 5));
+      const { report: withSnaps, orphanedKeys } = attachSnapshots(report, [
+        legacySnapshot(5_000, "person_absent", "camp/app/old.jpg"),
+      ]);
+
+      expect(withSnaps.incidents[0].snapshot_key).toBe("camp/app/old.jpg");
+      expect(orphanedKeys).toEqual([]);
+    });
+
     it("leaves a report untouched when nothing was captured", () => {
       const report = summarizeProctoring([], samples(0, 4));
       const { report: withSnaps, orphanedKeys } = attachSnapshots(report, []);
@@ -412,6 +510,36 @@ describe("summarizeProctoring — vision observations", () => {
       expect(withSnaps.incidents[0].snapshot_key).toBeUndefined();
       expect(orphanedKeys).toEqual([]);
     });
+  });
+
+  /**
+   * A dropped sample does not break a run — it simply isn't there — so anything
+   * that discards frames the candidate was VISIBLE in can stitch two genuine
+   * absences into one long false one. The worker no longer lets detection
+   * strength sink a well-lit frame (see `observationConfidence` there); this
+   * pins the consequence from the rule layer's side, because the two packages
+   * deploy separately and only this file knows that confidence is a gate.
+   */
+  it("cannot stitch an absence across frames the candidate was seen in", () => {
+    const seen: VisionObservation[] = [
+      { at: new Date(T0).toISOString(), person_count: 0, confidence: 0.95, phone_count: 0 },
+      { at: new Date(T0 + 10_000).toISOString(), person_count: 1, confidence: 0.95, phone_count: 0 },
+      { at: new Date(T0 + 20_000).toISOString(), person_count: 1, confidence: 0.95, phone_count: 0 },
+      { at: new Date(T0 + 30_000).toISOString(), person_count: 0, confidence: 0.95, phone_count: 0 },
+    ];
+
+    const report = summarizeProctoring([], seen);
+
+    // Two single-frame absences, each zero-length, neither an incident.
+    expect(report.incidents).toEqual([]);
+    expect(report.summary.vision_sampled).toBe(true);
+  });
+
+  it("records a watched run even when every reading is unremarkable", () => {
+    const report = summarizeProctoring([], samples(1, 60));
+
+    expect(report.summary.vision_sampled).toBe(true);
+    expect(report.summary.overall_severity).toBe("clean");
   });
 
   it("labels every incident with the evidence it came from", () => {

@@ -269,8 +269,6 @@ describe("getCuratedTalentPool", () => {
         campaign_id: VALID_CAMPAIGN_ID,
         created_at: "2026-08-01T09:00:00.000Z",
         resume_score: 88,
-        screening_q_score: null,
-        interview_score: null,
         parsed_data: null,
         campaigns: { id: VALID_CAMPAIGN_ID, title: "Backend Engineer" },
       },

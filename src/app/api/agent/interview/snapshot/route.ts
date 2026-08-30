@@ -10,8 +10,9 @@ import {
   fetchApplicationCampaignId,
   uploadProctoringSnapshot,
 } from "@/lib/data/candidates";
-import { primaryCondition } from "@/lib/proctoring/incidents";
+import { conditionsOf } from "@/lib/proctoring/incidents";
 import { uuidSchema, proctoringSnapshotSchema } from "@/lib/validations";
+import { requireBearerSecret } from "@/lib/auth/guards";
 
 // Service-role write driven by a machine caller — always run on the server,
 // never cached.
@@ -30,7 +31,7 @@ export const runtime = "nodejs";
  * why it is bounded harder than the others: bounded counts, a parseable
  * timestamp, and a hard cap on the payload. It accepts no severity and no
  * incident type — the worker reports the same counts it reports as
- * observations, and `primaryCondition` derives what they mean here, so the
+ * observations, and `conditionsOf` derives what they mean here, so the
  * vocabulary has one definition rather than one per package.
  *
  * Routed through the app rather than uploading straight from the worker so the
@@ -47,14 +48,8 @@ const bodySchema = z
   .and(proctoringSnapshotSchema);
 
 export async function POST(request: Request) {
-  const secret = process.env.AGENT_API_SECRET;
-  if (!secret) {
-    console.error("AGENT_API_SECRET is not configured; refusing agent report.");
-    return NextResponse.json({ error: "Not configured" }, { status: 500 });
-  }
-  if (request.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = requireBearerSecret(request, "AGENT_API_SECRET", "agent report");
+  if (denied) return denied;
 
   let body: unknown;
   try {
@@ -76,8 +71,12 @@ export async function POST(request: Request) {
   // What the counts MEAN is the rule layer's call, derived here rather than
   // trusted from the worker. A frame the rules consider ordinary is not
   // evidence of anything and never reaches storage.
-  const condition = primaryCondition({ at, person_count, phone_count, confidence: 1 });
-  if (!condition) {
+  //
+  // ALL of them, not the most serious one: a frame showing a second person and
+  // a phone is evidence of both, and filing it under one label left the other
+  // finding with no picture to check it against.
+  const conditions = conditionsOf({ at, person_count, phone_count, confidence: 1 });
+  if (conditions.length === 0) {
     return NextResponse.json({ error: "Frame carries no finding" }, { status: 400 });
   }
 
@@ -115,7 +114,7 @@ export async function POST(request: Request) {
 
   const recorded = await appendProctoringSnapshot(
     application_id,
-    { at, condition, key },
+    { at, conditions, key },
     db,
   );
 

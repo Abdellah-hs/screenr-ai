@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import type { BoardApplication } from "@/lib/campaigns/board-view";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseDb } from "@/lib/supabase/types";
 import type {
@@ -14,7 +15,14 @@ import type {
   PipelineStageCount,
 } from "@/lib/constants";
 import { deriveDimensionFields } from "@/lib/rubric-weights";
+import {
+  deriveResumeDimensionFields,
+  priorityFromMandatoryFlag,
+} from "@/lib/resume-scoring";
+import type { ScreeningDimension } from "@/lib/screening-scoring";
+import type { InterviewRubricDimension } from "@/lib/interview-scoring";
 import { slugifyTitle } from "@/lib/utils";
+import { fetchScreeningQuestionsByCampaignId } from "@/lib/data/screening-questions";
 import type { Database } from "@/types/database.types";
 
 type CampaignInsert = Database["public"]["Tables"]["campaigns"]["Insert"];
@@ -37,6 +45,24 @@ type RubricInput = {
   stage: "resume" | "screening_q" | "interview";
   dimensions?: RubricDimensionInput[];
 };
+
+/**
+ * Derive the numeric columns for one rubric's dimensions.
+ *
+ * The resume stage is deliberately different: its recruiter model is priority
+ * (must-have / nice-to-have) and nothing else, so its fail line is the resume
+ * gate (60) rather than the generic MANDATORY_FAIL_LINE (30) the weighted
+ * stages use. Screening-question and interview rubrics still score on weighted
+ * importance and are untouched by the evidence refactor.
+ */
+function deriveDimensionRows(stage: RubricInput["stage"], dims: RubricDimensionInput[]) {
+  if (stage === "resume") {
+    return deriveResumeDimensionFields(
+      dims.map((d) => ({ ...d, priority: priorityFromMandatoryFlag(d.is_mandatory) })),
+    );
+  }
+  return deriveDimensionFields(dims);
+}
 type ReviewerInput = {
   user_id?: string;
   role: "lead" | "reviewer" | "observer";
@@ -51,6 +77,9 @@ type AvailabilityRuleInput = {
   weekday: number;
   start_minute: number;
   end_minute: number;
+};
+type ScreeningQuestionInput = {
+  prompt: string;
 };
 
 // Slug-collision retry budget for insertCampaignTx. A handful of suffixed
@@ -91,6 +120,7 @@ function assembleCampaign(
     timezone: (row.timezone as string) || null,
     public_slug: (row.public_slug as string) || null,
     automation_mode: row.automation_mode as AutomationMode,
+    resume_threshold: row.resume_threshold as number,
     screening_threshold: row.screening_threshold as number,
     interview_persona: row.interview_persona as InterviewPersona,
     rubrics,
@@ -510,7 +540,7 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
 
   const { data: row } = await supabase
     .from("campaigns")
-    .select("id, description, automation_mode, screening_threshold")
+    .select("id, description, automation_mode, resume_threshold, screening_threshold")
     .eq("id", campaignId)
     .eq("user_id", userId)
     .is("deleted_at", null)
@@ -520,8 +550,11 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
 
   // Resume scoring is driven by the active `resume` evaluation rubric — the
   // single source of truth for "how to score a CV" (issue #65). Each rubric
-  // dimension maps to a scoring criterion; `min_score` is that dimension's
-  // per-criterion knockout fail line (consumed by the rule layer).
+  // dimension maps to one criterion, and the ONLY thing carried forward is its
+  // priority: `weight` and `min_score` are deliberately not read, because a
+  // must-have gate that consulted a weight would be a gate that could be
+  // out-weighed. `sort_order` matters and is not cosmetic — evidence comes back
+  // index-aligned to this list.
   const { data: resumeRubric } = await supabase
     .from("evaluation_rubrics")
     .select("id")
@@ -533,7 +566,7 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
   const { data: dimensions } = resumeRubric
     ? await supabase
         .from("rubric_dimensions")
-        .select("id, name, weight, is_mandatory, min_score, sort_order")
+        .select("id, name, is_mandatory, sort_order")
         .eq("rubric_id", resumeRubric.id)
         .is("deleted_at", null)
         .order("sort_order", { ascending: true })
@@ -543,13 +576,121 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
     id: row.id as string,
     description: row.description as string,
     automation_mode: row.automation_mode as AutomationMode,
+    // Both bars are returned because two callers share this fetcher: the resume
+    // rule reads `resume_threshold`, the screening scorer reads
+    // `screening_threshold`. The rule's own `CampaignScoringConfig` declares
+    // only the resume bar, so the resume decision structurally cannot reach for
+    // the screening one.
+    resume_threshold: row.resume_threshold as number,
     screening_threshold: row.screening_threshold as number,
     screening_criteria: (dimensions || []).map((d) => ({
       id: d.id,
       label: d.name,
-      weight: d.weight,
-      is_mandatory: d.is_mandatory,
-      min_score: d.min_score,
+      priority: priorityFromMandatoryFlag(d.is_mandatory),
+    })),
+  };
+}
+
+/**
+ * The active **screening** rubric, reduced to what the screening scorer reads.
+ *
+ * Deliberately separate from `fetchCampaignScoringConfig`, which serves the
+ * resume stage: that one reads `stage = "resume"`, and a single fetcher
+ * returning both would make it one careless destructure to score a call against
+ * the CV's rubric — which is exactly the bug this fixes.
+ *
+ * `weight` comes from the row rather than being recomputed: it is derived from
+ * the recruiter's importance choice on save (`deriveDimensionFields`), so the
+ * stored number is the recruiter's decision. `is_mandatory` and `min_score` are
+ * NOT selected — there is no must-have gate on screening, and a column the
+ * scorer never receives is a gate that cannot be reintroduced by accident.
+ *
+ * Returns an empty `dimensions` list when the campaign has no active screening
+ * rubric. Callers must treat that as "cannot score per dimension", not as an
+ * empty rubric that scores everyone 0.
+ *
+ * `version` comes back with them because it is on the SAME ROW. The scorer
+ * needs both — the dimensions to grade against, the version to stamp the score
+ * with — and used to ask for them separately, resolving the identical
+ * `evaluation_rubrics` row twice on every screening score.
+ */
+export async function fetchScreeningRubricDimensions(
+  campaignId: string,
+  db?: SupabaseDb,
+): Promise<{ dimensions: ScreeningDimension[]; version: number | null }> {
+  const supabase = db ?? (await createClient());
+
+  const { data: rubric } = await supabase
+    .from("evaluation_rubrics")
+    .select("id, version")
+    .eq("campaign_id", campaignId)
+    .eq("stage", "screening_q")
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!rubric) return { dimensions: [], version: null };
+
+  const { data: dimensions } = await supabase
+    .from("rubric_dimensions")
+    .select("id, name, weight, sort_order")
+    .eq("rubric_id", rubric.id)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: true });
+
+  return {
+    version: (rubric.version as number | null) ?? null,
+    dimensions: (dimensions ?? []).map((d) => ({
+      id: d.id as string,
+      name: d.name as string,
+      weight: (d.weight as number | null) ?? 0,
+    })),
+  };
+}
+
+/**
+ * The interview rubric a completed interview is graded against, plus the
+ * version to stamp the score with.
+ *
+ * The exact mirror of `fetchScreeningRubricDimensions`, and the omissions are
+ * the same and for the same reason: `is_mandatory` and `min_score` are NOT
+ * selected, because the interview has no must-have gate and no threshold at all
+ * — it never rejects anyone. A column the scorer never receives is a gate that
+ * cannot be reintroduced by accident.
+ *
+ * Returns an empty `dimensions` list when the campaign has no active interview
+ * rubric. Callers pass that through `interviewScoringDimensions`, which
+ * substitutes the default competency set — never an empty rubric, which would
+ * score every candidate 0.
+ */
+export async function fetchInterviewRubricDimensions(
+  campaignId: string,
+  db?: SupabaseDb,
+): Promise<{ dimensions: InterviewRubricDimension[]; version: number | null }> {
+  const supabase = db ?? (await createClient());
+
+  const { data: rubric } = await supabase
+    .from("evaluation_rubrics")
+    .select("id, version")
+    .eq("campaign_id", campaignId)
+    .eq("stage", "interview")
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (!rubric) return { dimensions: [], version: null };
+
+  const { data: dimensions } = await supabase
+    .from("rubric_dimensions")
+    .select("id, name, weight, sort_order")
+    .eq("rubric_id", rubric.id)
+    .is("deleted_at", null)
+    .order("sort_order", { ascending: true });
+
+  return {
+    version: (rubric.version as number | null) ?? null,
+    dimensions: (dimensions ?? []).map((d) => ({
+      id: d.id as string,
+      name: d.name as string,
+      weight: (d.weight as number | null) ?? 0,
     })),
   };
 }
@@ -566,6 +707,43 @@ export async function fetchCampaignScoringConfig(campaignId: string, userId: str
  * as "rubric version unknown" and not surface a mismatch badge.
  */
 export type RubricStage = "resume" | "screening_q" | "interview";
+
+/**
+ * The active rubric versions for several stages at once.
+ *
+ * Two callers want the resume and screening versions together — the campaign
+ * pipeline summary and the candidate detail page — and asked with two separate
+ * round-trips for two rows of the same table, on every render of a page a
+ * recruiter opens constantly.
+ *
+ * A stage with no active rubric is absent from the map, which reads back as
+ * `undefined` and must be normalised to null by the caller: "no rubric" is
+ * "version unknown", never a mismatch to badge.
+ */
+export async function fetchActiveRubricVersions(
+  campaignId: string,
+  stages: RubricStage[],
+  db?: SupabaseDb,
+): Promise<Partial<Record<RubricStage, number>>> {
+  const supabase = db ?? (await createClient());
+  const { data, error } = await supabase
+    .from("evaluation_rubrics")
+    .select("stage, version")
+    .eq("campaign_id", campaignId)
+    .in("stage", stages)
+    .eq("is_active", true);
+
+  if (error) {
+    console.error(`fetchActiveRubricVersions(${campaignId}) failed:`, error);
+    return {};
+  }
+
+  const versions: Partial<Record<RubricStage, number>> = {};
+  for (const row of data ?? []) {
+    if (row.version != null) versions[row.stage as RubricStage] = row.version as number;
+  }
+  return versions;
+}
 
 export async function fetchActiveRubricVersion(
   campaignId: string,
@@ -675,7 +853,7 @@ async function upsertRubricsVersioned(
 
     if (inserted) {
       await supabase.from("rubric_dimensions").insert(
-        deriveDimensionFields(dims).map((d) => ({
+        deriveDimensionRows(rubric.stage, dims).map((d) => ({
           rubric_id: inserted.id,
           name: d.name,
           importance: d.importance,
@@ -690,38 +868,65 @@ async function upsertRubricsVersioned(
   }
 }
 
+/**
+ * Insert a campaign row and mint its unique public apply slug.
+ *
+ * Shared by create and clone because a campaign with no `public_slug` has no
+ * apply page, and the apply page is the only way a candidate enters a pipeline.
+ * Clone used to skip this entirely and produce a campaign that could never
+ * receive an application — silently, because the apply-link card simply did not
+ * render for a null slug.
+ *
+ * The slug is set once here and never changes, so a link already shared
+ * survives a later title edit. On a collision (Postgres 23505 against
+ * idx_campaigns_public_slug) retry with a short random suffix — clone collides
+ * far more often than create, since every copy of one campaign slugifies to the
+ * same "<title>-copy".
+ */
+async function insertCampaignWithSlug(
+  supabase: SupabaseServerClient,
+  payload: CampaignInsert,
+  /** Names the operation in the error, so a failed clone does not report a
+   *  failed create. */
+  operation: "create" | "clone",
+): Promise<{ id: string }> {
+  const baseSlug = slugifyTitle(payload.title);
+
+  for (let attempt = 0; attempt <= MAX_SLUG_ATTEMPTS; attempt++) {
+    const publicSlug = attempt === 0 ? baseSlug : `${baseSlug}-${randomSlugSuffix()}`;
+    const { data, error } = await supabase
+      .from("campaigns")
+      .insert({ ...payload, public_slug: publicSlug })
+      .select()
+      .single();
+
+    if (data) return data;
+    if (error?.code === "23505" && attempt < MAX_SLUG_ATTEMPTS) continue;
+    throw new Error(error?.message || `Failed to ${operation} campaign`);
+  }
+
+  throw new Error(
+    `Failed to ${operation} campaign: could not allocate a unique slug`,
+  );
+}
+
 export async function insertCampaignTx(
   payload: Omit<CampaignInsert, "user_id">,
   rubrics: RubricInput[],
   slaTimers: SlaTimerInput[],
   reviewers: ReviewerInput[],
   availabilityRules: AvailabilityRuleInput[],
+  screeningQuestions: ScreeningQuestionInput[],
   userId: string
 ): Promise<string> {
   const supabase = await createClient();
 
-  // 1. Insert campaign with a unique public_slug derived from the title. The
-  //    slug is set once here and never changes, so a shared apply link survives
-  //    later title edits. On the rare slug collision (Postgres 23505 against
-  //    idx_campaigns_public_slug) retry with a short random suffix.
-  const baseSlug = slugifyTitle(payload.title);
-  let campaign: { id: string } | null = null;
-  for (let attempt = 0; attempt <= MAX_SLUG_ATTEMPTS; attempt++) {
-    const publicSlug = attempt === 0 ? baseSlug : `${baseSlug}-${randomSlugSuffix()}`;
-    const { data, error } = await supabase
-      .from("campaigns")
-      .insert({ ...payload, user_id: userId, public_slug: publicSlug })
-      .select()
-      .single();
-
-    if (data) {
-      campaign = data;
-      break;
-    }
-    if (error?.code === "23505" && attempt < MAX_SLUG_ATTEMPTS) continue;
-    throw new Error(error?.message || "Failed to create campaign");
-  }
-  if (!campaign) throw new Error("Failed to create campaign: could not allocate a unique slug");
+  // 1. Insert campaign with a unique public_slug derived from the title.
+  const campaign = await insertCampaignWithSlug(
+    supabase,
+    { ...payload, user_id: userId },
+    "create",
+  );
 
   // 2. Insert rubrics and dimensions — the resume rubric is the single source
   //    of truth for CV scoring (issue #65); screening_criteria is retired.
@@ -739,7 +944,7 @@ export async function insertCampaignTx(
 
     if (insertedRubric && rubric.dimensions && rubric.dimensions.length > 0) {
       await supabase.from("rubric_dimensions").insert(
-        deriveDimensionFields(rubric.dimensions).map((d) => ({
+        deriveDimensionRows(rubric.stage, rubric.dimensions).map((d) => ({
           rubric_id: insertedRubric.id,
           name: d.name,
           importance: d.importance,
@@ -785,6 +990,19 @@ export async function insertCampaignTx(
         weekday: a.weekday,
         start_minute: a.start_minute,
         end_minute: a.end_minute,
+      }))
+    );
+  }
+
+  // 5c. Insert screening questions staged on the create form. Same shape and
+  //     ordering rule as `replaceScreeningQuestions` — `sort_order` is the
+  //     array index, which is the order the candidate is asked them in.
+  if (screeningQuestions.length > 0) {
+    await supabase.from("screening_questions").insert(
+      screeningQuestions.map((q, i) => ({
+        campaign_id: campaign.id,
+        prompt: q.prompt,
+        sort_order: i,
       }))
     );
   }
@@ -873,12 +1091,61 @@ export async function updateCampaignTx(
   });
 }
 
+/**
+ * Save a campaign's rubrics and nothing else.
+ *
+ * Editing one criterion used to mean running the whole five-step campaign
+ * wizard and posting every field back — title, thresholds, SLA timers,
+ * availability rules, screening questions. That is a wide blast radius for a
+ * narrow intent, and it meant the recruiter left the page they were reading the
+ * rubric on.
+ *
+ * Same versioning as the full save: `upsertRubricsVersioned` archives the
+ * active version and inserts a new one, never overwrites, and skips a stage
+ * whose dimensions did not actually change — so opening the editor and pressing
+ * Save without touching anything does not mint a v2 that would mark every
+ * existing score as stale.
+ */
+export async function updateCampaignRubricsTx(
+  id: string,
+  rubrics: RubricInput[],
+  userId: string,
+): Promise<void> {
+  const supabase = await createClient();
+
+  const { data: ownerCheck } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", id)
+    .eq("user_id", userId)
+    .single();
+  if (!ownerCheck) throw new Error("Campaign not found or access denied");
+
+  await upsertRubricsVersioned(supabase, id, rubrics);
+
+  await supabase.from("campaign_audit_log").insert({
+    campaign_id: id,
+    user_id: userId,
+    action: "campaign_updated",
+    entity_type: "campaign",
+    entity_id: id,
+    new_data: { rubric_stages: rubrics.map((r) => r.stage) },
+  });
+}
+
 export async function cloneCampaignTx(id: string, source: Campaign, userId: string): Promise<string> {
   const supabase = await createClient();
 
-  const { data: cloned, error } = await supabase
-    .from("campaigns")
-    .insert({
+  // Through the shared insert, so a clone gets its OWN apply slug. It used to
+  // insert directly and leave `public_slug` null, which produced a campaign
+  // that could never receive an application: no apply page existed, the
+  // apply-link card rendered nothing rather than saying so, and the social
+  // generator drafted posts with no link in them. The source's slug is
+  // deliberately not copied — it is unique, and two campaigns cannot share the
+  // one page candidates apply through.
+  const cloned = await insertCampaignWithSlug(
+    supabase,
+    {
       title: `${source.title} (Copy)`,
       description: source.description,
       department: source.department,
@@ -889,17 +1156,16 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
       deadline_enforced: source.deadline_enforced,
       location: source.location,
       automation_mode: source.automation_mode,
+      resume_threshold: source.resume_threshold,
       screening_threshold: source.screening_threshold,
       interview_persona: source.interview_persona,
       interview_slot_minutes: source.interview_slot_minutes,
       interview_timezone: source.interview_timezone,
       interview_booking_horizon_days: source.interview_booking_horizon_days,
       user_id: userId,
-    })
-    .select()
-    .single();
-
-  if (error || !cloned) throw new Error(error?.message || "Failed to clone campaign");
+    },
+    "clone",
+  );
 
   for (const rubric of source.rubrics) {
     const { data: newRubric } = await supabase
@@ -952,6 +1218,24 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
     );
   }
 
+  // Screening questions, in order. They live on their own table rather than on
+  // the campaign row, which is why they were missed here while the rubric, the
+  // SLA timers and the availability rules were all copied — and a clone without
+  // them is born unable to approve anyone into screening, showing the recruiter
+  // an "add screening questions" banner on a campaign they had just finished
+  // setting up. Copied by prompt and position; ids belong to the new rows.
+  const sourceQuestions = await fetchScreeningQuestionsByCampaignId(id, supabase);
+  if (sourceQuestions.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from("screening_questions").insert(
+      sourceQuestions.map((q, i) => ({
+        campaign_id: cloned.id,
+        prompt: q.prompt,
+        sort_order: i,
+      }))
+    );
+  }
+
   await supabase.from("campaign_audit_log").insert({
     campaign_id: cloned.id,
     user_id: userId,
@@ -962,4 +1246,67 @@ export async function cloneCampaignTx(id: string, source: Campaign, userId: stri
   });
 
   return cloned.id;
+}
+
+// ─── Campaigns board summaries ───────────────────────────────────────────────
+
+/**
+ * One roll-up per campaign for the campaigns list: pipeline shape, and the one
+ * thing the campaign needs from its owner.
+ *
+ * Two queries for the whole board rather than one per row — the list renders
+ * every campaign a recruiter owns, so anything per-campaign is a fan-out that
+ * grows with their history. `updated_at` comes back with the applications
+ * because SLA lateness is computed from it (see `summariseCampaign`); the SLA
+ * timers are already on the `Campaign` objects the page has. SELECT-only.
+ */
+export async function fetchCampaignBoardApplications(
+  userId: string,
+): Promise<BoardApplication[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("applications")
+    .select("campaign_id, status, updated_at, campaigns!inner(user_id, deleted_at)")
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return [];
+
+  return (
+    data as unknown as Array<{
+      campaign_id: string;
+      status: string;
+      updated_at: string | null;
+    }>
+  ).map((row) => ({
+    campaignId: row.campaign_id,
+    status: row.status,
+    // A row with no `updated_at` has never moved; treating it as "just now"
+    // keeps it out of the overdue count rather than inventing infinite age.
+    updatedAt: row.updated_at ?? new Date().toISOString(),
+  }));
+}
+
+/**
+ * How many screening questions each of the owner's campaigns has. A campaign
+ * with none cannot approve anybody into screening, which the board flags — so
+ * the count is only ever compared against zero. SELECT-only.
+ */
+export async function fetchScreeningQuestionCounts(
+  userId: string,
+): Promise<Record<string, number>> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("screening_questions")
+    .select("campaign_id, campaigns!inner(user_id, deleted_at)")
+    .eq("campaigns.user_id", userId)
+    .is("campaigns.deleted_at", null);
+
+  if (error || !data) return {};
+
+  const counts: Record<string, number> = {};
+  for (const row of data as unknown as Array<{ campaign_id: string }>) {
+    counts[row.campaign_id] = (counts[row.campaign_id] ?? 0) + 1;
+  }
+  return counts;
 }
